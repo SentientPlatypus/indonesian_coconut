@@ -1,0 +1,52 @@
+{
+    "cumulative_timesteps": 14805212,
+    "cumulative_model_updates": 885,
+    "policy_average_reward": 0.05336226181882214,
+    "epoch": 295,
+    "ts_since_last_save": 100014,
+    "reward_running_stats": {
+        "mean": [
+            0.006231872830539942
+        ],
+        "var": [
+            48390.42578125
+        ],
+        "shape": [
+            1
+        ],
+        "count": 44400
+    },
+    "wandb_run_id": "3dxm0so3",
+    "wandb_project": "rlgym-ppo",
+    "wandb_entity": "trexxxxxxxxxxy-rl",
+    "wandb_group": "unnamed-runs",
+    "wandb_config": {
+        "n_proc": 32,
+        "min_inference_size": 29,
+        "timestep_limit": 1000000000,
+        "exp_buffer_size": 150000,
+        "ts_per_iteration": 50000,
+        "standardize_returns": true,
+        "standardize_obs": false,
+        "policy_layer_sizes": [
+            256,
+            256,
+            256
+        ],
+        "critic_layer_sizes": [
+            256,
+            256,
+            256
+        ],
+        "ppo_epochs": 1,
+        "ppo_batch_size": 50000,
+        "ppo_minibatch_size": 50000,
+        "ppo_ent_coef": 0.001,
+        "ppo_clip_range": 0.2,
+        "gae_lambda": 0.95,
+        "gae_gamma": 0.99,
+        "policy_lr": 0.0003,
+        "critic_lr": 0.0003,
+        "shm_buffer_size": 8192
+    }
+}
