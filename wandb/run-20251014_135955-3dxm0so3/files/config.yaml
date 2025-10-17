@@ -1,0 +1,98 @@
+_wandb:
+    value:
+        cli_version: 0.22.2
+        e:
+            svgkzc6hwowln8o0d0ofpnvjulpx8xtv:
+                codePath: example.py
+                codePathLocal: example.py
+                cpu_count: 14
+                cpu_count_logical: 20
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "1000202039296"
+                        used: "94697734144"
+                email: trexxxxxxxxxxy@gmail.com
+                executable: D:\Code\Machine Learning\indonesian_coconut\venv\Scripts\python.exe
+                gpu: NVIDIA GeForce RTX 4070 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      cudaCores: 4608
+                      memoryTotal: "8585740288"
+                      name: NVIDIA GeForce RTX 4070 Laptop GPU
+                      uuid: GPU-c8401cc3-94ac-6acd-e9ed-37ca40291dd6
+                host: dinosaurs
+                memory:
+                    total: "16780632064"
+                os: Windows-11-10.0.26100-SP0
+                program: D:\Code\Machine Learning\indonesian_coconut\example.py
+                python: CPython 3.12.10
+                root: D:\Code\Machine Learning\indonesian_coconut
+                startedAt: "2025-10-14T17:59:55.158530Z"
+                writerId: svgkzc6hwowln8o0d0ofpnvjulpx8xtv
+        m: []
+        python_version: 3.12.10
+        t:
+            "1":
+                - 1
+            "2":
+                - 1
+            "3":
+                - 2
+                - 5
+                - 14
+                - 16
+                - 62
+            "4": 3.12.10
+            "5": 0.22.2
+            "8":
+                - 3
+            "10":
+                - 20
+            "12": 0.22.2
+            "13": windows-amd64
+critic_layer_sizes:
+    value:
+        - 256
+        - 256
+        - 256
+critic_lr:
+    value: 0.0003
+exp_buffer_size:
+    value: 150000
+gae_gamma:
+    value: 0.99
+gae_lambda:
+    value: 0.95
+min_inference_size:
+    value: 29
+n_proc:
+    value: 32
+policy_layer_sizes:
+    value:
+        - 256
+        - 256
+        - 256
+policy_lr:
+    value: 0.0003
+ppo_batch_size:
+    value: 50000
+ppo_clip_range:
+    value: 0.2
+ppo_ent_coef:
+    value: 0.001
+ppo_epochs:
+    value: 1
+ppo_minibatch_size:
+    value: 50000
+shm_buffer_size:
+    value: 8192
+standardize_obs:
+    value: false
+standardize_returns:
+    value: true
+timestep_limit:
+    value: 1000000000
+ts_per_iteration:
+    value: 50000
