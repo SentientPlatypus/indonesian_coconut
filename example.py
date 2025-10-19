@@ -67,7 +67,7 @@ def build_rocketsim_env():
         (BallYCoordinateReward(exponent=1), 0.4),
 
         # ↓ Dial FaceBall way down so it aligns without braking
-        (FaceBallReward(), 0.6),
+        (FaceBallReward(), 1),
 
         # Small extras
         (TouchBallReward(aerial_weight=0.3), 0.5),
@@ -96,7 +96,7 @@ def build_rocketsim_env():
 if __name__ == "__main__":
     from rlgym_ppo import Learner
     metrics_logger = ExampleLogger()
-    latest_checkpoint_dir = "data/checkpoints/rlgym-ppo-run-1760587787415889100/" + str(max(os.listdir("data/checkpoints/rlgym-ppo-run-1760587787415889100"), key=lambda d: int(d)))
+    latest_checkpoint_dir = "data/checkpoints/rlgym-ppo-run-1760799561315875500/" + str(max(os.listdir("data/checkpoints/rlgym-ppo-run-1760799561315875500"), key=lambda d: int(d)))
 
 
     # 32 processes
