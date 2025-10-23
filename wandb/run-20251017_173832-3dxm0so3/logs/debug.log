@@ -9,3 +9,114 @@
 2025-10-17 17:38:32,182 INFO    MainThread:27900 [wandb_init.py:init():837] wandb.init called with sweep_config: {}
 config: {'n_proc': 32, 'min_inference_size': 29, 'timestep_limit': 1000000000, 'exp_buffer_size': 150000, 'ts_per_iteration': 50000, 'standardize_returns': True, 'standardize_obs': False, 'policy_layer_sizes': [256, 256, 256], 'critic_layer_sizes': [256, 256, 256], 'ppo_epochs': 1, 'ppo_batch_size': 50000, 'ppo_minibatch_size': 50000, 'ppo_ent_coef': 0.001, 'ppo_clip_range': 0.2, 'gae_lambda': 0.95, 'gae_gamma': 0.99, 'policy_lr': 0.0003, 'critic_lr': 0.0003, 'shm_buffer_size': 8192, '_wandb': {}}
 2025-10-17 17:38:32,182 INFO    MainThread:27900 [wandb_init.py:init():880] starting backend
+2025-10-17 17:38:34,943 INFO    MainThread:27900 [wandb_init.py:init():883] sending inform_init request
+2025-10-17 17:38:35,111 INFO    MainThread:27900 [wandb_init.py:init():891] backend started and connected
+2025-10-17 17:38:35,124 INFO    MainThread:27900 [wandb_init.py:init():961] updated telemetry
+2025-10-17 17:38:35,262 INFO    MainThread:27900 [wandb_init.py:init():985] communicating run to backend with 90.0 second timeout
+2025-10-17 17:38:36,511 INFO    MainThread:27900 [wandb_init.py:init():1031] run resumed
+2025-10-17 17:38:36,517 INFO    MainThread:27900 [wandb_init.py:init():1036] starting run threads in backend
+2025-10-17 17:38:38,087 INFO    MainThread:27900 [wandb_run.py:_console_start():2509] atexit reg
+2025-10-17 17:38:38,087 INFO    MainThread:27900 [wandb_run.py:_redirect():2357] redirect: wrap_raw
+2025-10-17 17:38:38,087 INFO    MainThread:27900 [wandb_run.py:_redirect():2426] Wrapping output streams.
+2025-10-17 17:38:38,087 INFO    MainThread:27900 [wandb_run.py:_redirect():2449] Redirects installed.
+2025-10-17 17:38:38,136 INFO    MainThread:27900 [wandb_init.py:init():1076] run started, returning control to user process
+2025-10-17 17:45:35,359 ERROR   wandb-AsyncioManager-main:27900 [service_client.py:_forward_responses():77] Error reading server response.
+Traceback (most recent call last):
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\windows_events.py", line 462, in finish_socket_func
+    return ov.getresult()
+           ^^^^^^^^^^^^^^
+OSError: [WinError 64] The specified network name is no longer available
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\service\service_client.py", line 73, in _forward_responses
+    while response := await self._read_server_response():
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\service\service_client.py", line 87, in _read_server_response
+    header = await self._reader.readexactly(_HEADER_BYTE_INT_LEN)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\streams.py", line 752, in readexactly
+    await self._wait_for_data('readexactly')
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\streams.py", line 545, in _wait_for_data
+    await self._waiter
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\proactor_events.py", line 286, in _loop_reading
+    length = fut.result()
+             ^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\windows_events.py", line 803, in _poll
+    value = callback(transferred, key, ov)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\windows_events.py", line 466, in finish_socket_func
+    raise ConnectionResetError(*exc.args)
+ConnectionResetError: [WinError 64] The specified network name is no longer available
+2025-10-17 17:45:35,383 INFO    wandb-AsyncioManager-main:27900 [mailbox.py:close():137] Closing mailbox, abandoning 2 handles.
+2025-10-17 17:45:35,383 ERROR   MainThread:27900 [redirect.py:_on_write():664] [all runs] error in stdout callback
+Traceback (most recent call last):
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\rlgym_ppo\learner.py", line 225, in learn
+    self._learn()
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\rlgym_ppo\learner.py", line 257, in _learn
+    experience, collected_metrics, steps_collected, collection_time = self.agent.collect_timesteps(
+                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\rlgym_ppo\batched_agents\batched_agent_manager.py", line 161, in collect_timesteps
+    np.asarray(states),
+    ^^^^^^^^^^^^^^^^^^
+numpy.core._exceptions._ArrayMemoryError: Unable to allocate 17.0 MiB for an array with shape (50002, 89) and data type float32
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\redirect.py", line 662, in _on_write
+    cb(written_data)
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\wandb_run.py", line 2430, in <lambda>
+    lambda data: self._console_raw_callback("stdout", data),
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\wandb_run.py", line 399, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\wandb_run.py", line 457, in wrapper_fn
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\wandb_run.py", line 1595, in _console_raw_callback
+    self._backend.interface.publish_output_raw(name, data)
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\interface\interface.py", line 802, in publish_output_raw
+    self._publish_output_raw(o)
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\interface\interface_shared.py", line 37, in _publish_output_raw
+    self._publish(rec)
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\interface\interface_sock.py", line 43, in _publish
+    self._asyncer.run(lambda: self._client.publish(request))
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\asyncio_manager.py", line 136, in run
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\concurrent\futures\_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\asyncio_manager.py", line 219, in _wrap
+    return await fn()
+           ^^^^^^^^^^
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\service\service_client.py", line 38, in publish
+    await self._send_server_request(request)
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\service\service_client.py", line 64, in _send_server_request
+    await self._writer.drain()
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\streams.py", line 380, in drain
+    raise exc
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\service\service_client.py", line 73, in _forward_responses
+    while response := await self._read_server_response():
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Code\Machine Learning\indonesian_coconut\venv\Lib\site-packages\wandb\sdk\lib\service\service_client.py", line 87, in _read_server_response
+    header = await self._reader.readexactly(_HEADER_BYTE_INT_LEN)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\streams.py", line 752, in readexactly
+    await self._wait_for_data('readexactly')
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\streams.py", line 545, in _wait_for_data
+    await self._waiter
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\proactor_events.py", line 286, in _loop_reading
+    length = fut.result()
+             ^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\windows_events.py", line 803, in _poll
+    value = callback(transferred, key, ov)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\windows_events.py", line 466, in finish_socket_func
+    raise ConnectionResetError(*exc.args)
+ConnectionResetError: [WinError 64] The specified network name is no longer available
