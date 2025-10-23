@@ -32,45 +32,50 @@ def build_rocketsim_env():
     from rlgym_sim.utils.terminal_conditions.common_conditions import NoTouchTimeoutCondition, GoalScoredCondition
     from rlgym_sim.utils import common_values
     from rlgym_sim.utils.action_parsers import ContinuousAction, DiscreteAction
+    from rlgym.rocket_league.action_parsers import LookupTableAction, RepeatAction
+    from customActionParser import AdvancedLookupTableAction
 
     spawn_opponents = True
     team_size = 1
     game_tick_rate = 120
     tick_skip = 8
+    action_repeat = 8
     timeout_seconds = 10
     timeout_ticks = int(round(timeout_seconds * game_tick_rate / tick_skip))
 
-    action_parser = ContinuousAction()
+    action_parser = LookupTableAction()
     terminal_conditions = [NoTouchTimeoutCondition(timeout_ticks), GoalScoredCondition()]
 
 
 
 
     reward_fn = CombinedReward.from_zipped(
-        (EventReward(touch=1, goal=5, concede=-5), 18),
+        # Bigger touch jackpot (but not crazy)
+        (EventReward(touch=1, goal=4, concede=-6), 16),          # ↑ from 10
 
-        # Dense approach shaping (reward MOVING toward the ball)
-        (VelocityPlayerToBallReward(use_scalar_projection=True), 3.5),              # stronger pull-in, pays for forward speed along car→ball line
-        (LiuDistancePlayerToBallReward(), 1.6),                                     # getting closer per tick stays good
+        # Approach shaping (keeps forward bias; avoids reverse chasing)
+        (RewardIfClosestToBall(VelocityPlayerToBallReward(use_scalar_projection=True)), 2.5),
+        (VelocityPlayerToBallReward(use_scalar_projection=True), 1.5),
+        (LiuDistancePlayerToBallReward(), 1.2),
 
-        # Gate “go fast” to the player who should go (prevents double-commit + rewards not braking near ball)
-        (RewardIfClosestToBall(VelocityPlayerToBallReward(use_scalar_projection=True)), 3.0),
-        (RewardIfClosestToBall(VelocityReward(negative=False)), 0.8),               # tiny speed bonus if you’re the goer → discourages stopping
+        # Facing matters (especially for the challenger) → favors driving forward over reversing
+        (RewardIfClosestToBall(FaceBallReward()), 1.2),
+        (FaceBallReward(), 0.8),
 
-        # Make the touch *useful* (drive through the ball toward their goal)
-        (VelocityBallToGoalReward(), 4.2),
-        (RewardIfTouchedLast(VelocityBallToGoalReward()), 2.0),                     # extra credit if your touch sends it upfield
-        (VelocityBallToGoalReward(own_goal=True), -2.6),                            # don’t boom it toward your own net
+        # Make the ball *go somewhere* when you touch it
+        (VelocityBallToGoalReward(own_goal=False), 2.0),
+        (RewardIfTouchedLast(VelocityBallToGoalReward()), 1.2),  # NEW: encourages driving through the ball
+        (VelocityBallToGoalReward(own_goal=True), -2.5),
 
-        # Structure/positioning (light)
-        (RewardIfBehindBall(AlignBallGoal(defense=0.5, offense=1.1)), 1.0),
-        (BallYCoordinateReward(exponent=1), 0.4),
+        # Simple structure
+        (RewardIfBehindBall(AlignBallGoal(defense=0.4, offense=1.0)), 1.0),
+        (BallYCoordinateReward(exponent=1), 0.3),
 
-        # ↓ Dial FaceBall way down so it aligns without braking
-        (FaceBallReward(), 1),
+        # Touch bonus, but only in safe contexts to avoid jumpy micro-taps
+        (RewardIfClosestToBall(TouchBallReward(aerial_weight=0.0)), 0.8),  # NEW
+        (RewardIfBehindBall(TouchBallReward(aerial_weight=0.0)), 0.6),     # NEW
 
-        # Small extras
-        (TouchBallReward(aerial_weight=0.3), 0.5),
+        # Mild boost thrift
         (SaveBoostReward(), 0.2),
     )
 
@@ -96,7 +101,7 @@ def build_rocketsim_env():
 if __name__ == "__main__":
     from rlgym_ppo import Learner
     metrics_logger = ExampleLogger()
-    latest_checkpoint_dir = "data/checkpoints/rlgym-ppo-run-1760799561315875500/" + str(max(os.listdir("data/checkpoints/rlgym-ppo-run-1760799561315875500"), key=lambda d: int(d)))
+    # latest_checkpoint_dir = "data/checkpoints/rlgym-ppo-run-1761101910978328200/" + str(max(os.listdir("data/checkpoints/rlgym-ppo-run-1761101910978328200"), key=lambda d: int(d)))
 
 
     # 32 processes
@@ -107,7 +112,7 @@ if __name__ == "__main__":
 
     learner = Learner(build_rocketsim_env,
                       render=False,
-                      checkpoint_load_folder=latest_checkpoint_dir,
+                      checkpoint_load_folder=None,
                       load_wandb=True,
                       n_proc=n_proc,
                       min_inference_size=min_inference_size,
@@ -121,6 +126,6 @@ if __name__ == "__main__":
                       standardize_returns=True,
                       standardize_obs=False,
                       save_every_ts=100_000,
-                      timestep_limit=1_000_000_000,
+                      timestep_limit=100_000_000_000,
                       log_to_wandb=True)
     learner.learn()
