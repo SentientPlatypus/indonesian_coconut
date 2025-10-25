@@ -1,3 +1,6 @@
+import os
+
+
 def build_rlgym_v2_env():
     import numpy as np
     from rlgym.api import RLGym
@@ -9,7 +12,7 @@ def build_rlgym_v2_env():
     from rlgym.rocket_league.state_mutators import MutatorSequence, FixedTeamSizeMutator, KickoffMutator
     from rlgym.rocket_league import common_values
     from rlgym_ppo.util import RLGymV2GymWrapper
-    from customRewardsGYM import InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward
+    from customRewardsGYM import InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward, FaceBallReward, BallTravelReward, AdvancedTouchReward, GoalViewReward, FlickReward, FlipResetReward
     from rsv_renderer import RocketSimVisRenderer
     spawn_opponents = True
     team_size = 1
@@ -27,10 +30,13 @@ def build_rlgym_v2_env():
     )
 
     reward_fn = CombinedReward(
-        (InAirReward(), 0.002),
-        (SpeedTowardBallReward(), 0.01),
-        (VelocityBallToGoalReward(), 0.1),
-        (TouchReward(), 10.0)
+        (TouchReward(), 5),
+        (VelocityBallToGoalReward(), 30),
+        (SpeedTowardBallReward(), 5),
+        (InAirReward(), .2),
+        (FaceBallReward(), .4),
+        (FlickReward(), 400),
+        (GoalReward(), 800)
     )
 
     obs_builder = DefaultObs(zero_padding=None,
@@ -63,7 +69,7 @@ def build_rlgym_v2_env():
 
 if __name__ == "__main__":
     from rlgym_ppo import Learner
-
+    latest_checkpoint_dir = "data/checkpoints/tooMuchDribble/" + str(max(os.listdir("data/checkpoints/tooMuchDribble"), key=lambda d: int(d)))
     # 32 processes
     n_proc = 32
 
@@ -72,7 +78,7 @@ if __name__ == "__main__":
 
     learner = Learner(build_rlgym_v2_env,
                       n_proc=n_proc,
-                      checkpoint_load_folder=None,
+                      checkpoint_load_folder=latest_checkpoint_dir,
                       min_inference_size=min_inference_size,
                       metrics_logger=None, # Leave this empty for now.
                       ppo_batch_size=100_000,  # batch size - much higher than 300K doesn't seem to help most people
@@ -90,6 +96,6 @@ if __name__ == "__main__":
                       save_every_ts=1_000_000,  # save every 1M steps
                       timestep_limit=10_000_000_000_000,  # Train for 10B steps
                       log_to_wandb=False, # Set this to True if you want to use Weights & Biases for logging.,
-                      render=True
+                      render=False
                       ) 
     learner.learn()

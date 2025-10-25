@@ -1,0 +1,19 @@
+# EARLY STAGE (GET TO TOUCH BALL THEN STOP)
+
+(TouchBallReward(), 50),
+(SpeedTowardsBallReward(), 5),
+(GoalReward(), 400),
+(FaceBallReward(), .4),
+(InAirReward(), .2)
+
+
+
+
+# Shift to this.
+
+(TouchBallReward(), 30),
+(VelocityBallToGoalReward(), 12),
+(SpeedTowardsBallReward(), 5),
+(InAirReward(), .2),
+(FaceBallReward(), .4),
+(GoalReward(), 800)
