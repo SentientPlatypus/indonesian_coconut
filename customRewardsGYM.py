@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Callable
 from rlgym.api import RewardFunction, AgentID, StateType, RewardType
 from rlgym.rocket_league.api import GameState
+from rlgym.rocket_league.math import *
 from rlgym.rocket_league.common_values import *
 import numpy as np
 import math
@@ -37,6 +38,28 @@ class InAirReward(RewardFunction[AgentID, GameState, float]):
     def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
                     is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
         return {agent: float(not state.cars[agent].on_ground) for agent in agents}
+
+class FaceBallReward(RewardFunction[AgentID, GameState, float]):
+    """Rewards the agent for facing the ball"""
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {}
+        for agent in agents:
+            car = state.cars[agent]
+            car_physics = car.physics if car.is_orange else car.inverted_physics
+            ball_physics = state.ball if car.is_orange else state.inverted_ball
+            player_forward = car_physics.forward
+            pos_diff = ball_physics.position - car_physics.position
+            dist_to_ball = np.linalg.norm(pos_diff)
+            dir_to_ball = pos_diff / dist_to_ball
+
+            facing_dot = np.dot(player_forward, dir_to_ball)
+            rewards[agent] = float(facing_dot)
+        return rewards
 
 class VelocityBallToGoalReward(RewardFunction[AgentID, GameState, float]):
     """Rewards the agent for hitting the ball toward the opponent's goal"""
@@ -474,3 +497,53 @@ class GoalViewReward(GoalProbReward):
         view_blue = view_goal_ratio(ball_pos, -GOAL_THRESHOLD)  # Blue net aka orange scoring
         view_orange = view_goal_ratio(ball_pos, GOAL_THRESHOLD)  # Orange net aka blue scoring
         return view_orange / (view_blue + view_orange)
+    
+class FlickReward(RewardFunction[AgentID, GameState, float]):
+    def __init__(self,
+                 velocity_threshold: float = 400.0,
+                 dribble_distance_threshold: float = 170.0,
+                 min_ball_height: float = 110.0,
+                 scale_reward: bool = True):
+        self.velocity_threshold = velocity_threshold
+        self.dribble_distance_threshold = dribble_distance_threshold
+        self.min_ball_height = min_ball_height
+        self.scale_reward = scale_reward
+        self.last_ball_velocity = None
+        self.last_touch_agent = None
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.last_ball_velocity = initial_state.ball.linear_velocity
+        self.last_touch_agent = None
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {agent: 0.0 for agent in agents}
+
+        current_ball_velocity = state.ball.linear_velocity
+        delta_v = np.linalg.norm(current_ball_velocity - self.last_ball_velocity)
+        self.last_ball_velocity = current_ball_velocity
+
+        # Only reward if flicking in dribble context
+        if delta_v > self.velocity_threshold and self.last_touch_agent is not None:
+            car = state.cars[self.last_touch_agent]
+            car_pos = car.physics.position
+            ball_pos = state.ball.position
+            dist = np.linalg.norm(ball_pos - car_pos)
+
+            # Dribble context check: close, grounded, and ball slightly elevated
+            if dist < self.dribble_distance_threshold and ball_pos[2] >= self.min_ball_height and not car.on_ground:
+
+                if self.scale_reward:
+                    delta_v = delta_v * (2.0 if car.is_flipping else 1.0)
+
+                reward = min(delta_v / BALL_MAX_SPEED, 1.0) if self.scale_reward else 1.0
+                rewards[self.last_touch_agent] = reward
+
+        # Update last touch agent
+        for agent in agents:
+            if state.cars[agent].ball_touches > 0:
+                self.last_touch_agent = agent
+                break
+
+        return rewards
