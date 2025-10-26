@@ -547,3 +547,342 @@ class FlickReward(RewardFunction[AgentID, GameState, float]):
                 break
 
         return rewards
+    
+def _safe_norm(v):
+    n = float(np.linalg.norm(v))
+    return n if n > 1e-6 else 1e-6
+
+def _unit(v):
+    n = _safe_norm(v)
+    return v / n
+
+class PossessionReward(RewardFunction[AgentID, GameState, float]):
+    """
+    Rewards taking possession away from the opponent and maintaining uncontested control.
+
+    Heuristic for 'team in possession':
+      - recent touch by that team within `touch_window_ticks`, OR
+      - nearest car of that team is within `possess_radius`, reasonably facing the ball,
+        and ball-car relative speed is small (suggesting control rather than a loose ball).
+
+    Events:
+      - CAPTURE: possession switches from opponent -> own team
+                 reward = base + k_goal * (ball vel toward opp goal) + k_margin * (distance margin vs opponent)
+      - RETAIN:  while in uncontested possession (opponent not also 'in-control') → small per-tick reward
+      - CONTEST/STALMATE: both teams meet control heuristics AND ball speed is low → small penalty to both
+
+    Notes:
+      - Designed for self-play. Returns a reward for every agent.
+      - Scales are conservative; pair with your normal approach/shot rewards.
+    """
+
+    def __init__(
+        self,
+        touch_window_ms: int = 600,      # how long a touch indicates possession (~0.6s)
+        possess_radius: float = 450.0,   # uu; within this dist to say "close enough to control"
+        face_cos_min: float = 0.6,       # facing threshold (~53° cone)
+        rel_speed_max: float = 700.0,    # uu/s; ball-car relative speed under control
+        loose_ball_speed: float = 500.0, # uu/s; below this counts as low / cradling
+        contest_ticks_needed: int = 12,  # ~0.2s at 60Hz to register a stalemate
+
+        # Rewards
+        capture_base: float = 1.0,
+        capture_k_goal: float = 2.0,     # scales with ball vel toward opp goal (normalized by BALL_MAX_SPEED)
+        capture_k_margin: float = 0.8,   # scales with (opp_dist - own_dist)
+
+        retain_per_second: float = 0.8,  # per-second while uncontested
+        contest_penalty_per_second: float = 0.6   # per-second penalty to both during cradling stalemate
+    ):
+        super().__init__()
+        self.touch_window_ticks = max(1, int(round(touch_window_ms * TICKS_PER_SECOND / 1000.0)))
+        self.possess_radius = possess_radius
+        self.face_cos_min = face_cos_min
+        self.rel_speed_max = rel_speed_max
+        self.loose_ball_speed = loose_ball_speed
+        self.contest_ticks_needed = contest_ticks_needed
+
+        self.capture_base = capture_base
+        self.capture_k_goal = capture_k_goal
+        self.capture_k_margin = capture_k_margin
+
+        self.retain_per_tick = retain_per_second / TICKS_PER_SECOND
+        self.contest_penalty_per_tick = contest_penalty_per_second / TICKS_PER_SECOND
+
+        # state
+        self.prev_touches: Dict[AgentID, int] = {}
+        self.last_touch_tick_by_team = {BLUE_TEAM: -10**9, ORANGE_TEAM: -10**9}
+        self.tick_counter = 0
+        self.prev_possession_team = None  # type: int | None
+        self.contest_ticks_running = 0
+
+    # -------- helpers --------
+    def _dir_to_opponent_goal(self, car, ball_pos):
+        goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+        return _unit(np.array([0.0, goal_y, 0.0]) - ball_pos)
+
+    def _nearest_dist_by_team(self, state: GameState) -> Dict[int, float]:
+        d = {BLUE_TEAM: 1e9, ORANGE_TEAM: 1e9}
+        bpos = state.ball.position
+        for car in state.cars.values():
+            pos = car.physics.position
+            dist = _safe_norm(bpos - pos)
+            team = car.team_num
+            if dist < d[team]:
+                d[team] = dist
+        return d
+
+    def _team_control_heuristic(self, team: int, state: GameState) -> bool:
+        # Recent touch?
+        if self.tick_counter - self.last_touch_tick_by_team[team] <= self.touch_window_ticks:
+            return True
+
+        # Otherwise check nearest car geometry/speeds
+        bpos = state.ball.position
+        bvel = state.ball.linear_velocity
+        best = None
+        best_dist = 1e9
+        for car in state.cars.values():
+            if car.team_num != team:
+                continue
+            pos = car.physics.position
+            dist = _safe_norm(bpos - pos)
+            if dist < best_dist:
+                best = car
+                best_dist = dist
+
+        if best is None:
+            return False
+
+        if best_dist > self.possess_radius:
+            return False
+
+        # Facing and relative speed
+        dir_to_ball = _unit(bpos - best.physics.position)
+        facing = float(np.dot(best.physics.forward, dir_to_ball))  # -1..1
+        rel_speed = _safe_norm(state.ball.linear_velocity - best.physics.linear_velocity)
+
+        return (facing >= self.face_cos_min) and (rel_speed <= self.rel_speed_max)
+
+    # -------- API --------
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.tick_counter = 0
+        self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
+        self.last_touch_tick_by_team = {BLUE_TEAM: -10**9, ORANGE_TEAM: -10**9}
+        self.prev_possession_team = None
+        self.contest_ticks_running = 0
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        self.tick_counter += 1
+        rewards = {a: 0.0 for a in agents}
+
+        # Track last-touch per team this tick
+        for a in agents:
+            touches = state.cars[a].ball_touches
+            if touches > self.prev_touches[a]:
+                team = state.cars[a].team_num
+                self.last_touch_tick_by_team[team] = self.tick_counter
+            self.prev_touches[a] = touches
+
+        # Determine possession for each team
+        blue_ctrl = self._team_control_heuristic(BLUE_TEAM, state)
+        orange_ctrl = self._team_control_heuristic(ORANGE_TEAM, state)
+
+        # Decide team in possession (None if neither; "contested" if both)
+        contested = blue_ctrl and orange_ctrl
+        if contested:
+            possession_team = None
+        elif blue_ctrl:
+            possession_team = BLUE_TEAM
+        elif orange_ctrl:
+            possession_team = ORANGE_TEAM
+        else:
+            possession_team = None
+
+        # CAPTURE event: opponent -> own team
+        if possession_team is not None and self.prev_possession_team is not None \
+           and possession_team != self.prev_possession_team:
+            # Quality terms: goal-directed ball velocity and distance margin
+            # Use the *current* ball direction to the new possessor's opponent goal.
+            # Pick any car of the new team to compute goal direction (direction is team-dependent only).
+            sample_car = next(c for c in state.cars.values() if c.team_num == possession_team)
+            goal_dir = self._dir_to_opponent_goal(sample_car, state.ball.position)
+            v_goal = max(0.0, float(np.dot(state.ball.linear_velocity, goal_dir)) / BALL_MAX_SPEED)
+
+            d = self._nearest_dist_by_team(state)
+            own_d = d[possession_team]
+            opp_d = d[BLUE_TEAM if possession_team == ORANGE_TEAM else ORANGE_TEAM]
+            margin = max(0.0, (opp_d - own_d) / max(self.possess_radius, 1.0))  # 0..~1
+
+            capture_value = self.capture_base + self.capture_k_goal * v_goal + self.capture_k_margin * margin
+
+            for a in agents:
+                team = state.cars[a].team_num
+                if team == possession_team:
+                    rewards[a] += capture_value
+                else:
+                    rewards[a] += 0.0  # no explicit punishment here; keep it shaping-positive
+
+        # RETAIN: small per-tick while uncontested possession
+        if possession_team is not None and not contested:
+            for a in agents:
+                if state.cars[a].team_num == possession_team:
+                    rewards[a] += self.retain_per_tick
+
+        # CONTEST/STALemate: both teams 'in control' and ball speed low for a while
+        ball_speed = _safe_norm(state.ball.linear_velocity)
+        if contested and ball_speed <= self.loose_ball_speed:
+            self.contest_ticks_running += 1
+            if self.contest_ticks_running >= self.contest_ticks_needed:
+                for a in agents:
+                    rewards[a] -= self.contest_penalty_per_tick
+        else:
+            self.contest_ticks_running = 0
+
+        self.prev_possession_team = possession_team
+        # Optional debug info
+        shared_info["possession_team"] = possession_team
+        shared_info["contested"] = contested
+        return rewards
+    
+
+class SaveBallReward(RewardFunction[AgentID, GameState, float]):
+    """
+    Rewards a player for saving a ball heading toward their own goal.
+
+    How it works:
+    - On a player's touch, compare the ball's velocity component toward that player's OWN goal
+      just before and just after the touch.
+      reward = max(0, toward_goal_pre - toward_goal_post) / BALL_MAX_SPEED  (scaled)
+      Extra bonus if the touch fully flips the component (ball starts moving away).
+    - For a short window after the save, give a small per-tick "hold" bonus while the ball
+      keeps moving away from own goal (prevents instant re-owns).
+
+    Tunables:
+      pre_window_ms         : how far back to sample the "pre" velocity (default uses last tick)
+      touch_window_ms       : touch ownership window for post-touch "hold" bonus
+      min_threat_speed      : minimum pre-touch speed toward goal to consider it a real save (uu/s)
+      bonus_flip_mult       : multiplier if the sign flips from toward goal → away from goal
+      save_scale            : scales the instantaneous save amount
+      hold_per_second       : per-second reward during the post-touch hold period
+      defense_zone_y_frac   : only pay big saves if ball is in defensive half (|y| relative to BACK_WALL_Y)
+    """
+
+    def __init__(
+        self,
+        pre_window_ms: int = 0,
+        touch_window_ms: int = 500,
+        min_threat_speed: float = 250.0,
+        bonus_flip_mult: float = 0.5,
+        save_scale: float = 5.0,
+        hold_per_second: float = 1.0,
+        defense_zone_y_frac: float = 0.35
+    ):
+        super().__init__()
+        self.pre_window_ticks = max(0, int(round(pre_window_ms * TICKS_PER_SECOND / 1000.0)))
+        self.touch_window_ticks = max(1, int(round(touch_window_ms * TICKS_PER_SECOND / 1000.0)))
+        self.min_threat_speed = float(min_threat_speed)
+        self.bonus_flip_mult = float(bonus_flip_mult)
+        self.save_scale = float(save_scale)
+        self.hold_per_tick = float(hold_per_second) / TICKS_PER_SECOND
+        self.defense_zone_y = BACK_WALL_Y * defense_zone_y_frac
+
+        # rolling state
+        self.tick_counter = 0
+        self.prev_ball_vel = None
+        self.prev_ball_pos = None
+
+        # per-agent tracking
+        self.prev_touches: Dict[AgentID, int] = {}
+        self.last_save_tick: Dict[AgentID, int] = {}
+        self.last_touch_tick: Dict[AgentID, int] = {}
+
+        # optional ring buffer for pre_window sampling
+        self.vel_hist = []  # list of (tick, vel)
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.tick_counter = 0
+        self.prev_ball_vel = np.array(initial_state.ball.linear_velocity, dtype=float)
+        self.prev_ball_pos = np.array(initial_state.ball.position, dtype=float)
+        self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
+        self.last_save_tick = {a: -10**9 for a in agents}
+        self.last_touch_tick = {a: -10**9 for a in agents}
+        self.vel_hist = [(0, self.prev_ball_vel.copy())]
+
+    def _own_goal_dir(self, car, ball_pos):
+        goal_y = -BACK_NET_Y if car.is_blue else BACK_NET_Y
+        return _unit(np.array([0.0, goal_y, 0.0], dtype=float) - ball_pos)
+
+    def _toward_own_goal_speed(self, car, ball_pos, ball_vel):
+        d = self._own_goal_dir(car, ball_pos)
+        return float(np.dot(ball_vel, d))  # uu/s; positive = toward own goal
+
+    def _get_pre_vel(self, current_vel):
+        if self.pre_window_ticks == 0 or len(self.vel_hist) == 0:
+            return current_vel
+        target_tick = self.tick_counter - self.pre_window_ticks
+        # find latest hist entry with tick <= target_tick
+        pre = self.vel_hist[0][1]
+        for t, v in self.vel_hist:
+            if t <= target_tick:
+                pre = v
+            else:
+                break
+        return pre
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        self.tick_counter += 1
+        rewards = {a: 0.0 for a in agents}
+
+        ball_pos = np.array(state.ball.position, dtype=float)
+        ball_vel_now = np.array(state.ball.linear_velocity, dtype=float)
+        ball_vel_pre = self._get_pre_vel(self.prev_ball_vel)
+
+        # record hist (bounded)
+        self.vel_hist.append((self.tick_counter, ball_vel_now.copy()))
+        if len(self.vel_hist) > (self.pre_window_ticks + 4):
+            self.vel_hist.pop(0)
+
+        # 1) Instantaneous save credit on touch if it reduced v_toward_own_goal
+        for a in agents:
+            car = state.cars[a]
+            touches = car.ball_touches
+
+            if touches > self.prev_touches[a]:
+                self.last_touch_tick[a] = self.tick_counter
+
+                v_pre = self._toward_own_goal_speed(car, ball_pos, ball_vel_pre)
+                v_post = self._toward_own_goal_speed(car, ball_pos, ball_vel_now)
+
+                # only count real threats (ball was going toward own goal fast enough)
+                if v_pre > self.min_threat_speed:
+                    delta = max(0.0, v_pre - v_post)  # how much did we slow/turn it away?
+                    base = (delta / BALL_MAX_SPEED) * self.save_scale
+
+                    # bonus if we flipped sign (ball now moving away from own goal)
+                    flip_bonus = 0.0
+                    if v_post < 0.0:
+                        flip_bonus = self.bonus_flip_mult * min(1.0, (-v_post) / BALL_MAX_SPEED)
+
+                    # bigger impact in defensive zone (encourage goal-line stops)
+                    zone_mul = 1.25 if (car.is_blue and ball_pos[1] < -self.defense_zone_y) or \
+                                       (car.is_orange and ball_pos[1] > self.defense_zone_y) else 1.0
+
+                    rewards[a] += zone_mul * (base + flip_bonus)
+                    self.last_save_tick[a] = self.tick_counter
+
+            self.prev_touches[a] = touches
+
+        # 2) Short "hold" bonus after a save while ball continues moving away from own goal
+        for a in agents:
+            if self.tick_counter - self.last_touch_tick[a] <= self.touch_window_ticks:
+                car = state.cars[a]
+                v_now = self._toward_own_goal_speed(car, ball_pos, ball_vel_now)
+                if v_now <= 0.0:  # away from own goal
+                    rewards[a] += self.hold_per_tick
+
+        # update prevs
+        self.prev_ball_vel = ball_vel_now
+        self.prev_ball_pos = ball_pos
+        return rewards

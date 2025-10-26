@@ -12,7 +12,7 @@ def build_rlgym_v2_env():
     from rlgym.rocket_league.state_mutators import MutatorSequence, FixedTeamSizeMutator, KickoffMutator
     from rlgym.rocket_league import common_values
     from rlgym_ppo.util import RLGymV2GymWrapper
-    from customRewardsGYM import InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward, FaceBallReward, BallTravelReward, AdvancedTouchReward, GoalViewReward, FlickReward, FlipResetReward
+    from customRewardsGYM import SaveBallReward, InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward, DemoReward, FaceBallReward, BallTravelReward, AdvancedTouchReward, GoalViewReward, FlickReward, FlipResetReward, PossessionReward, AerialDistanceReward
     from rsv_renderer import RocketSimVisRenderer
     spawn_opponents = True
     team_size = 1
@@ -32,10 +32,14 @@ def build_rlgym_v2_env():
     reward_fn = CombinedReward(
         (TouchReward(), 5),
         (VelocityBallToGoalReward(), 30),
+        (DemoReward(), 300),
+        (PossessionReward(), 10),
         (SpeedTowardBallReward(), 5),
-        (InAirReward(), .2),
+        (InAirReward(), .3),
         (FaceBallReward(), .4),
         (FlickReward(), 400),
+        (AerialDistanceReward(), 20),
+        (FlipResetReward(), 500),
         (GoalReward(), 800)
     )
 
@@ -69,7 +73,7 @@ def build_rlgym_v2_env():
 
 if __name__ == "__main__":
     from rlgym_ppo import Learner
-    latest_checkpoint_dir = "data/checkpoints/tooMuchDribble/" + str(max(os.listdir("data/checkpoints/tooMuchDribble"), key=lambda d: int(d)))
+    latest_checkpoint_dir = "data/checkpoints/possessionAndDribble/" + str(max(os.listdir("data/checkpoints/possessionAndDribble"), key=lambda d: int(d)))
     # 32 processes
     n_proc = 32
 
