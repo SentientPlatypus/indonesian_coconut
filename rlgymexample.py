@@ -38,7 +38,7 @@ def build_rlgym_v2_env():
         (InAirReward(), .3),
         (FaceBallReward(), .4),
         (FlickReward(), 400),
-        (AerialDistanceReward(), 20),
+        (AerialDistanceReward(), 100),
         (FlipResetReward(), 500),
         (GoalReward(), 800)
     )
@@ -73,7 +73,7 @@ def build_rlgym_v2_env():
 
 if __name__ == "__main__":
     from rlgym_ppo import Learner
-    latest_checkpoint_dir = "data/checkpoints/possessionAndDribble/" + str(max(os.listdir("data/checkpoints/possessionAndDribble"), key=lambda d: int(d)))
+    latest_checkpoint_dir = "data/checkpoints/rlgym-ppo-run-1761537995368058400/" + str(max(os.listdir("data/checkpoints/rlgym-ppo-run-1761537995368058400"), key=lambda d: int(d)))
     # 32 processes
     n_proc = 32
 
