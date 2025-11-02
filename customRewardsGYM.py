@@ -415,7 +415,7 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
                 down = -car.physics.up
                 car_ball = state.ball.position - car.physics.position
                 cossim_down_ball = cosine_similarity(down, car_ball)
-                if cossim_down_ball > 0.5 ** 0.5:  # 45 degrees
+                if cossim_down_ball > 0.5 ** 0.5 and state.ball.position[2] > GOAL_HEIGHT:  # 45 degrees
                     self.has_reset.add(agent)
                     rewards[agent] = self.obtain_flip_weight
             elif car.on_ground:
@@ -503,11 +503,22 @@ class FlickReward(RewardFunction[AgentID, GameState, float]):
                  velocity_threshold: float = 400.0,
                  dribble_distance_threshold: float = 170.0,
                  min_ball_height: float = 110.0,
+                 challenge_distance: float = 800.0,
+                 challenge_closing_speed: float = 400.0,
+                 challenge_bonus: float = 2.0,
                  scale_reward: bool = True):
+        """
+        Rewards fast flicks (large Δv on the ball) that happen
+        while dribbling and especially when being challenged.
+        """
         self.velocity_threshold = velocity_threshold
         self.dribble_distance_threshold = dribble_distance_threshold
         self.min_ball_height = min_ball_height
+        self.challenge_distance = challenge_distance
+        self.challenge_closing_speed = challenge_closing_speed
+        self.challenge_bonus = challenge_bonus
         self.scale_reward = scale_reward
+
         self.last_ball_velocity = None
         self.last_touch_agent = None
 
@@ -518,35 +529,56 @@ class FlickReward(RewardFunction[AgentID, GameState, float]):
     def get_rewards(self, agents: List[AgentID], state: GameState,
                     is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
                     shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+
         rewards = {agent: 0.0 for agent in agents}
 
         current_ball_velocity = state.ball.linear_velocity
         delta_v = np.linalg.norm(current_ball_velocity - self.last_ball_velocity)
         self.last_ball_velocity = current_ball_velocity
 
-        # Only reward if flicking in dribble context
         if delta_v > self.velocity_threshold and self.last_touch_agent is not None:
             car = state.cars[self.last_touch_agent]
             car_pos = car.physics.position
             ball_pos = state.ball.position
             dist = np.linalg.norm(ball_pos - car_pos)
 
-            # Dribble context check: close, grounded, and ball slightly elevated
+            # Check "dribble context": close, ball slightly above car, not on ground
             if dist < self.dribble_distance_threshold and ball_pos[2] >= self.min_ball_height and not car.on_ground:
-
-                if self.scale_reward:
-                    delta_v = delta_v * (2.0 if car.is_flipping else 1.0)
-
                 reward = min(delta_v / BALL_MAX_SPEED, 1.0) if self.scale_reward else 1.0
+
+                # Add challenge detection
+                under_pressure = False
+                for opponent_id, opponent in state.cars.items():
+                    if opponent.team_num != car.team_num:
+                        opp_pos = opponent.physics.position
+                        rel_pos = ball_pos - opp_pos
+                        rel_vel = opponent.physics.linear_velocity - car.physics.linear_velocity
+
+                        dist_to_ball = np.linalg.norm(rel_pos)
+                        closing_speed = np.dot(rel_vel, rel_pos / (dist_to_ball + 1e-6))
+
+                        if dist_to_ball < self.challenge_distance and closing_speed > self.challenge_closing_speed:
+                            under_pressure = True
+                            break
+
+                # Scale reward if flicking under pressure
+                if under_pressure:
+                    reward *= self.challenge_bonus
+
+                # Bonus if flick done mid-flip (typical for fast flicks)
+                if car.is_flipping:
+                    reward *= 1.5
+
                 rewards[self.last_touch_agent] = reward
 
-        # Update last touch agent
+        # Track last toucher
         for agent in agents:
             if state.cars[agent].ball_touches > 0:
                 self.last_touch_agent = agent
                 break
 
         return rewards
+
     
 def _safe_norm(v):
     n = float(np.linalg.norm(v))
@@ -555,6 +587,226 @@ def _safe_norm(v):
 def _unit(v):
     n = _safe_norm(v)
     return v / n
+
+class ControlledFlickUnderPressureReward(RewardFunction[AgentID, GameState, float]):
+    """
+    Rewards the sequence:
+      (A) Take control: ball resting on/near roof, low car↔ball relative speed (vel match)
+      (B) Retain control while unchallenged
+      (C) Wait for an opponent challenge (near & closing)
+      (D) Flick: big Δv on ball with a flip, preferably goal-directed
+
+    Use a modest weight (e.g., 2–4) alongside your usual approach/shot rewards.
+    """
+
+    def __init__(
+        self,
+        # Control detection
+        roof_min: float = 60.0,
+        roof_max: float = 220.0,
+        lateral_max: float = 160.0,
+        rel_speed_max: float = 450.0,
+
+        # Challenge detection
+        challenge_dist: float = 800.0,
+        challenge_closing: float = 400.0,
+        challenge_window_ms: int = 600,
+
+        # Flick detection
+        dv_threshold: float = 380.0,
+        flip_window_ms: int = 120,
+        min_ball_height: float = 100.0,
+
+        # Payout scales
+        control_capture: float = 0.25,
+        retain_per_second: float = 0.5,
+        flick_base: float = 0.4,
+        flick_dv_scale: float = 2.0,
+        flick_goal_scale: float = 2.5,     # scales with goal alignment (cosine)
+        pressure_bonus_mult: float = 1.5,
+
+        # NEW: directional gating (cosine to goal direction)
+        min_goal_cos: float = 0.2          # require at least this alignment toward goal to reward
+    ):
+        super().__init__()
+        # thresholds
+        self.roof_min = roof_min
+        self.roof_max = roof_max
+        self.lateral_max = lateral_max
+        self.rel_speed_max = rel_speed_max
+        self.challenge_dist = challenge_dist
+        self.challenge_closing = challenge_closing
+        self.challenge_window_ticks = max(1, int(round(challenge_window_ms * TICKS_PER_SECOND / 1000)))
+        self.dv_threshold = dv_threshold
+        self.flip_window_ticks = max(1, int(round(flip_window_ms * TICKS_PER_SECOND / 1000)))
+        self.min_ball_height = min_ball_height
+        # scales
+        self.control_capture = control_capture
+        self.retain_per_tick = retain_per_second / TICKS_PER_SECOND
+        self.flick_base = flick_base
+        self.flick_dv_scale = flick_dv_scale
+        self.flick_goal_scale = flick_goal_scale
+        self.pressure_bonus_mult = pressure_bonus_mult
+        self.min_goal_cos = min_goal_cos
+
+        # state
+        self.tick = 0
+        self.prev_ball_vel = None
+        self.prev_touches: Dict[AgentID, int] = {}
+
+        # per-agent episodic status
+        self.in_control: Dict[AgentID, bool] = {}
+        self.last_control_tick: Dict[AgentID, int] = {}
+        self.last_challenge_tick: Dict[AgentID, int] = {}
+        self.last_flip_tick: Dict[AgentID, int] = {}
+
+    # ---------- helpers ----------
+    def _is_control(self, car, ball) -> bool:
+        r = ball.position - car.physics.position
+        up = car.physics.up; fwd = car.physics.forward; right = car.physics.right
+        up_h = float(np.dot(r, up))
+        fwd_h = float(np.dot(r, fwd))
+        right_h = float(np.dot(r, right))
+        lateral = (fwd_h**2 + right_h**2) ** 0.5
+        rel_v = _safe_norm(ball.linear_velocity - car.physics.linear_velocity)
+        on_roof = (self.roof_min <= up_h <= self.roof_max) and (lateral <= self.lateral_max)
+        matched = (rel_v <= self.rel_speed_max)
+        return on_roof and matched
+
+    def _is_challenged(self, team_num, state: GameState) -> (bool, float):
+        bpos = state.ball.position
+        bpos_np = np.array(bpos, dtype=float)
+        pressure = 0.0
+        for opp in state.cars.values():
+            if opp.team_num == team_num:
+                continue
+            opp_pos = np.array(opp.physics.position, dtype=float)
+            rel = bpos_np - opp_pos
+            d = _safe_norm(rel)
+            if d > self.challenge_dist:
+                continue
+            closing = float(np.dot(opp.physics.linear_velocity, rel / d))
+            if closing > self.challenge_closing:
+                pressure = max(pressure, (self.challenge_dist - d) / self.challenge_dist * (closing / (closing + 1e-6)))
+        return pressure > 0.0, pressure
+
+    def _goal_dir(self, car, ball_pos_np):
+        goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+        return _unit(np.array([0.0, goal_y, 0.0], dtype=float) - ball_pos_np)
+
+    # ---------- API ----------
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.tick = 0
+        self.prev_ball_vel = np.array(initial_state.ball.linear_velocity, dtype=float)
+        self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
+        self.in_control = {a: False for a in agents}
+        self.last_control_tick = {a: -10**9 for a in agents}
+        self.last_challenge_tick = {a: -10**9 for a in agents}
+        self.last_flip_tick = {a: -10**9 for a in agents}
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        self.tick += 1
+        rewards = {a: 0.0 for a in agents}
+
+        ball = state.ball
+        ball_pos_np = np.array(ball.position, dtype=float)
+        ball_vel_now = np.array(ball.linear_velocity, dtype=float)
+        dv = _safe_norm(ball_vel_now - self.prev_ball_vel)
+
+        # track flips this tick
+        for a in agents:
+            if state.cars[a].is_flipping:
+                self.last_flip_tick[a] = self.tick
+
+        for a in agents:
+            car = state.cars[a]
+            touches = car.ball_touches
+
+            # A) CONTROL CAPTURE / RETAIN
+            has_control = self._is_control(car, ball)
+            if has_control and not self.in_control[a]:
+                self.in_control[a] = True
+                self.last_control_tick[a] = self.tick
+                rewards[a] += self.control_capture
+            elif has_control:
+                challenged, _ = self._is_challenged(car.team_num, state)
+                if not challenged:
+                    rewards[a] += self.retain_per_tick
+            else:
+                self.in_control[a] = False
+
+            # B) CHALLENGE DETECTION
+            challenged, pressure = self._is_challenged(car.team_num, state)
+            if challenged and self.in_control[a]:
+                self.last_challenge_tick[a] = self.tick
+
+            # C) FLICK UNDER PRESSURE (big Δv, flip, just after control & challenge) — ONLY if ball goes toward goal
+            just_touched = (touches > self.prev_touches[a])
+            recent_control = (self.tick - self.last_control_tick[a] <= self.challenge_window_ticks)
+            recent_challenge = (self.tick - self.last_challenge_tick[a] <= self.challenge_window_ticks)
+            recent_flip = (self.tick - self.last_flip_tick[a] <= self.flip_window_ticks)
+
+            if just_touched and recent_control and recent_challenge and recent_flip:
+                if ball.position[2] >= self.min_ball_height and dv >= self.dv_threshold:
+                    # Goal direction alignment (cosine between ball velocity and vector to goal center)
+                    goal_dir = self._goal_dir(car, ball_pos_np)
+                    speed = _safe_norm(ball_vel_now)
+                    cos_to_goal = 0.0 if speed < 1e-6 else float(np.dot(ball_vel_now / (speed + 1e-6), goal_dir))
+                    goal_align = max(0.0, cos_to_goal)  # 0..1, only count forward toward goal
+
+                    # Require minimum directional alignment to pay out
+                    if goal_align >= self.min_goal_cos:
+                        dv_term = (dv / BALL_MAX_SPEED) * self.flick_dv_scale
+                        goal_term = goal_align * self.flick_goal_scale  # directional bonus
+                        payout = self.flick_base + dv_term + goal_term
+                        if pressure > 0.0:
+                            payout *= self.pressure_bonus_mult
+                        rewards[a] += payout
+
+            self.prev_touches[a] = touches
+
+        self.prev_ball_vel = ball_vel_now
+        return rewards
+
+class AirBoostReward(RewardFunction[AgentID, GameState, float]):
+    def __init__(self, weight: float = 1.0, min_air_height: float = 10.0):
+        """
+        Rewards an agent for spending boost while airborne.
+
+        :param weight: Multiplier applied to the amount of boost consumed in air.
+        :param min_air_height: Minimum Z (uu) to count as 'air' (helps ignore tiny hops).
+        """
+        self.weight = weight
+        self.min_air_height = min_air_height
+        self.prev_boost: Dict[AgentID, float] = {}
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev_boost = {agent: initial_state.cars[agent].boost_amount for agent in agents}
+
+    def get_rewards(
+        self,
+        agents: List[AgentID],
+        state: GameState,
+        is_terminated: Dict[AgentID, bool],
+        is_truncated: Dict[AgentID, bool],
+        shared_info: Dict[str, Any]
+    ) -> Dict[AgentID, float]:
+        rewards: Dict[AgentID, float] = {}
+        for agent in agents:
+            car = state.cars[agent]
+            curr_boost = car.boost_amount
+            # Positive when boost was spent this tick
+            boost_spent = max(0.0, self.prev_boost[agent] - curr_boost)
+
+            is_air = (not car.on_ground) and (car.physics.position[2] >= self.min_air_height)
+            # Reward only boost spent in the air
+            rewards[agent] = (boost_spent * self.weight) if is_air else 0.0
+
+            self.prev_boost[agent] = curr_boost
+        return rewards
+
 
 class PossessionReward(RewardFunction[AgentID, GameState, float]):
     """
@@ -746,143 +998,126 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
         return rewards
     
 
-class SaveBallReward(RewardFunction[AgentID, GameState, float]):
+class OneVOneRecoverReward(RewardFunction[AgentID, GameState, float]):
     """
-    Rewards a player for saving a ball heading toward their own goal.
+    1v1 rotation/recovery reward.
 
-    How it works:
-    - On a player's touch, compare the ball's velocity component toward that player's OWN goal
-      just before and just after the touch.
-      reward = max(0, toward_goal_pre - toward_goal_post) / BALL_MAX_SPEED  (scaled)
-      Extra bonus if the touch fully flips the component (ball starts moving away).
-    - For a short window after the save, give a small per-tick "hold" bonus while the ball
-      keeps moving away from own goal (prevents instant re-owns).
+    Penalizes being overextended (ball & threat closer to own goal than you are),
+    and simultaneously rewards sprinting back and getting on the goal–ball line.
 
-    Tunables:
-      pre_window_ms         : how far back to sample the "pre" velocity (default uses last tick)
-      touch_window_ms       : touch ownership window for post-touch "hold" bonus
-      min_threat_speed      : minimum pre-touch speed toward goal to consider it a real save (uu/s)
-      bonus_flip_mult       : multiplier if the sign flips from toward goal → away from goal
-      save_scale            : scales the instantaneous save amount
-      hold_per_second       : per-second reward during the post-touch hold period
-      defense_zone_y_frac   : only pay big saves if ball is in defensive half (|y| relative to BACK_WALL_Y)
+    Overextended if ALL:
+      - d(me, own_goal) > d(ball, own_goal) + margin
+      - ball velocity toward own goal > threat_speed_min
+      - not already 'near net' (within near_net_radius)
+
+    While overextended:
+      - Apply small per-tick negative (scaled by how far past the line you are)
+      - Give positive shaping for velocity back toward own goal
+      - Give positive shaping for alignment on the goal–ball line (blocking lane)
+
+    Penalty stops when:
+      - d(me, own_goal) <= near_net_radius  (you’re back)
+      - OR d(me, own_goal) <= d(ball, own_goal)  (you’re behind the ball)
     """
 
     def __init__(
         self,
-        pre_window_ms: int = 0,
-        touch_window_ms: int = 500,
-        min_threat_speed: float = 250.0,
-        bonus_flip_mult: float = 0.5,
-        save_scale: float = 5.0,
-        hold_per_second: float = 1.0,
-        defense_zone_y_frac: float = 0.35
+        near_net_radius: float = 1200.0,      # when closer than this to own goal, no penalty
+        overextend_margin: float = 400.0,     # extra buffer before calling it overextended
+        threat_speed_min: float = 300.0,      # uu/s; ball must meaningfully head toward your net
+        penalty_per_second: float = 1.0,      # max per-second penalty when badly overextended
+        speedback_weight: float = 2.0,        # scales 'run back' shaping
+        lineblock_weight: float = 1.5,        # scales 'get on goal–ball line' shaping
+        lineblock_width: float = 1200.0       # how wide the preferred lane is (smaller = stricter)
     ):
         super().__init__()
-        self.pre_window_ticks = max(0, int(round(pre_window_ms * TICKS_PER_SECOND / 1000.0)))
-        self.touch_window_ticks = max(1, int(round(touch_window_ms * TICKS_PER_SECOND / 1000.0)))
-        self.min_threat_speed = float(min_threat_speed)
-        self.bonus_flip_mult = float(bonus_flip_mult)
-        self.save_scale = float(save_scale)
-        self.hold_per_tick = float(hold_per_second) / TICKS_PER_SECOND
-        self.defense_zone_y = BACK_WALL_Y * defense_zone_y_frac
-
-        # rolling state
-        self.tick_counter = 0
-        self.prev_ball_vel = None
-        self.prev_ball_pos = None
-
-        # per-agent tracking
-        self.prev_touches: Dict[AgentID, int] = {}
-        self.last_save_tick: Dict[AgentID, int] = {}
-        self.last_touch_tick: Dict[AgentID, int] = {}
-
-        # optional ring buffer for pre_window sampling
-        self.vel_hist = []  # list of (tick, vel)
+        self.near_net_radius = float(near_net_radius)
+        self.overextend_margin = float(overextend_margin)
+        self.threat_speed_min = float(threat_speed_min)
+        self.penalty_per_tick = float(penalty_per_second) / TICKS_PER_SECOND
+        self.speedback_weight = float(speedback_weight)
+        self.lineblock_weight = float(lineblock_weight)
+        self.lineblock_width = float(lineblock_width)
 
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        self.tick_counter = 0
-        self.prev_ball_vel = np.array(initial_state.ball.linear_velocity, dtype=float)
-        self.prev_ball_pos = np.array(initial_state.ball.position, dtype=float)
-        self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
-        self.last_save_tick = {a: -10**9 for a in agents}
-        self.last_touch_tick = {a: -10**9 for a in agents}
-        self.vel_hist = [(0, self.prev_ball_vel.copy())]
+        pass
 
-    def _own_goal_dir(self, car, ball_pos):
+    def _own_goal_pos(self, car) -> np.ndarray:
+        # Blue's own goal is at -Y; Orange's at +Y
         goal_y = -BACK_NET_Y if car.is_blue else BACK_NET_Y
-        return _unit(np.array([0.0, goal_y, 0.0], dtype=float) - ball_pos)
+        return np.array([0.0, goal_y, 0.0], dtype=float)
 
-    def _toward_own_goal_speed(self, car, ball_pos, ball_vel):
-        d = self._own_goal_dir(car, ball_pos)
-        return float(np.dot(ball_vel, d))  # uu/s; positive = toward own goal
+    def _toward_own_goal_speed(self, car, ball_pos_np, ball_vel_np) -> float:
+        dir_goal = _unit(self._own_goal_pos(car) - ball_pos_np)
+        return float(np.dot(ball_vel_np, dir_goal))  # + = toward own goal
 
-    def _get_pre_vel(self, current_vel):
-        if self.pre_window_ticks == 0 or len(self.vel_hist) == 0:
-            return current_vel
-        target_tick = self.tick_counter - self.pre_window_ticks
-        # find latest hist entry with tick <= target_tick
-        pre = self.vel_hist[0][1]
-        for t, v in self.vel_hist:
-            if t <= target_tick:
-                pre = v
-            else:
-                break
-        return pre
+    def _behind_ball(self, car, ball_pos_np) -> bool:
+        # 'Behind ball' relative to own goal: closer to own goal than the ball is.
+        d_me = _safe_norm(np.array(car.physics.position, dtype=float) - self._own_goal_pos(car))
+        d_ball = _safe_norm(ball_pos_np - self._own_goal_pos(car))
+        return d_me <= d_ball
 
-    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
-                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
-        self.tick_counter += 1
+    def _lane_alignment_reward(self, own_goal_np, ball_pos_np, me_pos_np) -> float:
+        """
+        Reward being on/near the goal–ball line segment. Compute perpendicular distance
+        from the car to the line, then convert to a [0,1] score within a lane width.
+        """
+        gb = ball_pos_np - own_goal_np
+        gg = _safe_norm(gb)
+        u = gb / gg
+        # Project me onto the line from goal to ball
+        gm = me_pos_np - own_goal_np
+        t = float(np.dot(gm, u))
+        # Clamp projection to the segment between goal (0) and ball (gg)
+        t = max(0.0, min(gg, t))
+        closest = own_goal_np + u * t
+        lateral = _safe_norm(me_pos_np - closest)  # perpendicular distance to the line
+        # Convert distance to reward (1 at centerline, fades to 0 at lineblock_width)
+        return max(0.0, 1.0 - lateral / max(self.lineblock_width, 1.0))
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+
         rewards = {a: 0.0 for a in agents}
+        ball_pos_np = np.array(state.ball.position, dtype=float)
+        ball_vel_np = np.array(state.ball.linear_velocity, dtype=float)
 
-        ball_pos = np.array(state.ball.position, dtype=float)
-        ball_vel_now = np.array(state.ball.linear_velocity, dtype=float)
-        ball_vel_pre = self._get_pre_vel(self.prev_ball_vel)
-
-        # record hist (bounded)
-        self.vel_hist.append((self.tick_counter, ball_vel_now.copy()))
-        if len(self.vel_hist) > (self.pre_window_ticks + 4):
-            self.vel_hist.pop(0)
-
-        # 1) Instantaneous save credit on touch if it reduced v_toward_own_goal
+        # In 1v1 there should be exactly one opponent per agent; loop each agent independently
         for a in agents:
-            car = state.cars[a]
-            touches = car.ball_touches
+            me = state.cars[a]
+            own_goal_np = self._own_goal_pos(me)
 
-            if touches > self.prev_touches[a]:
-                self.last_touch_tick[a] = self.tick_counter
+            me_pos_np = np.array(me.physics.position, dtype=float)
+            me_vel_np = np.array(me.physics.linear_velocity, dtype=float)
 
-                v_pre = self._toward_own_goal_speed(car, ball_pos, ball_vel_pre)
-                v_post = self._toward_own_goal_speed(car, ball_pos, ball_vel_now)
+            d_me = _safe_norm(me_pos_np - own_goal_np)
+            d_ball = _safe_norm(ball_pos_np - own_goal_np)
 
-                # only count real threats (ball was going toward own goal fast enough)
-                if v_pre > self.min_threat_speed:
-                    delta = max(0.0, v_pre - v_post)  # how much did we slow/turn it away?
-                    base = (delta / BALL_MAX_SPEED) * self.save_scale
+            # Threat: ball meaningfully heading toward our own goal
+            v_toward_own = self._toward_own_goal_speed(me, ball_pos_np, ball_vel_np)
+            threatening = v_toward_own > self.threat_speed_min
 
-                    # bonus if we flipped sign (ball now moving away from own goal)
-                    flip_bonus = 0.0
-                    if v_post < 0.0:
-                        flip_bonus = self.bonus_flip_mult * min(1.0, (-v_post) / BALL_MAX_SPEED)
+            # Overextended if you're outside near-net AND farther than the ball (with margin) AND it's threatening
+            overextended = (d_me > self.near_net_radius) and (d_me > d_ball + self.overextend_margin) and threatening
 
-                    # bigger impact in defensive zone (encourage goal-line stops)
-                    zone_mul = 1.25 if (car.is_blue and ball_pos[1] < -self.defense_zone_y) or \
-                                       (car.is_orange and ball_pos[1] > self.defense_zone_y) else 1.0
+            # Stop conditions: back near net OR behind ball now
+            if d_me <= self.near_net_radius or d_me <= d_ball:
+                overextended = False
 
-                    rewards[a] += zone_mul * (base + flip_bonus)
-                    self.last_save_tick[a] = self.tick_counter
+            if overextended:
+                # Penalty scales with how far past the ball you are (beyond margin), normalized by near_net_radius
+                gap = max(0.0, d_me - (d_ball + self.overextend_margin))
+                scale = min(1.0, gap / max(self.near_net_radius, 1.0))
+                rewards[a] -= self.penalty_per_tick * scale
 
-            self.prev_touches[a] = touches
+                # Positive shaping: sprint back (velocity component toward own goal)
+                dir_to_goal = _unit(own_goal_np - me_pos_np)
+                speed_back = max(0.0, float(np.dot(me_vel_np, dir_to_goal)) / CAR_MAX_SPEED)
+                rewards[a] += self.speedback_weight * speed_back / TICKS_PER_SECOND
 
-        # 2) Short "hold" bonus after a save while ball continues moving away from own goal
-        for a in agents:
-            if self.tick_counter - self.last_touch_tick[a] <= self.touch_window_ticks:
-                car = state.cars[a]
-                v_now = self._toward_own_goal_speed(car, ball_pos, ball_vel_now)
-                if v_now <= 0.0:  # away from own goal
-                    rewards[a] += self.hold_per_tick
+                # Positive shaping: get onto the goal–ball line (block the lane)
+                lane_score = self._lane_alignment_reward(own_goal_np, ball_pos_np, me_pos_np)
+                rewards[a] += self.lineblock_weight * lane_score / TICKS_PER_SECOND
 
-        # update prevs
-        self.prev_ball_vel = ball_vel_now
-        self.prev_ball_pos = ball_pos
         return rewards

@@ -12,7 +12,7 @@ def build_rlgym_v2_env():
     from rlgym.rocket_league.state_mutators import MutatorSequence, FixedTeamSizeMutator, KickoffMutator
     from rlgym.rocket_league import common_values
     from rlgym_ppo.util import RLGymV2GymWrapper
-    from customRewardsGYM import SaveBallReward, InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward, DemoReward, FaceBallReward, BallTravelReward, AdvancedTouchReward, GoalViewReward, FlickReward, FlipResetReward, PossessionReward, AerialDistanceReward
+    from customRewardsGYM import OneVOneRecoverReward, ControlledFlickUnderPressureReward, AirBoostReward ,BoostChangeReward, BoostKeepReward ,InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward, DemoReward, FaceBallReward, BallTravelReward, AdvancedTouchReward, GoalViewReward, FlickReward, FlipResetReward, PossessionReward, AerialDistanceReward
     from rsv_renderer import RocketSimVisRenderer
     spawn_opponents = True
     team_size = 1
@@ -30,17 +30,23 @@ def build_rlgym_v2_env():
     )
 
     reward_fn = CombinedReward(
-        (TouchReward(), 5),
+        (TouchReward(), 20),
         (VelocityBallToGoalReward(), 30),
+        (GoalViewReward(), 10),
         (DemoReward(), 300),
-        (PossessionReward(), 10),
-        (SpeedTowardBallReward(), 5),
-        (InAirReward(), .3),
+        (PossessionReward(), 8),
+        (SpeedTowardBallReward(), 7),
+        (InAirReward(), .5),
+        (AirBoostReward(), .4),
         (FaceBallReward(), .4),
-        (FlickReward(), 400),
-        (AerialDistanceReward(), 100),
-        (FlipResetReward(), 500),
-        (GoalReward(), 800)
+        (FlickReward(), 75),
+        (ControlledFlickUnderPressureReward(), 75),
+        (AerialDistanceReward(), 150),
+        (BoostKeepReward(), 5),
+        (BoostChangeReward(), 100),
+        (FlipResetReward(), 200),
+        (OneVOneRecoverReward(), 20),
+        (GoalReward(), 1000)
     )
 
     obs_builder = DefaultObs(zero_padding=None,
@@ -73,7 +79,7 @@ def build_rlgym_v2_env():
 
 if __name__ == "__main__":
     from rlgym_ppo import Learner
-    latest_checkpoint_dir = "data/checkpoints/rlgym-ppo-run-1761537995368058400/" + str(max(os.listdir("data/checkpoints/rlgym-ppo-run-1761537995368058400"), key=lambda d: int(d)))
+    latest_checkpoint_dir = "data/checkpoints/17-2/" + str(max(os.listdir("data/checkpoints/17-2"), key=lambda d: int(d)))
     # 32 processes
     n_proc = 32
 
