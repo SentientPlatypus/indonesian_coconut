@@ -58,6 +58,8 @@ class FaceBallReward(RewardFunction[AgentID, GameState, float]):
             dir_to_ball = pos_diff / dist_to_ball
 
             facing_dot = np.dot(player_forward, dir_to_ball)
+            if not car.on_ground:
+                facing_dot *= 2
             rewards[agent] = float(facing_dot)
         return rewards
 
@@ -460,7 +462,7 @@ class GoalProbReward(RewardFunction[AgentID, GameState, float]):
         :param state: the current game state
         :return: the probability of a goal being scored by blue
         """
-        raise NotImplementedError
+        return GoalViewReward.calculate_blue_goal_prob(self, state)
 
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         self.prob = self.calculate_blue_goal_prob(initial_state)
@@ -498,6 +500,18 @@ class GoalViewReward(GoalProbReward):
         view_orange = view_goal_ratio(ball_pos, GOAL_THRESHOLD)  # Orange net aka blue scoring
         return view_orange / (view_blue + view_orange)
     
+def _time_to_point(pos, vel, target, max_speed=CAR_MAX_SPEED):
+    # straight-line lower bound
+    d = np.linalg.norm(target - pos)
+    v_along = np.dot(vel, (target - pos) / (d + 1e-6))
+    # optimistic ETA: assume current speed in right direction; clamp
+    eff = max(0.0, min(max_speed, v_along))
+    return d / max(1e-6, max_speed) if eff < 0.2*max_speed else d / eff
+
+def _project_ball(ball_pos, ball_vel, dt=0.25):
+    return ball_pos + ball_vel * dt
+
+
 class FlickReward(RewardFunction[AgentID, GameState, float]):
     def __init__(self,
                  velocity_threshold: float = 400.0,
@@ -568,6 +582,26 @@ class FlickReward(RewardFunction[AgentID, GameState, float]):
                 # Bonus if flick done mid-flip (typical for fast flicks)
                 if car.is_flipping:
                     reward *= 1.5
+
+                # Predict where the ball will be soon
+                p_future = _project_ball(np.array(ball_pos, float), np.array(current_ball_velocity, float), dt=0.25)
+
+                # ETA for me
+                me_eta = _time_to_point(np.array(car.physics.position, float),
+                                        np.array(car.physics.linear_velocity, float),
+                                        p_future)
+
+                # ETA for closest opponent
+                opp_eta = min(
+                    _time_to_point(np.array(opp.physics.position, float),
+                                np.array(opp.physics.linear_velocity, float),
+                                p_future)
+                    for oid, opp in state.cars.items() if opp.team_num != car.team_num
+                )
+
+                # Require advantage to avoid “flick and forfeit”
+                if me_eta > opp_eta - 0.08:   # need ~80ms advantage; tune 0.05–0.12
+                    reward = 0.0
 
                 rewards[self.last_touch_agent] = reward
 
@@ -801,6 +835,7 @@ class AirBoostReward(RewardFunction[AgentID, GameState, float]):
             boost_spent = max(0.0, self.prev_boost[agent] - curr_boost)
 
             is_air = (not car.on_ground) and (car.physics.position[2] >= self.min_air_height)
+            
             # Reward only boost spent in the air
             rewards[agent] = (boost_spent * self.weight) if is_air else 0.0
 
@@ -980,6 +1015,8 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
             for a in agents:
                 if state.cars[a].team_num == possession_team:
                     rewards[a] += self.retain_per_tick
+                else:
+                    rewards[a] -= self.retain_per_tick * 1.5
 
         # CONTEST/STALemate: both teams 'in control' and ball speed low for a while
         ball_speed = _safe_norm(state.ball.linear_velocity)
@@ -996,7 +1033,6 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
         shared_info["possession_team"] = possession_team
         shared_info["contested"] = contested
         return rewards
-    
 
 class OneVOneRecoverReward(RewardFunction[AgentID, GameState, float]):
     """
@@ -1119,5 +1155,418 @@ class OneVOneRecoverReward(RewardFunction[AgentID, GameState, float]):
                 # Positive shaping: get onto the goal–ball line (block the lane)
                 lane_score = self._lane_alignment_reward(own_goal_np, ball_pos_np, me_pos_np)
                 rewards[a] += self.lineblock_weight * lane_score / TICKS_PER_SECOND
+
+        return rewards
+
+
+class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
+    """
+    Rewards useful air-dribble sequences:
+      - Controlled aerial touches above min_air_z with small car↔ball relative speed
+      - Forward progress (toward opponent goal / along car forward)
+      - Carry distance between your aerial touches
+      - Chain bonus for 2+ aerial touches
+    Gates attempts by boost; penalizes idle airtime; can ignore reset touches (to avoid double-paying with FlipResetReward).
+    """
+
+    def __init__(
+        self,
+        # Quality thresholds
+        min_air_z: float = 320.0,
+        rel_speed_max: float = 650.0,
+        # Sequencing
+        touch_chain_window_ms: int = 800,
+        # Rewards
+        touch_bonus: float = 0.18,
+        chain_bonus: float = 0.30,
+        forward_goal_weight: float = 2.0,
+        forward_car_weight: float = 1.0,
+        carry_dist_scale: float = 1.0 / (2 * BACK_WALL_Y),
+        # Boost gating
+        min_start_boost: float = 0.30,   # need ≥30 boost to start an attempt
+        min_sustain_boost: float = 0.10, # need ≥10 to keep it alive
+        # Anti-farming
+        idle_air_penalty_per_second: float = 0.8,
+        near_ball_dist: float = 700.0,
+        align_cos_min: float = 0.3,
+        # Flip reset coordination
+        avoid_reset_touches: bool = True,
+        reset_flag_key_fmt: str = "agent_{a}_had_reset",
+        # Optional: cap how many touches get paid per chain (1 = setup-only; 2–3 = short carry)
+        max_rewarded_touches: int = 3
+    ):
+        super().__init__()
+        self.min_air_z = min_air_z
+        self.rel_speed_max = rel_speed_max
+        self.touch_chain_ticks = max(1, int(round(touch_chain_window_ms * TICKS_PER_SECOND / 1000.0)))
+        self.touch_bonus = touch_bonus
+        self.chain_bonus = chain_bonus
+        self.forward_goal_weight = forward_goal_weight
+        self.forward_car_weight = forward_car_weight
+        self.carry_dist_scale = carry_dist_scale
+        self.min_start_boost = min_start_boost
+        self.min_sustain_boost = min_sustain_boost
+        self.idle_air_penalty_per_tick = idle_air_penalty_per_second / TICKS_PER_SECOND
+        self.near_ball_dist = near_ball_dist
+        self.align_cos_min = align_cos_min
+        self.avoid_reset_touches = avoid_reset_touches
+        self.reset_flag_key_fmt = reset_flag_key_fmt
+        self.max_rewarded_touches = max(1, int(max_rewarded_touches))
+
+        # state
+        self.tick = 0
+        self.prev_ball_pos = None
+        self.prev_touches: Dict[AgentID, int] = {}
+        self.chain_alive_until: Dict[AgentID, int] = {}
+        self.chain_touches: Dict[AgentID, int] = {}
+        self.chain_rewarded: Dict[AgentID, int] = {}
+        self.chain_carry_dist: Dict[AgentID, float] = {}
+        self.chain_started: Dict[AgentID, bool] = {}
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.tick = 0
+        self.prev_ball_pos = np.array(initial_state.ball.position, dtype=float)
+        self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
+        self.chain_alive_until = {a: -10**9 for a in agents}
+        self.chain_touches = {a: 0 for a in agents}
+        self.chain_rewarded = {a: 0 for a in agents}
+        self.chain_carry_dist = {a: 0.0 for a in agents}
+        self.chain_started = {a: False for a in agents}
+
+    def _goal_dir(self, car, ball_pos_np):
+        goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+        return _unit(np.array([0.0, goal_y, 0.0], dtype=float) - ball_pos_np)
+
+    def _reset_key(self, a: AgentID) -> str:
+        return self.reset_flag_key_fmt.format(a=a)
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[AgentID, Any]) -> Dict[AgentID, float]:
+        self.tick += 1
+        rewards = {a: 0.0 for a in agents}
+
+        ball = state.ball
+        bpos = np.array(ball.position, dtype=float)
+        bvel = np.array(ball.linear_velocity, dtype=float)
+
+        # ball travel since last tick (for carry distance)
+        travel = _safe_norm(bpos - self.prev_ball_pos)
+        self.prev_ball_pos = bpos
+
+        for a in agents:
+            car = state.cars[a]
+            touches = car.ball_touches
+            me_pos = np.array(car.physics.position, dtype=float)
+            me_vel = np.array(car.physics.linear_velocity, dtype=float)
+
+            # tiny penalty for useless airtime
+            if not car.on_ground:
+                dist_to_ball = _safe_norm(bpos - me_pos)
+                align = float(np.dot(car.physics.forward, _unit(bpos - me_pos)))
+                if (dist_to_ball > self.near_ball_dist) or (align < self.align_cos_min):
+                    rewards[a] -= self.idle_air_penalty_per_tick
+
+            chain_alive = (self.tick <= self.chain_alive_until[a])
+            if chain_alive and bpos[2] >= self.min_air_z and car.boost_amount >= self.min_sustain_boost:
+                self.chain_carry_dist[a] += travel
+            elif chain_alive and car.boost_amount < self.min_sustain_boost:
+                # ran out of fuel -> end chain
+                self.chain_alive_until[a] = -10**9
+
+            just_touched = (touches > self.prev_touches[a])
+
+            if just_touched and bpos[2] >= self.min_air_z:
+                # skip reset touches if coordinated with FlipResetReward
+                if self.avoid_reset_touches and shared_info.get(self._reset_key(a), False):
+                    self._after_touch(a)
+                    self.prev_touches[a] = touches
+                    continue
+
+                rel_speed = _safe_norm(bvel - me_vel)
+                if rel_speed <= self.rel_speed_max:
+                    # start chain requires enough boost
+                    if not chain_alive:
+                        if car.boost_amount >= self.min_start_boost:
+                            self.chain_started[a] = True
+                            self.chain_touches[a] = 0
+                            self.chain_rewarded[a] = 0
+                            self.chain_carry_dist[a] = 0.0
+                            self.chain_alive_until[a] = self.tick + self.touch_chain_ticks
+                        else:
+                            self._after_touch(a)
+                            self.prev_touches[a] = touches
+                            continue
+
+                    if self.chain_started[a]:
+                        self.chain_touches[a] += 1
+                        # forward progress
+                        goal_term = max(0.0, float(np.dot(bvel, self._goal_dir(car, bpos))) / BALL_MAX_SPEED)
+                        car_term = max(0.0, float(np.dot(bvel, _unit(car.physics.forward))) / BALL_MAX_SPEED)
+
+                        payout = self.touch_bonus \
+                                 + self.forward_goal_weight * goal_term \
+                                 + self.forward_car_weight * car_term \
+                                 + self.carry_dist_scale * self.chain_carry_dist[a]
+
+                        # chain bonus for 2+ touches
+                        if self.chain_touches[a] >= 2:
+                            payout += self.chain_bonus
+
+                        # cap number of paid touches per chain
+                        if self.chain_rewarded[a] < self.max_rewarded_touches:
+                            rewards[a] += max(0.0, payout)
+                            self.chain_rewarded[a] += 1
+
+                        # refresh window & reset carry accumulator
+                        self.chain_alive_until[a] = self.tick + self.touch_chain_ticks
+                        self.chain_carry_dist[a] = 0.0
+
+            self.prev_touches[a] = touches
+
+        return rewards
+
+    def _after_touch(self, a: AgentID):
+        # hook for optional chain management on ignored touches
+        pass
+
+
+class BumpOnGoalThreatReward(RewardFunction[AgentID, GameState, float]):
+    """
+    Reward bumps/demos on an opponent IF (and only if) the ball is moving toward the opponent's net.
+    Emphasizes clearing the 'save lane' (ball→goal corridor) and impactful bumps.
+
+    Pays:
+      + accel_scale * ||Δv_victim|| * ( goal_vel_weight * v_ball→goal + lane_weight * lane_factor )
+      + demo_bonus if demo occurs now
+    Penalizes:
+      - team bumps (scaled by imparted acceleration)
+
+    Gating:
+      - only when ball_vel • dir(ball→opponent_goal) >= threat_speed_min
+      - only if victim is near the play (near ball or within the lane)
+      - small cooldown so a single shove isn't counted every tick
+    """
+
+    def __init__(
+        self,
+        threat_speed_min: float = 400.0,     # uu/s: minimum ball speed toward opp goal to count as a threat
+        near_ball_dist: float = 1800.0,      # victim must be this close to the ball OR inside the lane
+        lane_width: float = 1100.0,          # radius around the ball→goal line to count as 'in lane'
+        accel_scale: float = 1.4,            # scales imparted acceleration (norm of Δv_victim / CAR_MAX_SPEED)
+        goal_vel_weight: float = 1.0,        # weight for ball's goalward velocity component
+        lane_weight: float = 1.0,            # weight for being in the ball→goal lane
+        demo_bonus: float = 1.0,             # flat bonus on demo
+        team_bump_penalty_scale: float = 1.0,# negative reward for team bump (scaled by impact)
+        cooldown_ticks: int = 2              # prevent multi-counting continuous contact
+    ):
+        super().__init__()
+        self.threat_speed_min = float(threat_speed_min)
+        self.near_ball_dist = float(near_ball_dist)
+        self.lane_width = float(lane_width)
+        self.accel_scale = float(accel_scale)
+        self.goal_vel_weight = float(goal_vel_weight)
+        self.lane_weight = float(lane_weight)
+        self.demo_bonus = float(demo_bonus)
+        self.team_bump_penalty_scale = float(team_bump_penalty_scale)
+        self.cooldown_ticks = int(cooldown_ticks)
+
+        self.prev_state: GameState | None = None
+        self.tick = 0
+        self.last_credit: Dict[AgentID, Dict[AgentID, int]] = {}
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev_state = initial_state
+        self.tick = 0
+        self.last_credit = {a: {} for a in agents}
+
+    # ----- helpers -----
+    def _opp_goal_dir(self, attacker, ball_pos_np):
+        goal_y = -BACK_NET_Y if attacker.is_orange else BACK_NET_Y
+        return _unit(np.array([0.0, goal_y, 0.0], dtype=float) - ball_pos_np)
+
+    def _ball_goalward_speed(self, attacker, ball_pos_np, ball_vel_np):
+        d = self._opp_goal_dir(attacker, ball_pos_np)
+        return float(np.dot(ball_vel_np, d))
+
+    def _lane_factor(self, ball_pos_np, goal_dir, victim_pos_np, lane_width) -> float:
+        """
+        1. Project victim onto the ball→goal ray.
+        2. If projection in front of ball (t>=0), reward proximity to the ray (0..1 inside lane_width).
+        """
+        gb = goal_dir  # unit
+        rel = victim_pos_np - ball_pos_np
+        t = float(np.dot(rel, gb))
+        if t < 0.0:
+            return 0.0
+        closest = ball_pos_np + gb * t
+        lateral = _safe_norm(victim_pos_np - closest)
+        return max(0.0, 1.0 - lateral / max(lane_width, 1.0))
+
+    # ----- API -----
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        self.tick += 1
+        rewards = {a: 0.0 for a in agents}
+
+        if self.prev_state is None:
+            self.prev_state = state
+            return rewards
+
+        ball_pos_np = np.array(state.ball.position, dtype=float)
+        ball_vel_np = np.array(state.ball.linear_velocity, dtype=float)
+
+        for attacker_id in agents:
+            attacker = state.cars[attacker_id]
+            victim_id = attacker.bump_victim_id
+            if victim_id is None:
+                continue
+
+            victim = state.cars[victim_id]
+            prev_victim = self.prev_state.cars[victim_id]
+
+            # cooldown for this pair
+            last = self.last_credit.get(attacker_id, {}).get(victim_id, -10**9)
+            if self.tick - last <= self.cooldown_ticks:
+                continue
+
+            # ball must be heading toward opponent goal (attacker's perspective)
+            v_goal = self._ball_goalward_speed(attacker, ball_pos_np, ball_vel_np)  # uu/s
+            if v_goal < self.threat_speed_min:
+                continue
+
+            # Is the victim relevant to the play? (near ball OR in lane)
+            victim_pos_np = np.array(victim.physics.position, dtype=float)
+            near_ball = _safe_norm(victim_pos_np - ball_pos_np) <= self.near_ball_dist
+            goal_dir = self._opp_goal_dir(attacker, ball_pos_np)
+            lane_fac = self._lane_factor(ball_pos_np, goal_dir, victim_pos_np, self.lane_width)
+            if not (near_ball or lane_fac > 0.0):
+                continue
+
+            # Impact: victim acceleration since last tick
+            dv = np.array(victim.physics.linear_velocity, dtype=float) - \
+                 np.array(prev_victim.physics.linear_velocity, dtype=float)
+            impact = _safe_norm(dv) / CAR_MAX_SPEED  # 0..~1
+
+            if attacker.team_num != victim.team_num:
+                # positive reward: scale by impact and by threat/lane quality
+                goal_vel_term = max(0.0, v_goal / BALL_MAX_SPEED)  # 0..1
+                usefulness = self.goal_vel_weight * goal_vel_term + self.lane_weight * lane_fac
+                base = self.accel_scale * impact * usefulness
+
+                # demo bonus if demo just occurred
+                if victim.is_demoed and not self.prev_state.cars[victim_id].is_demoed:
+                    base += self.demo_bonus
+
+                rewards[attacker_id] += max(0.0, base)
+            else:
+                # team bump penalty
+                rewards[attacker_id] -= self.team_bump_penalty_scale * impact
+
+            self.last_credit.setdefault(attacker_id, {})[victim_id] = self.tick
+
+        self.prev_state = state
+        return rewards
+
+
+class AirRollReward(RewardFunction[AgentID, GameState, float]):
+    """
+    Rewards *intentional air-roll* near the ball.
+    Penalizes mindless spinning away from play.
+
+    - Only applies when airborne.
+    - roll_rate is |angular_velocity dot forward_axis|.
+    """
+
+    def __init__(
+        self,
+        min_air_z: float = 140.0,        
+        near_ball_dist: float = 900.0,   
+        roll_rate_ref: float = 6.0,      
+        w_roll: float = 1.0,   
+    ):
+        super().__init__()
+        self.min_air_z = min_air_z
+        self.near_ball_dist = near_ball_dist
+        self.roll_rate_ref = max(1e-3, roll_rate_ref)
+        self.w_roll = w_roll
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]):
+        pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        bpos = np.array(state.ball.position)
+
+        for a in agents:
+            car = state.cars[a]
+            if car.on_ground:
+                continue 
+
+            cpos = np.array(car.physics.position)
+            if cpos[2] < self.min_air_z:
+                continue 
+
+            dist = _safe_norm(bpos - cpos)
+
+            ang = np.array(car.physics.angular_velocity)
+            fwd = np.array(car.physics.forward)
+            roll_rate = abs(float(np.dot(ang, fwd)))
+
+            roll_norm = min(1.0, roll_rate / self.roll_rate_ref)
+
+            if dist <= self.near_ball_dist:
+                rewards[a] += self.w_roll * roll_norm
+
+        return rewards
+    
+PER_BOOST_POTENTIAL = (.5*CAR_MASS*((3000)**2)) / 100
+JUMP_VEL = 292
+JUMP_POTENTIAL = .5 * CAR_MASS * ((JUMP_VEL*2)**2)
+
+MAX_ENERGY = 100*PER_BOOST_POTENTIAL + JUMP_POTENTIAL + (CAR_MASS * GRAVITY * (CEILING_Z - 17)) + (0.5 * CAR_MASS * (CAR_MAX_SPEED**2))
+
+class EnergyReward(RewardFunction[AgentID, GameState, float]):
+    def __init__(self, reward: float = 1.0):
+        super().__init__()
+        self.reward = reward
+    
+    def reset(self, agents: List[AgentID], initial_state: StateType, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {k: 0 for k in agents}
+        for agent in agents:
+            car = state.cars[agent]
+            height = car.physics.position[2]
+            velocity = np.linalg.norm(car.physics.linear_velocity)
+            energy = 0
+
+            # Potential Energy (Why 1.1?)
+            energy += 1.1 * CAR_MASS * GRAVITY * height
+
+            # Kinetic Energy
+            energy += 0.5 * CAR_MASS * (velocity**2)
+
+            # Energy from having boost
+            energy += PER_BOOST_POTENTIAL * car.boost_amount
+
+            if not car.has_jumped:
+                energy += JUMP_POTENTIAL
+            
+            # Energy from having flip (why .9?)
+            if car.has_flip:
+                dodge_impulse = 500 + (velocity / 17) if velocity <= 1700 else (600 - (velocity - 1700))
+                # cheat a bit to encourage the dodge usage
+                dodge_impulse = max(dodge_impulse - 25, 0)
+                energy += 0.9 * 0.5 * CAR_MASS * (dodge_impulse**2)
+            
+            norm_energy = energy / MAX_ENERGY
+            if car.is_demoed:
+                norm_energy = 0
+            
+            rewards[agent] = self.reward * norm_energy
 
         return rewards
