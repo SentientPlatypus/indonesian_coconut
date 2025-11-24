@@ -1158,6 +1158,140 @@ class OneVOneRecoverReward(RewardFunction[AgentID, GameState, float]):
 
         return rewards
 
+class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
+    """
+    Rewards an agent for maintaining an air dribble:
+    - Agent is last to touch the ball
+    - Car and ball are in the air
+    - Ball is close to the car
+    - Ball is roughly above/in front of the car
+    - Relative velocity between car and ball is small
+    The reward is given continuously while control is maintained.
+    """
+
+    def __init__(
+        self,
+        carry_radius: float = 300.0,        # max distance car–ball to count as a carry
+        min_height: float = RAMP_HEIGHT,    # minimum ball height to consider it an air dribble
+        max_rel_speed: float = 800.0,       # relative speed at which control term goes to zero
+        proximity_weight: float = 1.0,
+        rel_speed_weight: float = 1.0,
+        height_weight: float = 0.5,
+        facing_weight: float = 0.5,
+        per_second_scale: float = 1.0,      # total reward per second for a "perfect" airdribble
+    ):
+        super().__init__()
+        self.carry_radius = carry_radius
+        self.min_height = min_height
+        self.max_rel_speed = max_rel_speed
+        self.proximity_weight = proximity_weight
+        self.rel_speed_weight = rel_speed_weight
+        self.height_weight = height_weight
+        self.facing_weight = facing_weight
+        # Convert to per tick
+        self.per_tick_scale = per_second_scale / TICKS_PER_SECOND
+
+        self.last_touch_agent: Optional[AgentID] = None
+
+    def reset(
+        self,
+        agents: List[AgentID],
+        initial_state: GameState,
+        shared_info: Dict[str, Any],
+    ) -> None:
+        self.last_touch_agent = None
+
+    def get_rewards(
+        self,
+        agents: List[AgentID],
+        state: GameState,
+        is_terminated: Dict[AgentID, bool],
+        is_truncated: Dict[AgentID, bool],
+        shared_info: Dict[str, Any],
+    ) -> Dict[AgentID, float]:
+        rewards = {agent: 0.0 for agent in agents}
+
+        ball = state.ball
+
+        # Update last_touch_agent
+        touching_agents = [a for a in agents if state.cars[a].ball_touches > 0]
+        if len(touching_agents) == 1:
+            self.last_touch_agent = touching_agents[0]
+        elif len(touching_agents) > 1:
+            # If multiple touch, choose the closest one
+            self.last_touch_agent = min(
+                touching_agents,
+                key=lambda a: np.linalg.norm(
+                    state.cars[a].physics.position - ball.position
+                ),
+            )
+
+        if self.last_touch_agent is None:
+            return rewards
+
+        agent = self.last_touch_agent
+        car = state.cars[agent]
+        car_phys = car.physics
+
+        # Preconditions for an air dribble
+        if car.on_ground:
+            return rewards
+        if ball.position[2] < self.min_height:
+            return rewards
+
+        # Distance / proximity term
+        diff = ball.position - car_phys.position
+        dist = np.linalg.norm(diff)
+        if dist > self.carry_radius:
+            return rewards
+
+        proximity_term = 1.0 - (dist / self.carry_radius)  # in [0, 1]
+
+        # Relative speed term (how similar their velocities are)
+        rel_speed = np.linalg.norm(ball.linear_velocity - car_phys.linear_velocity)
+        rel_speed_term = max(0.0, 1.0 - rel_speed / self.max_rel_speed)
+
+        # Height term (higher = better, above min_height)
+        height_term = (ball.position[2] - self.min_height) / (
+            CEILING_Z - self.min_height
+        )
+        height_term = float(np.clip(height_term, 0.0, 1.0))
+
+        # Facing term: car forward vs ball direction
+        dir_to_ball = diff / (dist + 1e-6)
+        facing_term = float(max(0.0, np.dot(car_phys.forward, dir_to_ball)))
+
+        # Combine terms
+        score = (
+            self.proximity_weight * proximity_term
+            + self.rel_speed_weight * rel_speed_term
+            + self.height_weight * height_term
+            + self.facing_weight * facing_term
+        )
+
+        # Normalize by sum of weights so max ≈ per_tick_scale
+        total_weight = (
+            self.proximity_weight
+            + self.rel_speed_weight
+            + self.height_weight
+            + self.facing_weight
+        )
+        if total_weight > 0:
+            score /= total_weight
+
+        rewards[agent] = score * self.per_tick_scale
+
+        # Optionally expose some debug info
+        shared_info["airdribble_info"] = {
+            "last_touch_agent": self.last_touch_agent,
+            "proximity_term": proximity_term,
+            "rel_speed_term": rel_speed_term,
+            "height_term": height_term,
+            "facing_term": facing_term,
+        }
+
+        return rewards
+
 
 class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
     """

@@ -3,3 +3,6 @@ __pycache__
 *.pyc
 
 data/
+%APPDATA%
+wandb/
+wandb
