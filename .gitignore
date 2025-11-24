@@ -8,3 +8,4 @@ data
 wandb/
 wandb
 /data
+data/checkpoints
