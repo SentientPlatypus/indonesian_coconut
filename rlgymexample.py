@@ -12,8 +12,8 @@ def build_rlgym_v2_env():
     from rlgym.rocket_league.state_mutators import MutatorSequence, FixedTeamSizeMutator, KickoffMutator
     from rlgym.rocket_league import common_values
     from rlgym_ppo.util import RLGymV2GymWrapper
-    from customRewardsGYM import OneVOneRecoverReward, GoalProbReward, EnergyReward, AirRollReward, BumpOnGoalThreatReward, AirDribbleSequenceReward, ControlledFlickUnderPressureReward, AirBoostReward ,BoostChangeReward, BoostKeepReward ,InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward, DemoReward, FaceBallReward, GoalViewReward, FlickReward, FlipResetReward, PossessionReward, AerialDistanceReward
-    from customRewardsGYM import AirdribbleReward
+    from customRewardsGYM import OneVOneRecoverReward, GoalProbReward, EnergyReward, AirRollReward, AirDribbleSequenceReward, ControlledFlickUnderPressureReward, AirBoostReward ,BoostChangeReward, BoostKeepReward ,InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward, DemoReward, FaceBallReward, GoalViewReward, FlickReward, FlipResetReward, PossessionReward, AerialDistanceReward
+    from customRewardsGYM import AirdribbleReward, BallTravelReward
     from rsv_renderer import RocketSimVisRenderer
 
 
@@ -35,25 +35,26 @@ def build_rlgym_v2_env():
     reward_fn = CombinedReward(
         (TouchReward(), 20),
         (VelocityBallToGoalReward(), 20),
-        (EnergyReward(), 5),
-        (GoalProbReward(), 40),
+        (BallTravelReward(), 25),
+        (EnergyReward(), 8),
+        (GoalProbReward(), 50),
         (DemoReward(), 500),
-        (PossessionReward(), 20),
+        (PossessionReward(), 50),
         (SpeedTowardBallReward(), 10),
-        (InAirReward(), .7),
-        (AirBoostReward(), .9),
+        (InAirReward(), 0.7),
+        (AirBoostReward(), 1.4),
         (FaceBallReward(), .4),
         (FlickReward(), 65),
-        (ControlledFlickUnderPressureReward(), 95),
-        (AerialDistanceReward(), 65),
+        (ControlledFlickUnderPressureReward(), 65),
+        (AerialDistanceReward(), 105),
         # (AirDribbleSequenceReward(), 115),
-        (AirdribbleReward(), 115),
+        (AirdribbleReward(), 95),
         (AirRollReward(), .4),
         (BoostKeepReward(), 5),
-        (BoostChangeReward(), 140),
-        (FlipResetReward(), 900),
+        (BoostChangeReward(), 130),
+        (FlipResetReward(), 200),
         (OneVOneRecoverReward(), 25),
-        (GoalReward(), 1400)
+        (GoalReward(), 2000)
     )
 
     obs_builder = DefaultObs(zero_padding=None,
@@ -86,7 +87,7 @@ def build_rlgym_v2_env():
 
 if __name__ == "__main__":
     from rlgym_ppo import Learner
-    latest_checkpoint_dir = "data/checkpoints/V1/7.7B/" + str(max(os.listdir("data/checkpoints/V1/7.7B"), key=lambda d: int(d)))
+    latest_checkpoint_dir = "data/checkpoints/V2/6.28B/" + str(max(os.listdir("data/checkpoints/V2/6.28B"), key=lambda d: int(d)))
     # 32 processes
     n_proc = 32
 

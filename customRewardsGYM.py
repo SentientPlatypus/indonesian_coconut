@@ -291,7 +291,7 @@ class BallTravelReward(RewardFunction[AgentID, GameState, float]):
         return rewards
     
 class BoostChangeReward(RewardFunction[AgentID, GameState, float]):
-    def __init__(self, gain_weight: float = 1.0, lose_weight=1.0,
+    def __init__(self, gain_weight: float = 1.0, lose_weight=0.0,
                  activation_fn: Callable[[float], float] = lambda x: math.sqrt(0.01 * x)):
         """
         Reward function that rewards agents for increasing their boost and penalizes them for decreasing it.
@@ -835,9 +835,10 @@ class AirBoostReward(RewardFunction[AgentID, GameState, float]):
             boost_spent = max(0.0, self.prev_boost[agent] - curr_boost)
 
             is_air = (not car.on_ground) and (car.physics.position[2] >= self.min_air_height)
+            facing_ball_weight = cosine_similarity(car.physics.forward, state.ball.position - car.physics.position)
             
             # Reward only boost spent in the air
-            rewards[agent] = (boost_spent * self.weight) if is_air else 0.0
+            rewards[agent] = (boost_spent * (self.weight + facing_ball_weight)) if is_air else 0.0
 
             self.prev_boost[agent] = curr_boost
         return rewards
@@ -987,28 +988,28 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
             possession_team = None
 
         # CAPTURE event: opponent -> own team
-        if possession_team is not None and self.prev_possession_team is not None \
-           and possession_team != self.prev_possession_team:
-            # Quality terms: goal-directed ball velocity and distance margin
-            # Use the *current* ball direction to the new possessor's opponent goal.
-            # Pick any car of the new team to compute goal direction (direction is team-dependent only).
-            sample_car = next(c for c in state.cars.values() if c.team_num == possession_team)
-            goal_dir = self._dir_to_opponent_goal(sample_car, state.ball.position)
-            v_goal = max(0.0, float(np.dot(state.ball.linear_velocity, goal_dir)) / BALL_MAX_SPEED)
+        # if possession_team is not None and self.prev_possession_team is not None \
+        #    and possession_team != self.prev_possession_team:
+        #     # Quality terms: goal-directed ball velocity and distance margin
+        #     # Use the *current* ball direction to the new possessor's opponent goal.
+        #     # Pick any car of the new team to compute goal direction (direction is team-dependent only).
+        #     sample_car = next(c for c in state.cars.values() if c.team_num == possession_team)
+        #     goal_dir = self._dir_to_opponent_goal(sample_car, state.ball.position)
+        #     v_goal = max(0.0, float(np.dot(state.ball.linear_velocity, goal_dir)) / BALL_MAX_SPEED)
 
-            d = self._nearest_dist_by_team(state)
-            own_d = d[possession_team]
-            opp_d = d[BLUE_TEAM if possession_team == ORANGE_TEAM else ORANGE_TEAM]
-            margin = max(0.0, (opp_d - own_d) / max(self.possess_radius, 1.0))  # 0..~1
+        #     d = self._nearest_dist_by_team(state)
+        #     own_d = d[possession_team]
+        #     opp_d = d[BLUE_TEAM if possession_team == ORANGE_TEAM else ORANGE_TEAM]
+        #     margin = max(0.0, (opp_d - own_d) / max(self.possess_radius, 1.0))  # 0..~1
 
-            capture_value = self.capture_base + self.capture_k_goal * v_goal + self.capture_k_margin * margin
+        #     capture_value = self.capture_base + self.capture_k_goal * v_goal + self.capture_k_margin * margin
 
-            for a in agents:
-                team = state.cars[a].team_num
-                if team == possession_team:
-                    rewards[a] += capture_value
-                else:
-                    rewards[a] += 0.0  # no explicit punishment here; keep it shaping-positive
+        #     for a in agents:
+        #         team = state.cars[a].team_num
+        #         if team == possession_team:
+        #             rewards[a] += capture_value
+        #         else:
+        #             rewards[a] += 0.0  # no explicit punishment here; keep it shaping-positive
 
         # RETAIN: small per-tick while uncontested possession
         if possession_team is not None and not contested:
@@ -1464,144 +1465,6 @@ class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
         # hook for optional chain management on ignored touches
         pass
 
-
-class BumpOnGoalThreatReward(RewardFunction[AgentID, GameState, float]):
-    """
-    Reward bumps/demos on an opponent IF (and only if) the ball is moving toward the opponent's net.
-    Emphasizes clearing the 'save lane' (ball→goal corridor) and impactful bumps.
-
-    Pays:
-      + accel_scale * ||Δv_victim|| * ( goal_vel_weight * v_ball→goal + lane_weight * lane_factor )
-      + demo_bonus if demo occurs now
-    Penalizes:
-      - team bumps (scaled by imparted acceleration)
-
-    Gating:
-      - only when ball_vel • dir(ball→opponent_goal) >= threat_speed_min
-      - only if victim is near the play (near ball or within the lane)
-      - small cooldown so a single shove isn't counted every tick
-    """
-
-    def __init__(
-        self,
-        threat_speed_min: float = 400.0,     # uu/s: minimum ball speed toward opp goal to count as a threat
-        near_ball_dist: float = 1800.0,      # victim must be this close to the ball OR inside the lane
-        lane_width: float = 1100.0,          # radius around the ball→goal line to count as 'in lane'
-        accel_scale: float = 1.4,            # scales imparted acceleration (norm of Δv_victim / CAR_MAX_SPEED)
-        goal_vel_weight: float = 1.0,        # weight for ball's goalward velocity component
-        lane_weight: float = 1.0,            # weight for being in the ball→goal lane
-        demo_bonus: float = 1.0,             # flat bonus on demo
-        team_bump_penalty_scale: float = 1.0,# negative reward for team bump (scaled by impact)
-        cooldown_ticks: int = 2              # prevent multi-counting continuous contact
-    ):
-        super().__init__()
-        self.threat_speed_min = float(threat_speed_min)
-        self.near_ball_dist = float(near_ball_dist)
-        self.lane_width = float(lane_width)
-        self.accel_scale = float(accel_scale)
-        self.goal_vel_weight = float(goal_vel_weight)
-        self.lane_weight = float(lane_weight)
-        self.demo_bonus = float(demo_bonus)
-        self.team_bump_penalty_scale = float(team_bump_penalty_scale)
-        self.cooldown_ticks = int(cooldown_ticks)
-
-        self.prev_state: GameState | None = None
-        self.tick = 0
-        self.last_credit: Dict[AgentID, Dict[AgentID, int]] = {}
-
-    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        self.prev_state = initial_state
-        self.tick = 0
-        self.last_credit = {a: {} for a in agents}
-
-    # ----- helpers -----
-    def _opp_goal_dir(self, attacker, ball_pos_np):
-        goal_y = -BACK_NET_Y if attacker.is_orange else BACK_NET_Y
-        return _unit(np.array([0.0, goal_y, 0.0], dtype=float) - ball_pos_np)
-
-    def _ball_goalward_speed(self, attacker, ball_pos_np, ball_vel_np):
-        d = self._opp_goal_dir(attacker, ball_pos_np)
-        return float(np.dot(ball_vel_np, d))
-
-    def _lane_factor(self, ball_pos_np, goal_dir, victim_pos_np, lane_width) -> float:
-        """
-        1. Project victim onto the ball→goal ray.
-        2. If projection in front of ball (t>=0), reward proximity to the ray (0..1 inside lane_width).
-        """
-        gb = goal_dir  # unit
-        rel = victim_pos_np - ball_pos_np
-        t = float(np.dot(rel, gb))
-        if t < 0.0:
-            return 0.0
-        closest = ball_pos_np + gb * t
-        lateral = _safe_norm(victim_pos_np - closest)
-        return max(0.0, 1.0 - lateral / max(lane_width, 1.0))
-
-    # ----- API -----
-    def get_rewards(self, agents: List[AgentID], state: GameState,
-                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
-                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
-        self.tick += 1
-        rewards = {a: 0.0 for a in agents}
-
-        if self.prev_state is None:
-            self.prev_state = state
-            return rewards
-
-        ball_pos_np = np.array(state.ball.position, dtype=float)
-        ball_vel_np = np.array(state.ball.linear_velocity, dtype=float)
-
-        for attacker_id in agents:
-            attacker = state.cars[attacker_id]
-            victim_id = attacker.bump_victim_id
-            if victim_id is None:
-                continue
-
-            victim = state.cars[victim_id]
-            prev_victim = self.prev_state.cars[victim_id]
-
-            # cooldown for this pair
-            last = self.last_credit.get(attacker_id, {}).get(victim_id, -10**9)
-            if self.tick - last <= self.cooldown_ticks:
-                continue
-
-            # ball must be heading toward opponent goal (attacker's perspective)
-            v_goal = self._ball_goalward_speed(attacker, ball_pos_np, ball_vel_np)  # uu/s
-            if v_goal < self.threat_speed_min:
-                continue
-
-            # Is the victim relevant to the play? (near ball OR in lane)
-            victim_pos_np = np.array(victim.physics.position, dtype=float)
-            near_ball = _safe_norm(victim_pos_np - ball_pos_np) <= self.near_ball_dist
-            goal_dir = self._opp_goal_dir(attacker, ball_pos_np)
-            lane_fac = self._lane_factor(ball_pos_np, goal_dir, victim_pos_np, self.lane_width)
-            if not (near_ball or lane_fac > 0.0):
-                continue
-
-            # Impact: victim acceleration since last tick
-            dv = np.array(victim.physics.linear_velocity, dtype=float) - \
-                 np.array(prev_victim.physics.linear_velocity, dtype=float)
-            impact = _safe_norm(dv) / CAR_MAX_SPEED  # 0..~1
-
-            if attacker.team_num != victim.team_num:
-                # positive reward: scale by impact and by threat/lane quality
-                goal_vel_term = max(0.0, v_goal / BALL_MAX_SPEED)  # 0..1
-                usefulness = self.goal_vel_weight * goal_vel_term + self.lane_weight * lane_fac
-                base = self.accel_scale * impact * usefulness
-
-                # demo bonus if demo just occurred
-                if victim.is_demoed and not self.prev_state.cars[victim_id].is_demoed:
-                    base += self.demo_bonus
-
-                rewards[attacker_id] += max(0.0, base)
-            else:
-                # team bump penalty
-                rewards[attacker_id] -= self.team_bump_penalty_scale * impact
-
-            self.last_credit.setdefault(attacker_id, {})[victim_id] = self.tick
-
-        self.prev_state = state
-        return rewards
 
 
 class AirRollReward(RewardFunction[AgentID, GameState, float]):
