@@ -42,19 +42,19 @@ def build_rlgym_v2_env():
         (PossessionReward(), 50),
         (SpeedTowardBallReward(), 10),
         (InAirReward(), 0.7),
-        (AirBoostReward(), 1.4),
+        (AirBoostReward(), 1),
         (FaceBallReward(), .4),
-        (FlickReward(), 65),
-        (ControlledFlickUnderPressureReward(), 65),
+        (FlickReward(), 105),
+        # (ControlledFlickUnderPressureReward(), 65),
         (AerialDistanceReward(), 105),
         # (AirDribbleSequenceReward(), 115),
-        (AirdribbleReward(), 95),
+        (AirdribbleReward(), 65),
         (AirRollReward(), .4),
         (BoostKeepReward(), 5),
         (BoostChangeReward(), 130),
         (FlipResetReward(), 200),
         (OneVOneRecoverReward(), 25),
-        (GoalReward(), 2000)
+        (GoalReward(), 2300)
     )
 
     obs_builder = DefaultObs(zero_padding=None,
@@ -87,7 +87,7 @@ def build_rlgym_v2_env():
 
 if __name__ == "__main__":
     from rlgym_ppo import Learner
-    latest_checkpoint_dir = "data/checkpoints/V2/6.28B/" + str(max(os.listdir("data/checkpoints/V2/6.28B"), key=lambda d: int(d)))
+    latest_checkpoint_dir = "data/checkpoints/V2/6.7B/" + str(max(os.listdir("data/checkpoints/V2/6.7B"), key=lambda d: int(d)))
     # 32 processes
     n_proc = 32
 

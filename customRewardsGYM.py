@@ -534,10 +534,12 @@ class FlickReward(RewardFunction[AgentID, GameState, float]):
         self.scale_reward = scale_reward
 
         self.last_ball_velocity = None
+        self.last_ball_height = None
         self.last_touch_agent = None
 
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         self.last_ball_velocity = initial_state.ball.linear_velocity
+        self.last_ball_height = initial_state.ball.position[2]
         self.last_touch_agent = None
 
     def get_rewards(self, agents: List[AgentID], state: GameState,
@@ -548,6 +550,8 @@ class FlickReward(RewardFunction[AgentID, GameState, float]):
 
         current_ball_velocity = state.ball.linear_velocity
         delta_v = np.linalg.norm(current_ball_velocity - self.last_ball_velocity)
+        delta_height = state.ball.position[2] - self.last_ball_height
+        self.last_ball_height = state.ball.position[2]
         self.last_ball_velocity = current_ball_velocity
 
         if delta_v > self.velocity_threshold and self.last_touch_agent is not None:
@@ -558,7 +562,7 @@ class FlickReward(RewardFunction[AgentID, GameState, float]):
 
             # Check "dribble context": close, ball slightly above car, not on ground
             if dist < self.dribble_distance_threshold and ball_pos[2] >= self.min_ball_height and not car.on_ground:
-                reward = min(delta_v / BALL_MAX_SPEED, 1.0) if self.scale_reward else 1.0
+                reward = min((delta_v / BALL_MAX_SPEED) + (delta_height / (2.5 * GOAL_HEIGHT)), 1.0) if self.scale_reward else 1.0
 
                 # Add challenge detection
                 under_pressure = False
