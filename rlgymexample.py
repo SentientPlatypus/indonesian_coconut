@@ -33,28 +33,28 @@ def build_rlgym_v2_env():
     )
 
     reward_fn = CombinedReward(
-        (TouchReward(), 20),
-        (VelocityBallToGoalReward(), 20),
-        (BallTravelReward(), 25),
-        (EnergyReward(), 8),
+        (TouchReward(), 22),
+        (VelocityBallToGoalReward(), 22),
+        (BallTravelReward(), 35),
+        (EnergyReward(), 4),
         (GoalProbReward(), 50),
-        (DemoReward(), 500),
+        (DemoReward(), 300),
         (PossessionReward(), 50),
         (SpeedTowardBallReward(), 10),
-        (InAirReward(), 0.7),
-        (AirBoostReward(), 1),
+        (InAirReward(), 0.4),
+        (AirBoostReward(), .2),
         (FaceBallReward(), .4),
         (FlickReward(), 105),
         # (ControlledFlickUnderPressureReward(), 65),
-        (AerialDistanceReward(), 105),
+        (AerialDistanceReward(), 135),
         # (AirDribbleSequenceReward(), 115),
         (AirdribbleReward(), 65),
         (AirRollReward(), .4),
         (BoostKeepReward(), 5),
-        (BoostChangeReward(), 130),
+        (BoostChangeReward(), 125),
         (FlipResetReward(), 200),
         (OneVOneRecoverReward(), 25),
-        (GoalReward(), 2300)
+        (GoalReward(), 2400)
     )
 
     obs_builder = DefaultObs(zero_padding=None,
@@ -87,7 +87,7 @@ def build_rlgym_v2_env():
 
 if __name__ == "__main__":
     from rlgym_ppo import Learner
-    latest_checkpoint_dir = "data/checkpoints/V2/6.7B/" + str(max(os.listdir("data/checkpoints/V2/6.7B"), key=lambda d: int(d)))
+    latest_checkpoint_dir = "data/checkpoints/V2/9.9B/" + str(max(os.listdir("data/checkpoints/V2/9.9B"), key=lambda d: int(d)))
     # 32 processes
     n_proc = 32
 
