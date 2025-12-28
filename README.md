@@ -16,10 +16,10 @@ Total trials: n = 69.
 
 Under the null hypothesis of equal skill (p = 0.5), achieving ≥ 42–28 is required for p < 0.05.
 
-Indonesian Coconut achieved a decisive result of: **90–24**
+Indonesian Coconut achieved a decisive result of: **47–3**
 
-This exceeds the statistical significance threshold by a wide margin, providing strong evidence that Indonesian Coconut’s learned policy is overwhelmingly stronger across the full distribution of 1v1 play. See match statistics [here](https://ballchasing.com/replay/397cbfaf-0126-41e6-a0fc-17b28f10c6a2)
-<img width="1645" height="1428" alt="image" src="https://github.com/user-attachments/assets/194ba83d-2812-49c0-977b-62ca16054009" />
+This exceeds the statistical significance threshold by a wide margin, providing strong evidence that Indonesian Coconut’s learned policy is overwhelmingly stronger across the full distribution of 1v1 play. See match statistics [here](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b)
+![alt text](score.png)
 
 ### Clips: (Embed may not work, see highlights folder.)
 <video controls src="https://genewica.com/images/Flick_over.mp4" title="Flick_over"></video>

@@ -417,7 +417,7 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
                 down = -car.physics.up
                 car_ball = state.ball.position - car.physics.position
                 cossim_down_ball = cosine_similarity(down, car_ball)
-                if cossim_down_ball > 0.5 ** 0.5 and state.ball.position[2] > GOAL_HEIGHT:  # 45 degrees
+                if cossim_down_ball > 0.5 ** 0.5 and state.ball.position[2] > GOAL_HEIGHT * 0.7:  # 45 degrees
                     self.has_reset.add(agent)
                     rewards[agent] = self.obtain_flip_weight
             elif car.on_ground:
