@@ -1,10 +1,18 @@
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, Optional
 from rlgym.api import RewardFunction, AgentID, StateType, RewardType
 from rlgym.rocket_league.api import GameState
 from rlgym.rocket_league.math import *
 from rlgym.rocket_league.common_values import *
 import numpy as np
 import math
+
+def _safe_norm(v):
+    n = float(np.linalg.norm(v))
+    return n if n > 1e-6 else 1e-6
+
+def _unit(v):
+    n = _safe_norm(v)
+    return v / n
 
 class SpeedTowardBallReward(RewardFunction[AgentID, GameState, float]):
     """Rewards the agent for moving quickly toward the ball"""
@@ -394,44 +402,6 @@ class DemoReward(RewardFunction[AgentID, GameState, float]):
 
         return rewards
     
-class FlipResetReward(RewardFunction[AgentID, GameState, float]):
-    def __init__(self, obtain_flip_weight: float = 1.0, hit_ball_weight: float = 1.0):
-        self.obtain_flip_weight = obtain_flip_weight
-        self.hit_ball_weight = hit_ball_weight
-
-        self.prev_state = None
-        self.has_reset = None
-        self.has_flipped = None
-
-    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        self.prev_state = initial_state
-        self.has_reset = set()
-        self.has_flipped = set()
-
-    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
-                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
-        rewards = {k: 0.0 for k in agents}
-        for agent in agents:
-            car = state.cars[agent]
-            if car.ball_touches > 0 and car.has_flip and not self.prev_state.cars[agent].has_flip:
-                down = -car.physics.up
-                car_ball = state.ball.position - car.physics.position
-                cossim_down_ball = cosine_similarity(down, car_ball)
-                if cossim_down_ball > 0.5 ** 0.5 and state.ball.position[2] > GOAL_HEIGHT * 0.7:  # 45 degrees
-                    self.has_reset.add(agent)
-                    rewards[agent] = self.obtain_flip_weight
-            elif car.on_ground:
-                self.has_reset.discard(agent)
-                self.has_flipped.discard(agent)
-            elif car.is_flipping and agent in self.has_reset:
-                self.has_reset.remove(agent)
-                self.has_flipped.add(agent)
-            if car.ball_touches > 0 and agent in self.has_flipped:
-                self.has_flipped.remove(agent)
-                rewards[agent] = self.hit_ball_weight
-        self.prev_state = state
-        return rewards
-    
 
 from rl_math.ball import GOAL_THRESHOLD
 from rl_math.solid_angle import view_goal_ratio
@@ -617,197 +587,6 @@ class FlickReward(RewardFunction[AgentID, GameState, float]):
 
         return rewards
 
-    
-def _safe_norm(v):
-    n = float(np.linalg.norm(v))
-    return n if n > 1e-6 else 1e-6
-
-def _unit(v):
-    n = _safe_norm(v)
-    return v / n
-
-class ControlledFlickUnderPressureReward(RewardFunction[AgentID, GameState, float]):
-    """
-    Rewards the sequence:
-      (A) Take control: ball resting on/near roof, low car↔ball relative speed (vel match)
-      (B) Retain control while unchallenged
-      (C) Wait for an opponent challenge (near & closing)
-      (D) Flick: big Δv on ball with a flip, preferably goal-directed
-
-    Use a modest weight (e.g., 2–4) alongside your usual approach/shot rewards.
-    """
-
-    def __init__(
-        self,
-        # Control detection
-        roof_min: float = 60.0,
-        roof_max: float = 220.0,
-        lateral_max: float = 160.0,
-        rel_speed_max: float = 450.0,
-
-        # Challenge detection
-        challenge_dist: float = 800.0,
-        challenge_closing: float = 400.0,
-        challenge_window_ms: int = 600,
-
-        # Flick detection
-        dv_threshold: float = 380.0,
-        flip_window_ms: int = 120,
-        min_ball_height: float = 100.0,
-
-        # Payout scales
-        control_capture: float = 0.25,
-        retain_per_second: float = 0.5,
-        flick_base: float = 0.4,
-        flick_dv_scale: float = 2.0,
-        flick_goal_scale: float = 2.5,     # scales with goal alignment (cosine)
-        pressure_bonus_mult: float = 1.5,
-
-        # NEW: directional gating (cosine to goal direction)
-        min_goal_cos: float = 0.2          # require at least this alignment toward goal to reward
-    ):
-        super().__init__()
-        # thresholds
-        self.roof_min = roof_min
-        self.roof_max = roof_max
-        self.lateral_max = lateral_max
-        self.rel_speed_max = rel_speed_max
-        self.challenge_dist = challenge_dist
-        self.challenge_closing = challenge_closing
-        self.challenge_window_ticks = max(1, int(round(challenge_window_ms * TICKS_PER_SECOND / 1000)))
-        self.dv_threshold = dv_threshold
-        self.flip_window_ticks = max(1, int(round(flip_window_ms * TICKS_PER_SECOND / 1000)))
-        self.min_ball_height = min_ball_height
-        # scales
-        self.control_capture = control_capture
-        self.retain_per_tick = retain_per_second / TICKS_PER_SECOND
-        self.flick_base = flick_base
-        self.flick_dv_scale = flick_dv_scale
-        self.flick_goal_scale = flick_goal_scale
-        self.pressure_bonus_mult = pressure_bonus_mult
-        self.min_goal_cos = min_goal_cos
-
-        # state
-        self.tick = 0
-        self.prev_ball_vel = None
-        self.prev_touches: Dict[AgentID, int] = {}
-
-        # per-agent episodic status
-        self.in_control: Dict[AgentID, bool] = {}
-        self.last_control_tick: Dict[AgentID, int] = {}
-        self.last_challenge_tick: Dict[AgentID, int] = {}
-        self.last_flip_tick: Dict[AgentID, int] = {}
-
-    # ---------- helpers ----------
-    def _is_control(self, car, ball) -> bool:
-        r = ball.position - car.physics.position
-        up = car.physics.up; fwd = car.physics.forward; right = car.physics.right
-        up_h = float(np.dot(r, up))
-        fwd_h = float(np.dot(r, fwd))
-        right_h = float(np.dot(r, right))
-        lateral = (fwd_h**2 + right_h**2) ** 0.5
-        rel_v = _safe_norm(ball.linear_velocity - car.physics.linear_velocity)
-        on_roof = (self.roof_min <= up_h <= self.roof_max) and (lateral <= self.lateral_max)
-        matched = (rel_v <= self.rel_speed_max)
-        return on_roof and matched
-
-    def _is_challenged(self, team_num, state: GameState) -> (bool, float):
-        bpos = state.ball.position
-        bpos_np = np.array(bpos, dtype=float)
-        pressure = 0.0
-        for opp in state.cars.values():
-            if opp.team_num == team_num:
-                continue
-            opp_pos = np.array(opp.physics.position, dtype=float)
-            rel = bpos_np - opp_pos
-            d = _safe_norm(rel)
-            if d > self.challenge_dist:
-                continue
-            closing = float(np.dot(opp.physics.linear_velocity, rel / d))
-            if closing > self.challenge_closing:
-                pressure = max(pressure, (self.challenge_dist - d) / self.challenge_dist * (closing / (closing + 1e-6)))
-        return pressure > 0.0, pressure
-
-    def _goal_dir(self, car, ball_pos_np):
-        goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
-        return _unit(np.array([0.0, goal_y, 0.0], dtype=float) - ball_pos_np)
-
-    # ---------- API ----------
-    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        self.tick = 0
-        self.prev_ball_vel = np.array(initial_state.ball.linear_velocity, dtype=float)
-        self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
-        self.in_control = {a: False for a in agents}
-        self.last_control_tick = {a: -10**9 for a in agents}
-        self.last_challenge_tick = {a: -10**9 for a in agents}
-        self.last_flip_tick = {a: -10**9 for a in agents}
-
-    def get_rewards(self, agents: List[AgentID], state: GameState,
-                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
-                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
-        self.tick += 1
-        rewards = {a: 0.0 for a in agents}
-
-        ball = state.ball
-        ball_pos_np = np.array(ball.position, dtype=float)
-        ball_vel_now = np.array(ball.linear_velocity, dtype=float)
-        dv = _safe_norm(ball_vel_now - self.prev_ball_vel)
-
-        # track flips this tick
-        for a in agents:
-            if state.cars[a].is_flipping:
-                self.last_flip_tick[a] = self.tick
-
-        for a in agents:
-            car = state.cars[a]
-            touches = car.ball_touches
-
-            # A) CONTROL CAPTURE / RETAIN
-            has_control = self._is_control(car, ball)
-            if has_control and not self.in_control[a]:
-                self.in_control[a] = True
-                self.last_control_tick[a] = self.tick
-                rewards[a] += self.control_capture
-            elif has_control:
-                challenged, _ = self._is_challenged(car.team_num, state)
-                if not challenged:
-                    rewards[a] += self.retain_per_tick
-            else:
-                self.in_control[a] = False
-
-            # B) CHALLENGE DETECTION
-            challenged, pressure = self._is_challenged(car.team_num, state)
-            if challenged and self.in_control[a]:
-                self.last_challenge_tick[a] = self.tick
-
-            # C) FLICK UNDER PRESSURE (big Δv, flip, just after control & challenge) — ONLY if ball goes toward goal
-            just_touched = (touches > self.prev_touches[a])
-            recent_control = (self.tick - self.last_control_tick[a] <= self.challenge_window_ticks)
-            recent_challenge = (self.tick - self.last_challenge_tick[a] <= self.challenge_window_ticks)
-            recent_flip = (self.tick - self.last_flip_tick[a] <= self.flip_window_ticks)
-
-            if just_touched and recent_control and recent_challenge and recent_flip:
-                if ball.position[2] >= self.min_ball_height and dv >= self.dv_threshold:
-                    # Goal direction alignment (cosine between ball velocity and vector to goal center)
-                    goal_dir = self._goal_dir(car, ball_pos_np)
-                    speed = _safe_norm(ball_vel_now)
-                    cos_to_goal = 0.0 if speed < 1e-6 else float(np.dot(ball_vel_now / (speed + 1e-6), goal_dir))
-                    goal_align = max(0.0, cos_to_goal)  # 0..1, only count forward toward goal
-
-                    # Require minimum directional alignment to pay out
-                    if goal_align >= self.min_goal_cos:
-                        dv_term = (dv / BALL_MAX_SPEED) * self.flick_dv_scale
-                        goal_term = goal_align * self.flick_goal_scale  # directional bonus
-                        payout = self.flick_base + dv_term + goal_term
-                        if pressure > 0.0:
-                            payout *= self.pressure_bonus_mult
-                        rewards[a] += payout
-
-            self.prev_touches[a] = touches
-
-        self.prev_ball_vel = ball_vel_now
-        return rewards
-
 class AirBoostReward(RewardFunction[AgentID, GameState, float]):
     def __init__(self, weight: float = 1.0, min_air_height: float = 10.0):
         """
@@ -847,197 +626,165 @@ class AirBoostReward(RewardFunction[AgentID, GameState, float]):
             self.prev_boost[agent] = curr_boost
         return rewards
 
-
 class PossessionReward(RewardFunction[AgentID, GameState, float]):
     """
-    Rewards taking possession away from the opponent and maintaining uncontested control.
+    1v1 possession reward designed to stop "both cradling" behavior.
 
-    Heuristic for 'team in possession':
-      - recent touch by that team within `touch_window_ticks`, OR
-      - nearest car of that team is within `possess_radius`, reasonably facing the ball,
-        and ball-car relative speed is small (suggesting control rather than a loose ball).
+    Possession is EXCLUSIVE control by one agent:
+      - close to ball (possess_radius)
+      - facing ball enough (face_cos_min)
+      - relative ball-car speed small (rel_speed_max)
+      - AND (optionally) last touched recently (touch_window) to make possession "sticky"
 
-    Events:
-      - CAPTURE: possession switches from opponent -> own team
-                 reward = base + k_goal * (ball vel toward opp goal) + k_margin * (distance margin vs opponent)
-      - RETAIN:  while in uncontested possession (opponent not also 'in-control') → small per-tick reward
-      - CONTEST/STALMATE: both teams meet control heuristics AND ball speed is low → small penalty to both
+    If both satisfy control -> contested -> no retain reward (and optional stalemate penalty when ball is slow).
 
-    Notes:
-      - Designed for self-play. Returns a reward for every agent.
-      - Scales are conservative; pair with your normal approach/shot rewards.
+    Rewards:
+      - capture: when possessor switches from opponent -> you
+      - retain: per tick while you have exclusive possession
+      - giveaway: penalty when you lose possession to opponent
+      - stalemate: penalty when contested and ball speed low for a while
     """
 
     def __init__(
         self,
-        touch_window_ms: int = 600,      # how long a touch indicates possession (~0.6s)
-        possess_radius: float = 450.0,   # uu; within this dist to say "close enough to control"
-        face_cos_min: float = 0.6,       # facing threshold (~53° cone)
-        rel_speed_max: float = 700.0,    # uu/s; ball-car relative speed under control
-        loose_ball_speed: float = 500.0, # uu/s; below this counts as low / cradling
-        contest_ticks_needed: int = 12,  # ~0.2s at 60Hz to register a stalemate
+        touch_window_ms: int = 500,
+        possess_radius: float = 330.0,
+        face_cos_min: float = 0.70,
+        rel_speed_max: float = 520.0,
 
-        # Rewards
-        capture_base: float = 1.0,
-        capture_k_goal: float = 2.0,     # scales with ball vel toward opp goal (normalized by BALL_MAX_SPEED)
-        capture_k_margin: float = 0.8,   # scales with (opp_dist - own_dist)
+        # Make possession "sticky" only if you recently touched OR you're very clearly controlling
+        require_recent_touch_for_possession: bool = False,
 
-        retain_per_second: float = 0.8,  # per-second while uncontested
-        contest_penalty_per_second: float = 0.6   # per-second penalty to both during cradling stalemate
+        # Anti-cradle
+        loose_ball_speed: float = 450.0,
+        contested_ticks_needed: int = 12,
+
+        # Rewards (tuned to be modest; scale in CombinedReward)
+        capture_reward: float = 1.0,
+        retain_per_second: float = 0.6,
+        giveaway_penalty: float = 1.2,
+        contested_penalty_per_second: float = 0.7
     ):
         super().__init__()
         self.touch_window_ticks = max(1, int(round(touch_window_ms * TICKS_PER_SECOND / 1000.0)))
         self.possess_radius = possess_radius
         self.face_cos_min = face_cos_min
         self.rel_speed_max = rel_speed_max
+        self.require_recent_touch_for_possession = require_recent_touch_for_possession
+
         self.loose_ball_speed = loose_ball_speed
-        self.contest_ticks_needed = contest_ticks_needed
+        self.contested_ticks_needed = contested_ticks_needed
 
-        self.capture_base = capture_base
-        self.capture_k_goal = capture_k_goal
-        self.capture_k_margin = capture_k_margin
-
+        self.capture_reward = capture_reward
         self.retain_per_tick = retain_per_second / TICKS_PER_SECOND
-        self.contest_penalty_per_tick = contest_penalty_per_second / TICKS_PER_SECOND
+        self.giveaway_penalty = giveaway_penalty
+        self.contested_penalty_per_tick = contested_penalty_per_second / TICKS_PER_SECOND
 
         # state
+        self.tick = 0
         self.prev_touches: Dict[AgentID, int] = {}
-        self.last_touch_tick_by_team = {BLUE_TEAM: -10**9, ORANGE_TEAM: -10**9}
-        self.tick_counter = 0
-        self.prev_possession_team = None  # type: int | None
-        self.contest_ticks_running = 0
+        self.last_touch_tick: Dict[AgentID, int] = {}
+        self.prev_possessor: Optional[AgentID] = None
+        self.contested_ticks = 0
 
-    # -------- helpers --------
-    def _dir_to_opponent_goal(self, car, ball_pos):
-        goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
-        return _unit(np.array([0.0, goal_y, 0.0]) - ball_pos)
-
-    def _nearest_dist_by_team(self, state: GameState) -> Dict[int, float]:
-        d = {BLUE_TEAM: 1e9, ORANGE_TEAM: 1e9}
-        bpos = state.ball.position
-        for car in state.cars.values():
-            pos = car.physics.position
-            dist = _safe_norm(bpos - pos)
-            team = car.team_num
-            if dist < d[team]:
-                d[team] = dist
-        return d
-
-    def _team_control_heuristic(self, team: int, state: GameState) -> bool:
-        # Recent touch?
-        if self.tick_counter - self.last_touch_tick_by_team[team] <= self.touch_window_ticks:
-            return True
-
-        # Otherwise check nearest car geometry/speeds
-        bpos = state.ball.position
-        bvel = state.ball.linear_velocity
-        best = None
-        best_dist = 1e9
-        for car in state.cars.values():
-            if car.team_num != team:
-                continue
-            pos = car.physics.position
-            dist = _safe_norm(bpos - pos)
-            if dist < best_dist:
-                best = car
-                best_dist = dist
-
-        if best is None:
-            return False
-
-        if best_dist > self.possess_radius:
-            return False
-
-        # Facing and relative speed
-        dir_to_ball = _unit(bpos - best.physics.position)
-        facing = float(np.dot(best.physics.forward, dir_to_ball))  # -1..1
-        rel_speed = _safe_norm(state.ball.linear_velocity - best.physics.linear_velocity)
-
-        return (facing >= self.face_cos_min) and (rel_speed <= self.rel_speed_max)
-
-    # -------- API --------
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        self.tick_counter = 0
+        self.tick = 0
         self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
-        self.last_touch_tick_by_team = {BLUE_TEAM: -10**9, ORANGE_TEAM: -10**9}
-        self.prev_possession_team = None
-        self.contest_ticks_running = 0
+        self.last_touch_tick = {a: -10**9 for a in agents}
+        self.prev_possessor = None
+        self.contested_ticks = 0
 
-    def get_rewards(self, agents: List[AgentID], state: GameState, is_terminated: Dict[AgentID, bool],
-                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
-        self.tick_counter += 1
+    def _is_in_control(self, a: AgentID, state: GameState) -> bool:
+        car = state.cars[a]
+        bpos = np.array(state.ball.position, dtype=float)
+        cpos = np.array(car.physics.position, dtype=float)
+        dist = _safe_norm(bpos - cpos)
+        if dist > self.possess_radius:
+            return False
+
+        dir_to_ball = _unit(bpos - cpos)
+        facing = float(np.dot(np.array(car.physics.forward, dtype=float), dir_to_ball))
+        if facing < self.face_cos_min:
+            return False
+
+        rel_speed = _safe_norm(np.array(state.ball.linear_velocity, dtype=float) -
+                               np.array(car.physics.linear_velocity, dtype=float))
+        if rel_speed > self.rel_speed_max:
+            return False
+
+        if self.require_recent_touch_for_possession:
+            recent = (self.tick - self.last_touch_tick[a] <= self.touch_window_ticks)
+            return recent
+        return True
+
+    def _choose_possessor(self, agents: List[AgentID], state: GameState) -> Optional[AgentID]:
+        # exclusive control logic
+        controls = [a for a in agents if self._is_in_control(a, state)]
+        if len(controls) == 1:
+            return controls[0]
+        return None  # none or contested => no possessor
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        self.tick += 1
         rewards = {a: 0.0 for a in agents}
 
-        # Track last-touch per team this tick
+        # update last touch ticks
         for a in agents:
             touches = state.cars[a].ball_touches
             if touches > self.prev_touches[a]:
-                team = state.cars[a].team_num
-                self.last_touch_tick_by_team[team] = self.tick_counter
+                self.last_touch_tick[a] = self.tick
             self.prev_touches[a] = touches
 
-        # Determine possession for each team
-        blue_ctrl = self._team_control_heuristic(BLUE_TEAM, state)
-        orange_ctrl = self._team_control_heuristic(ORANGE_TEAM, state)
+        # detect contested control (both meet geometric control ignoring touch requirement)
+        # this is only for stalemate penalty
+        def geom_control(a: AgentID) -> bool:
+            car = state.cars[a]
+            bpos = np.array(state.ball.position, dtype=float)
+            cpos = np.array(car.physics.position, dtype=float)
+            dist = _safe_norm(bpos - cpos)
+            if dist > self.possess_radius:
+                return False
+            dir_to_ball = _unit(bpos - cpos)
+            facing = float(np.dot(np.array(car.physics.forward, dtype=float), dir_to_ball))
+            rel_speed = _safe_norm(np.array(state.ball.linear_velocity, dtype=float) -
+                                   np.array(car.physics.linear_velocity, dtype=float))
+            return (facing >= self.face_cos_min) and (rel_speed <= self.rel_speed_max)
 
-        # Decide team in possession (None if neither; "contested" if both)
-        contested = blue_ctrl and orange_ctrl
-        if contested:
-            possession_team = None
-        elif blue_ctrl:
-            possession_team = BLUE_TEAM
-        elif orange_ctrl:
-            possession_team = ORANGE_TEAM
-        else:
-            possession_team = None
+        geom_controls = [a for a in agents if geom_control(a)]
+        contested_geom = (len(geom_controls) == 2)
 
-        # CAPTURE event: opponent -> own team
-        # if possession_team is not None and self.prev_possession_team is not None \
-        #    and possession_team != self.prev_possession_team:
-        #     # Quality terms: goal-directed ball velocity and distance margin
-        #     # Use the *current* ball direction to the new possessor's opponent goal.
-        #     # Pick any car of the new team to compute goal direction (direction is team-dependent only).
-        #     sample_car = next(c for c in state.cars.values() if c.team_num == possession_team)
-        #     goal_dir = self._dir_to_opponent_goal(sample_car, state.ball.position)
-        #     v_goal = max(0.0, float(np.dot(state.ball.linear_velocity, goal_dir)) / BALL_MAX_SPEED)
+        possessor = self._choose_possessor(agents, state)
 
-        #     d = self._nearest_dist_by_team(state)
-        #     own_d = d[possession_team]
-        #     opp_d = d[BLUE_TEAM if possession_team == ORANGE_TEAM else ORANGE_TEAM]
-        #     margin = max(0.0, (opp_d - own_d) / max(self.possess_radius, 1.0))  # 0..~1
+        # capture / giveaway
+        if possessor is not None and self.prev_possessor is not None and possessor != self.prev_possessor:
+            rewards[possessor] += self.capture_reward
+            rewards[self.prev_possessor] -= self.giveaway_penalty
+        elif possessor is not None and self.prev_possessor is None:
+            rewards[possessor] += 0.5 * self.capture_reward  # mild first claim
 
-        #     capture_value = self.capture_base + self.capture_k_goal * v_goal + self.capture_k_margin * margin
+        # retain
+        if possessor is not None:
+            rewards[possessor] += self.retain_per_tick
+            other = [a for a in agents if a != possessor][0]
+            rewards[other] -= 0.6 * self.retain_per_tick
 
-        #     for a in agents:
-        #         team = state.cars[a].team_num
-        #         if team == possession_team:
-        #             rewards[a] += capture_value
-        #         else:
-        #             rewards[a] += 0.0  # no explicit punishment here; keep it shaping-positive
-
-        # RETAIN: small per-tick while uncontested possession
-        if possession_team is not None and not contested:
-            for a in agents:
-                if state.cars[a].team_num == possession_team:
-                    rewards[a] += self.retain_per_tick
-                else:
-                    rewards[a] -= self.retain_per_tick * 1.5
-
-        # CONTEST/STALemate: both teams 'in control' and ball speed low for a while
-        ball_speed = _safe_norm(state.ball.linear_velocity)
-        if contested and ball_speed <= self.loose_ball_speed:
-            self.contest_ticks_running += 1
-            if self.contest_ticks_running >= self.contest_ticks_needed:
+        # anti-cradle stalemate
+        ball_speed = _safe_norm(np.array(state.ball.linear_velocity, dtype=float))
+        if contested_geom and ball_speed <= self.loose_ball_speed:
+            self.contested_ticks += 1
+            if self.contested_ticks >= self.contested_ticks_needed:
                 for a in agents:
-                    rewards[a] -= self.contest_penalty_per_tick
+                    rewards[a] -= self.contested_penalty_per_tick
         else:
-            self.contest_ticks_running = 0
+            self.contested_ticks = 0
 
-        self.prev_possession_team = possession_team
-        # Optional debug info
-        shared_info["possession_team"] = possession_team
-        shared_info["contested"] = contested
+        self.prev_possessor = possessor
+        shared_info["possessor"] = possessor
+        shared_info["contested_geom"] = contested_geom
         return rewards
+    
 
 class OneVOneRecoverReward(RewardFunction[AgentID, GameState, float]):
     """
@@ -1163,314 +910,6 @@ class OneVOneRecoverReward(RewardFunction[AgentID, GameState, float]):
 
         return rewards
 
-class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
-    """
-    Rewards an agent for maintaining an air dribble:
-    - Agent is last to touch the ball
-    - Car and ball are in the air
-    - Ball is close to the car
-    - Ball is roughly above/in front of the car
-    - Relative velocity between car and ball is small
-    The reward is given continuously while control is maintained.
-    """
-
-    def __init__(
-        self,
-        carry_radius: float = 300.0,        # max distance car–ball to count as a carry
-        min_height: float = RAMP_HEIGHT,    # minimum ball height to consider it an air dribble
-        max_rel_speed: float = 800.0,       # relative speed at which control term goes to zero
-        proximity_weight: float = 1.0,
-        rel_speed_weight: float = 1.0,
-        height_weight: float = 0.5,
-        facing_weight: float = 0.5,
-        per_second_scale: float = 1.0,      # total reward per second for a "perfect" airdribble
-    ):
-        super().__init__()
-        self.carry_radius = carry_radius
-        self.min_height = min_height
-        self.max_rel_speed = max_rel_speed
-        self.proximity_weight = proximity_weight
-        self.rel_speed_weight = rel_speed_weight
-        self.height_weight = height_weight
-        self.facing_weight = facing_weight
-        # Convert to per tick
-        self.per_tick_scale = per_second_scale / TICKS_PER_SECOND
-
-        self.last_touch_agent: Optional[AgentID] = None
-
-    def reset(
-        self,
-        agents: List[AgentID],
-        initial_state: GameState,
-        shared_info: Dict[str, Any],
-    ) -> None:
-        self.last_touch_agent = None
-
-    def get_rewards(
-        self,
-        agents: List[AgentID],
-        state: GameState,
-        is_terminated: Dict[AgentID, bool],
-        is_truncated: Dict[AgentID, bool],
-        shared_info: Dict[str, Any],
-    ) -> Dict[AgentID, float]:
-        rewards = {agent: 0.0 for agent in agents}
-
-        ball = state.ball
-
-        # Update last_touch_agent
-        touching_agents = [a for a in agents if state.cars[a].ball_touches > 0]
-        if len(touching_agents) == 1:
-            self.last_touch_agent = touching_agents[0]
-        elif len(touching_agents) > 1:
-            # If multiple touch, choose the closest one
-            self.last_touch_agent = min(
-                touching_agents,
-                key=lambda a: np.linalg.norm(
-                    state.cars[a].physics.position - ball.position
-                ),
-            )
-
-        if self.last_touch_agent is None:
-            return rewards
-
-        agent = self.last_touch_agent
-        car = state.cars[agent]
-        car_phys = car.physics
-
-        # Preconditions for an air dribble
-        if car.on_ground:
-            return rewards
-        if ball.position[2] < self.min_height:
-            return rewards
-
-        # Distance / proximity term
-        diff = ball.position - car_phys.position
-        dist = np.linalg.norm(diff)
-        if dist > self.carry_radius:
-            return rewards
-
-        proximity_term = 1.0 - (dist / self.carry_radius)  # in [0, 1]
-
-        # Relative speed term (how similar their velocities are)
-        rel_speed = np.linalg.norm(ball.linear_velocity - car_phys.linear_velocity)
-        rel_speed_term = max(0.0, 1.0 - rel_speed / self.max_rel_speed)
-
-        # Height term (higher = better, above min_height)
-        height_term = (ball.position[2] - self.min_height) / (
-            CEILING_Z - self.min_height
-        )
-        height_term = float(np.clip(height_term, 0.0, 1.0))
-
-        # Facing term: car forward vs ball direction
-        dir_to_ball = diff / (dist + 1e-6)
-        facing_term = float(max(0.0, np.dot(car_phys.forward, dir_to_ball)))
-
-        # Combine terms
-        score = (
-            self.proximity_weight * proximity_term
-            + self.rel_speed_weight * rel_speed_term
-            + self.height_weight * height_term
-            + self.facing_weight * facing_term
-        )
-
-        # Normalize by sum of weights so max ≈ per_tick_scale
-        total_weight = (
-            self.proximity_weight
-            + self.rel_speed_weight
-            + self.height_weight
-            + self.facing_weight
-        )
-        if total_weight > 0:
-            score /= total_weight
-
-        rewards[agent] = score * self.per_tick_scale
-
-        # Optionally expose some debug info
-        shared_info["airdribble_info"] = {
-            "last_touch_agent": self.last_touch_agent,
-            "proximity_term": proximity_term,
-            "rel_speed_term": rel_speed_term,
-            "height_term": height_term,
-            "facing_term": facing_term,
-        }
-
-        return rewards
-
-
-class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
-    """
-    Rewards useful air-dribble sequences:
-      - Controlled aerial touches above min_air_z with small car↔ball relative speed
-      - Forward progress (toward opponent goal / along car forward)
-      - Carry distance between your aerial touches
-      - Chain bonus for 2+ aerial touches
-    Gates attempts by boost; penalizes idle airtime; can ignore reset touches (to avoid double-paying with FlipResetReward).
-    """
-
-    def __init__(
-        self,
-        # Quality thresholds
-        min_air_z: float = 320.0,
-        rel_speed_max: float = 650.0,
-        # Sequencing
-        touch_chain_window_ms: int = 800,
-        # Rewards
-        touch_bonus: float = 0.18,
-        chain_bonus: float = 0.30,
-        forward_goal_weight: float = 2.0,
-        forward_car_weight: float = 1.0,
-        carry_dist_scale: float = 1.0 / (2 * BACK_WALL_Y),
-        # Boost gating
-        min_start_boost: float = 0.30,   # need ≥30 boost to start an attempt
-        min_sustain_boost: float = 0.10, # need ≥10 to keep it alive
-        # Anti-farming
-        idle_air_penalty_per_second: float = 0.8,
-        near_ball_dist: float = 700.0,
-        align_cos_min: float = 0.3,
-        # Flip reset coordination
-        avoid_reset_touches: bool = True,
-        reset_flag_key_fmt: str = "agent_{a}_had_reset",
-        # Optional: cap how many touches get paid per chain (1 = setup-only; 2–3 = short carry)
-        max_rewarded_touches: int = 3
-    ):
-        super().__init__()
-        self.min_air_z = min_air_z
-        self.rel_speed_max = rel_speed_max
-        self.touch_chain_ticks = max(1, int(round(touch_chain_window_ms * TICKS_PER_SECOND / 1000.0)))
-        self.touch_bonus = touch_bonus
-        self.chain_bonus = chain_bonus
-        self.forward_goal_weight = forward_goal_weight
-        self.forward_car_weight = forward_car_weight
-        self.carry_dist_scale = carry_dist_scale
-        self.min_start_boost = min_start_boost
-        self.min_sustain_boost = min_sustain_boost
-        self.idle_air_penalty_per_tick = idle_air_penalty_per_second / TICKS_PER_SECOND
-        self.near_ball_dist = near_ball_dist
-        self.align_cos_min = align_cos_min
-        self.avoid_reset_touches = avoid_reset_touches
-        self.reset_flag_key_fmt = reset_flag_key_fmt
-        self.max_rewarded_touches = max(1, int(max_rewarded_touches))
-
-        # state
-        self.tick = 0
-        self.prev_ball_pos = None
-        self.prev_touches: Dict[AgentID, int] = {}
-        self.chain_alive_until: Dict[AgentID, int] = {}
-        self.chain_touches: Dict[AgentID, int] = {}
-        self.chain_rewarded: Dict[AgentID, int] = {}
-        self.chain_carry_dist: Dict[AgentID, float] = {}
-        self.chain_started: Dict[AgentID, bool] = {}
-
-    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
-        self.tick = 0
-        self.prev_ball_pos = np.array(initial_state.ball.position, dtype=float)
-        self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
-        self.chain_alive_until = {a: -10**9 for a in agents}
-        self.chain_touches = {a: 0 for a in agents}
-        self.chain_rewarded = {a: 0 for a in agents}
-        self.chain_carry_dist = {a: 0.0 for a in agents}
-        self.chain_started = {a: False for a in agents}
-
-    def _goal_dir(self, car, ball_pos_np):
-        goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
-        return _unit(np.array([0.0, goal_y, 0.0], dtype=float) - ball_pos_np)
-
-    def _reset_key(self, a: AgentID) -> str:
-        return self.reset_flag_key_fmt.format(a=a)
-
-    def get_rewards(self, agents: List[AgentID], state: GameState,
-                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
-                    shared_info: Dict[AgentID, Any]) -> Dict[AgentID, float]:
-        self.tick += 1
-        rewards = {a: 0.0 for a in agents}
-
-        ball = state.ball
-        bpos = np.array(ball.position, dtype=float)
-        bvel = np.array(ball.linear_velocity, dtype=float)
-
-        # ball travel since last tick (for carry distance)
-        travel = _safe_norm(bpos - self.prev_ball_pos)
-        self.prev_ball_pos = bpos
-
-        for a in agents:
-            car = state.cars[a]
-            touches = car.ball_touches
-            me_pos = np.array(car.physics.position, dtype=float)
-            me_vel = np.array(car.physics.linear_velocity, dtype=float)
-
-            # tiny penalty for useless airtime
-            if not car.on_ground:
-                dist_to_ball = _safe_norm(bpos - me_pos)
-                align = float(np.dot(car.physics.forward, _unit(bpos - me_pos)))
-                if (dist_to_ball > self.near_ball_dist) or (align < self.align_cos_min):
-                    rewards[a] -= self.idle_air_penalty_per_tick
-
-            chain_alive = (self.tick <= self.chain_alive_until[a])
-            if chain_alive and bpos[2] >= self.min_air_z and car.boost_amount >= self.min_sustain_boost:
-                self.chain_carry_dist[a] += travel
-            elif chain_alive and car.boost_amount < self.min_sustain_boost:
-                # ran out of fuel -> end chain
-                self.chain_alive_until[a] = -10**9
-
-            just_touched = (touches > self.prev_touches[a])
-
-            if just_touched and bpos[2] >= self.min_air_z:
-                # skip reset touches if coordinated with FlipResetReward
-                if self.avoid_reset_touches and shared_info.get(self._reset_key(a), False):
-                    self._after_touch(a)
-                    self.prev_touches[a] = touches
-                    continue
-
-                rel_speed = _safe_norm(bvel - me_vel)
-                if rel_speed <= self.rel_speed_max:
-                    # start chain requires enough boost
-                    if not chain_alive:
-                        if car.boost_amount >= self.min_start_boost:
-                            self.chain_started[a] = True
-                            self.chain_touches[a] = 0
-                            self.chain_rewarded[a] = 0
-                            self.chain_carry_dist[a] = 0.0
-                            self.chain_alive_until[a] = self.tick + self.touch_chain_ticks
-                        else:
-                            self._after_touch(a)
-                            self.prev_touches[a] = touches
-                            continue
-
-                    if self.chain_started[a]:
-                        self.chain_touches[a] += 1
-                        # forward progress
-                        goal_term = max(0.0, float(np.dot(bvel, self._goal_dir(car, bpos))) / BALL_MAX_SPEED)
-                        car_term = max(0.0, float(np.dot(bvel, _unit(car.physics.forward))) / BALL_MAX_SPEED)
-
-                        payout = self.touch_bonus \
-                                 + self.forward_goal_weight * goal_term \
-                                 + self.forward_car_weight * car_term \
-                                 + self.carry_dist_scale * self.chain_carry_dist[a]
-
-                        # chain bonus for 2+ touches
-                        if self.chain_touches[a] >= 2:
-                            payout += self.chain_bonus
-
-                        # cap number of paid touches per chain
-                        if self.chain_rewarded[a] < self.max_rewarded_touches:
-                            rewards[a] += max(0.0, payout)
-                            self.chain_rewarded[a] += 1
-
-                        # refresh window & reset carry accumulator
-                        self.chain_alive_until[a] = self.tick + self.touch_chain_ticks
-                        self.chain_carry_dist[a] = 0.0
-
-            self.prev_touches[a] = touches
-
-        return rewards
-
-    def _after_touch(self, a: AgentID):
-        # hook for optional chain management on ignored touches
-        pass
-
-
-
 class AirRollReward(RewardFunction[AgentID, GameState, float]):
     """
     Rewards *intentional air-roll* near the ball.
@@ -1569,5 +1008,159 @@ class EnergyReward(RewardFunction[AgentID, GameState, float]):
                 norm_energy = 0
             
             rewards[agent] = self.reward * norm_energy
+
+        return rewards
+
+
+class AngVelReward(RewardFunction[AgentID, GameState, float]):
+    def __init__(self, penalty: float = 0.005):
+        self.penalty = penalty
+
+    def reset(self, agents: List[AgentID], initial_state: StateType, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: StateType, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, RewardType]:
+        rewards = {}
+        for agent in agents:
+            ang_vel_norm = np.linalg.norm(state.cars[agent].physics.angular_velocity) / CAR_MAX_ANG_VEL
+            rewards[agent] = -self.penalty * ang_vel_norm
+        return rewards
+
+
+class GoalDistReward(RewardFunction[AgentID, GameState, float]):
+    def reset(self, agents: List[AgentID], initial_state: StateType, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: StateType, is_terminated: Dict[AgentID, bool],
+                    is_truncated: Dict[AgentID, bool], shared_info: Dict[str, Any]) -> Dict[AgentID, RewardType]:
+        rewards = {}
+        for agent in agents:
+            car = state.cars[agent]
+            ball_pos = car.physics.position if car.is_orange else state.inverted_ball.position  # wait, no
+            ball_pos = state.ball.position if not car.is_orange else state.inverted_ball.position
+            goal_y = BACK_NET_Y if car.is_orange else -BACK_NET_Y
+            dist = abs(ball_pos[1] - goal_y)
+            max_dist = BACK_NET_Y * 2
+            reward = (max_dist - dist) / max_dist
+            rewards[agent] = reward
+        return rewards
+    
+class AerialBoostTowardBallReward(RewardFunction[AgentID, GameState, float]):
+    """
+    Slight reward for using boost in the air while moving toward an airborne ball.
+
+    Reward triggers only if:
+      - car is airborne
+      - ball is above ball_z_min
+      - car's boost amount decreased this tick (i.e., actually boosting)
+      - velocity has positive component toward ball in 3D
+      - optionally within max_dist of ball
+
+    Reward scales with:
+      - alignment = cos(angle between car velocity and direction-to-ball)
+      - boost_used (per tick)
+      - optionally (1 - dist/max_dist)
+    """
+
+    def __init__(
+        self,
+        ball_z_min: float = 260.0,
+        max_dist: float = 2500.0,
+        min_speed: float = 300.0,          # require some movement to avoid jitter
+        align_cos_min: float = 0.2,        # only reward if at least somewhat toward ball
+        per_second_scale: float = 0.12,    # "slight" reward; you’ll weight in CombinedReward too
+        boost_scale: float = 1.0,          # scales how much boost usage matters
+        dist_scale: float = 0.6,           # scales distance weighting; 0 disables distance factor
+    ):
+        super().__init__()
+        self.ball_z_min = float(ball_z_min)
+        self.max_dist = float(max_dist)
+        self.min_speed = float(min_speed)
+        self.align_cos_min = float(align_cos_min)
+
+        self.per_tick = float(per_second_scale) / TICKS_PER_SECOND
+        self.boost_scale = float(boost_scale)
+        self.dist_scale = float(dist_scale)
+
+        self.prev_boost: Dict[AgentID, float] = {}
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev_boost = {}
+        for a in agents:
+            car = initial_state.cars[a]
+            self.prev_boost[a] = float(getattr(car, "boost_amount", 0.0))
+
+    def get_rewards(
+        self,
+        agents: List[AgentID],
+        state: GameState,
+        is_terminated: Dict[AgentID, bool],
+        is_truncated: Dict[AgentID, bool],
+        shared_info: Dict[str, Any],
+    ) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+
+        ball_pos = np.array(state.ball.position, dtype=float)
+        if float(ball_pos[2]) < self.ball_z_min:
+            # update prev boosts and exit
+            for a in agents:
+                rewards[a] = 0.0
+                self.prev_boost[a] = float(getattr(state.cars[a], "boost_amount", 0.0))
+            return rewards
+
+        for a in agents:
+            car = state.cars[a]
+            me_pos = np.array(car.physics.position, dtype=float)
+            me_vel = np.array(car.physics.linear_velocity, dtype=float)
+
+            # airborne check (support multiple RLGym variants)
+            wheel_contact = getattr(car, "has_wheel_contact", None)
+            if wheel_contact is None:
+                # fallback: treat as airborne if z is nontrivial
+                airborne = float(me_pos[2]) > 40.0
+            else:
+                airborne = (not bool(wheel_contact))
+
+            if not airborne:
+                self.prev_boost[a] = float(getattr(car, "boost_amount", 0.0))
+                continue
+
+            # detect boosting via boost consumption
+            boost_now = float(getattr(car, "boost_amount", 0.0))
+            boost_prev = float(self.prev_boost.get(a, boost_now))
+            boost_used = max(0.0, boost_prev - boost_now)  # per tick
+            self.prev_boost[a] = boost_now
+
+            if boost_used <= 1e-6:
+                continue
+
+            to_ball = ball_pos - me_pos
+            dist = _safe_norm(to_ball)
+            if dist > self.max_dist:
+                continue
+
+            speed = _safe_norm(me_vel)
+            if speed < self.min_speed:
+                continue
+
+            dir_to_ball = _unit(to_ball)
+            v_dir = me_vel / max(speed, 1e-6)
+
+            # alignment in [-1, 1]
+            align = float(np.dot(v_dir, dir_to_ball))
+            if align < self.align_cos_min:
+                continue
+
+            # distance factor in [0,1]
+            if self.dist_scale > 0:
+                dist_factor = max(0.0, 1.0 - dist / max(self.max_dist, 1.0))
+            else:
+                dist_factor = 1.0
+
+            # scale: slight reward, proportional to boost usage and how well you're aimed
+            # boost_used is in [0,1] if boost_amount is normalized; if yours is 0..100, normalize it.
+            r = self.per_tick * (align * self.boost_scale) * (1.0 + self.dist_scale * dist_factor) * boost_used
+            rewards[a] += r
 
         return rewards

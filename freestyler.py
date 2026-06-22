@@ -12,9 +12,11 @@ def build_rlgym_v2_env():
     from rlgym.rocket_league.state_mutators import MutatorSequence, FixedTeamSizeMutator, KickoffMutator
     from rlgym.rocket_league import common_values
     from rlgym_ppo.util import RLGymV2GymWrapper
-    from rewards.customRewardsGYM import OneVOneRecoverReward, GoalProbReward, EnergyReward, AirRollReward, AirDribbleSequenceReward, ControlledFlickUnderPressureReward, AirBoostReward ,BoostChangeReward, BoostKeepReward ,InAirReward, SpeedTowardBallReward, VelocityBallToGoalReward, DemoReward, FaceBallReward, GoalViewReward, FlickReward, FlipResetReward, PossessionReward, AerialDistanceReward
-    from rewards.customRewardsGYM import AirdribbleReward, BallTravelReward
     from rsv_renderer import RocketSimVisRenderer
+
+    from rewards.customRewardsGYM import OneVOneRecoverReward, VelocityBallToGoalReward, BallTravelReward, EnergyReward, GoalProbReward, DemoReward, PossessionReward, SpeedTowardBallReward, InAirReward, AirBoostReward, FaceBallReward, FlickReward, AerialDistanceReward, BoostChangeReward, BoostKeepReward, AngVelReward, GoalDistReward, AerialBoostTowardBallReward
+    from rewards.freestyleMechs import MustyFlickReward, PogoReward, WallDashReward, AirdribbleReward, FlipResetReward, AirDribbleSequenceReward, WallPopSetupReward
+
 
 
     spawn_opponents = True
@@ -33,29 +35,63 @@ def build_rlgym_v2_env():
     )
 
     reward_fn = CombinedReward(
-        (TouchReward(), 22),
-        (VelocityBallToGoalReward(), 18),
-        (BallTravelReward(), 35),
-        (EnergyReward(), 4),
-        (GoalProbReward(), 50),
-        (DemoReward(), 300),
-        (PossessionReward(), 50),
-        (SpeedTowardBallReward(), 10),
-        (InAirReward(), 0.4),
-        (AirBoostReward(), .2),
-        (FaceBallReward(), .4),
-        (FlickReward(), 65), #was 105
-        # (ControlledFlickUnderPressureReward(), 65),
-        (AerialDistanceReward(), 135),
-        # (AirDribbleSequenceReward(), 115),
-        (AirdribbleReward(), 135), #was 85
-        (AirRollReward(), .4),
+        (TouchReward(), 6),
+        (VelocityBallToGoalReward(), 3),
+        (BallTravelReward(), 10),
+        (EnergyReward(), 3),
+        (GoalProbReward(), 10),
+        (GoalDistReward(), 10),
+        (AerialBoostTowardBallReward(), 4),
+
+        (DemoReward(), 120),
+        (PossessionReward(), 55),
+        (SpeedTowardBallReward(), 1),
+
+        (InAirReward(), 0.0),
+        (AirBoostReward(), 0.0),
+        (FaceBallReward(), 1),
+
+        (FlickReward(), 10),
+
+        # aerials become "bonus tier" rather than the gameplan
+        (AerialDistanceReward(), 40),
+        (AirdribbleReward(
+            carry_radius=380.0,
+            min_height=210.0,
+            max_rel_speed=1200.0,
+            per_second_scale=9.0,
+            w_goal_align=0.0,
+        ), 45),
+        (AirDribbleSequenceReward(
+            min_air_z=320.0,
+            rel_speed_max=650.0,
+            chain_ms=900,
+            min_start_boost=0.25,
+            min_sustain_boost=0.08,
+            touch_bonus=0.20,
+            chain_bonus=0.35,
+            forward_goal_w=2.0,
+            forward_car_w=1.0
+        ), 30),
+
+        (FlipResetReward(), 140),
+
+        (MustyFlickReward(), 1),
+        (PogoReward(), 1),
+        (WallDashReward(), 1),
+
         (BoostKeepReward(), 5),
-        (BoostChangeReward(), 125),
-        (FlipResetReward(), 500),
-        (OneVOneRecoverReward(), 45), #changed this btw remember
-    (GoalReward(), 2400)
+        (BoostChangeReward(lose_weight=0.8), 20),
+
+        (OneVOneRecoverReward(), 65),
+
+        (AngVelReward(), 1),
+        (GoalReward(), 1100)
     )
+
+
+
+
 
     obs_builder = DefaultObs(zero_padding=None,
                            pos_coef=np.asarray([1 / common_values.SIDE_WALL_X, 
@@ -87,7 +123,7 @@ def build_rlgym_v2_env():
 
 if __name__ == "__main__":
     from rlgym_ppo import Learner
-    latest_checkpoint_dir = "data/checkpoints/V2/10.21B-meh/" + str(max(os.listdir("data/checkpoints/V2/10.21B-meh"), key=lambda d: int(d)))
+    latest_checkpoint_dir = "data/checkpoints/V3/17.9B/" + str(max(os.listdir("data/checkpoints/V3/17.9B"), key=lambda d: int(d)))
     # 32 processes
     n_proc = 32
 
@@ -114,6 +150,6 @@ if __name__ == "__main__":
                       save_every_ts=1_000_000,  # save every 1M steps
                       timestep_limit=10_000_000_000_000,  # Train for 10B steps
                       log_to_wandb=False, # Set this to True if you want to use Weights & Biases for logging.,
-                      render=False
+                      render=True
                       ) 
     learner.learn()

@@ -26,4 +26,9 @@ This exceeds the statistical significance threshold by a wide margin, providing 
 <video controls src="https://genewica.com/images/off_wall.mp4" title="Off_wall"></video>
 <video controls src="https://genewica.com/images/speedflip_flick.mp4" title="Speedflip_flick"></video>
 
+## EC2 instance (in the works)
+`ssh -i ~/.ssh/indococo.pem ubuntu@54.167.88.183`
+`claude --resume f32d1785-1247-4ed7-b147-94f6b080671f`
+
+
 

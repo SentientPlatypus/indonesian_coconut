@@ -9,3 +9,5 @@ wandb/
 wandb
 /data
 data/checkpoints
+wslvenv
+requirements-wsl.txt
