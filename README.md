@@ -10,18 +10,14 @@ The bot is trained using a specialized multi-component reward architecture desig
 
 To benchmark policy quality, Indonesian Coconut was evaluated against Element, an established S-tier bot in the RLBot competitive scene. Using a binomial scoring model to assess statistical significance:
 
-Each goal is treated as an independent Bernoulli trial.
-
-Total trials: n = 69.
-
-Under the null hypothesis of equal skill (p = 0.5), achieving ≥ 42–28 is required for p < 0.05.
+The RLGYM community requires a score of 42-28 or better to determine statistical significance (p < 0.05) where each goal is treated as an independent Bernoulli trial.
 
 Indonesian Coconut achieved a decisive result of: **47–3**
 
 This exceeds the statistical significance threshold by a wide margin, providing strong evidence that Indonesian Coconut’s learned policy is overwhelmingly stronger across the full distribution of 1v1 play. See match statistics [here](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b)
 ![alt text](score.png)
 
-### Clips: (Embed may not work, see highlights folder.)
+### Clips: (Embeds may not show, see highlights folder.)
 <video controls src="https://genewica.com/images/Flick_over.mp4" title="Flick_over"></video>
 <video controls src="https://genewica.com/images/off_wall.mp4" title="Off_wall"></video>
 <video controls src="https://genewica.com/images/speedflip_flick.mp4" title="Speedflip_flick"></video>
