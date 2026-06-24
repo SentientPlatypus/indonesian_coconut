@@ -1,6 +1,6 @@
 # Indonesian Coconut — A Reinforcement-Learning Rocket League Bot
 
-![alt text](cover.png)
+![alt text](assets/cover.png)
 
 Indonesian Coconut is a reinforcement-learning–driven Rocket League bot built using RLGym and a discrete lookup-table action space. Unlike continuous-control agents that rely on large action vectors and dense motor precision, Indonesian Coconut operates with a compact, interpretable discrete action representation while still achieving high-level mechanical behaviors such as controlled air-dribbles, flip resets, pressure-aware flicks, possession-safe dribbling, and adaptive defensive rotations.
 
@@ -15,16 +15,37 @@ The RLGYM community requires a score of 42-28 or better to determine statistical
 Indonesian Coconut achieved a decisive result of: **47–3**
 
 This exceeds the statistical significance threshold by a wide margin, providing strong evidence that Indonesian Coconut’s learned policy is overwhelmingly stronger across the full distribution of 1v1 play. See match statistics [here](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b)
-![alt text](score.png)
+![alt text](assets/score.png)
 
-### Clips: (Embeds may not show, see highlights folder.)
+### Clips: (Embeds may not show, see the `docs/highlights` folder.)
 <video controls src="https://genewica.com/images/Flick_over.mp4" title="Flick_over"></video>
 <video controls src="https://genewica.com/images/off_wall.mp4" title="Off_wall"></video>
 <video controls src="https://genewica.com/images/speedflip_flick.mp4" title="Speedflip_flick"></video>
+
+## Project layout
+
+```
+freestyler.py            Current training entry point (loads data/checkpoints/V3/17.9B)
+train_template.py        Clean starting point for a new run (fresh rewards, no checkpoint)
+rsv_renderer.py          RocketSimVis renderer (rlgym v2), used by the trainers
+rewards/                 Reward functions
+    customRewardsGYM.py    Core shaping rewards
+    freestyleMechs.py      Freestyle-mechanic rewards (flicks, pogo, wall dash, ...)
+rl_math/                 Geometry helpers (ball trajectory, goal solid-angle)
+collision_meshes/        RocketSim arena collision data (required at runtime)
+assets/                  README images
+docs/highlights/         Highlight clips
+tools/                   RLBot binaries (rlbotgui, RLBotServer, ...)
+archive/                 Older/unused scripts kept for reference
+data/                    Checkpoints & training data (gitignored; not in the repo)
+Rlgym-v2-to-rlbot-v5/    Submodule: deploy a trained policy as an RLBot v5 bot
+RocketSimVis/            Submodule: the visualizer
+```
 
 ## EC2 instance (in the works)
 `ssh -i ~/.ssh/indococo.pem ubuntu@54.167.88.183`
 `claude --resume f32d1785-1247-4ed7-b147-94f6b080671f`
 
-
+`tmux new -s indococo`
+`tmux attach -t indococo`
 

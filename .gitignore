@@ -1,13 +1,22 @@
-venv
-__pycache__
+# Python
+__pycache__/
 *.pyc
 
-data/
-data
-%APPDATA%
-wandb/
-wandb
-/data
-data/checkpoints
-wslvenv
+# Virtual environments
+venv/
+wslvenv/
+
+# Local-only environment pins
 requirements-wsl.txt
+
+# Training data & checkpoints (large; kept out of git)
+data/
+
+# Weights & Biases run logs
+wandb/
+
+# Secrets — never commit private keys
+*.pem
+
+# Stray Windows %APPDATA% dump (created by accident on WSL)
+%APPDATA%/
