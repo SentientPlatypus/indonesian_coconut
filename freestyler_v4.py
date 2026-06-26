@@ -37,6 +37,14 @@ CHECKPOINT_LOAD_FOLDER = "data/checkpoints/V3/17.9B"
 # V4 saves here, separate from V3 so nothing gets clobbered.
 CHECKPOINT_SAVE_FOLDER = "data/checkpoints/V4"
 
+# Curriculum: reset some episodes directly into air-dribble / flip-reset
+# situations so those rewards actually fire (see curriculum_mutators.py).
+# Set False to fall back to kickoff-only resets (the V3 distribution).
+USE_CURRICULUM = True
+CURRICULUM_KICKOFF_W = 0.50      # real-game play; keeps scoring/fundamentals sharp
+CURRICULUM_AIR_DRIBBLE_W = 0.30  # ball popped low-mid, car under/behind it
+CURRICULUM_FLIP_RESET_W = 0.20   # ball high, car below it airborne w/ boost (experimental)
+
 
 def build_rlgym_v2_env():
     import numpy as np
@@ -76,6 +84,7 @@ def build_rlgym_v2_env():
         WallPopSetupReward,
         FlipResetReward,
     )
+    from curriculum_mutators import CurriculumStateMutator
 
     # --- match settings (unchanged from V3 — 1v1 off kickoff) ---------------
     spawn_opponents = True
@@ -184,9 +193,20 @@ def build_rlgym_v2_env():
         boost_coef=1 / 100.0,
     )
 
+    if USE_CURRICULUM:
+        # Mix kickoffs with air-dribble / flip-reset spawns so the mechanic
+        # rewards actually fire often enough to learn from.
+        reset_mutator = CurriculumStateMutator(
+            kickoff_w=CURRICULUM_KICKOFF_W,
+            air_dribble_w=CURRICULUM_AIR_DRIBBLE_W,
+            flip_reset_w=CURRICULUM_FLIP_RESET_W,
+        )
+    else:
+        reset_mutator = KickoffMutator()
+
     state_mutator = MutatorSequence(
         FixedTeamSizeMutator(blue_size=blue_team_size, orange_size=orange_team_size),
-        KickoffMutator(),
+        reset_mutator,
     )
 
     rlgym_env = RLGym(
