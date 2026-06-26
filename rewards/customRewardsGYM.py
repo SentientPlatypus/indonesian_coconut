@@ -1037,13 +1037,14 @@ class GoalDistReward(RewardFunction[AgentID, GameState, float]):
         rewards = {}
         for agent in agents:
             car = state.cars[agent]
-            ball_pos = car.physics.position if car.is_orange else state.inverted_ball.position  # wait, no
-            ball_pos = state.ball.position if not car.is_orange else state.inverted_ball.position
-            goal_y = BACK_NET_Y if car.is_orange else -BACK_NET_Y
-            dist = abs(ball_pos[1] - goal_y)
+            # Reward the ball being close to the goal we ATTACK (real frame for both teams,
+            # matching VelocityBallToGoalReward): blue (team 0) attacks +BACK_NET_Y,
+            # orange attacks -BACK_NET_Y.
+            ball_y = state.ball.position[1]
+            goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+            dist = abs(ball_y - goal_y)
             max_dist = BACK_NET_Y * 2
-            reward = (max_dist - dist) / max_dist
-            rewards[agent] = reward
+            rewards[agent] = (max_dist - dist) / max_dist
         return rewards
     
 class AerialBoostTowardBallReward(RewardFunction[AgentID, GameState, float]):
