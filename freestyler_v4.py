@@ -71,7 +71,7 @@ if __name__ == "__main__":
     print(f"[V4] save_dir={save_dir}")
     print(f"[V4] ent_coef={cfg['ppo_ent_coef']} curriculum={cfg['curriculum']}")
 
-    n_proc = 32
+    n_proc = 8
     min_inference_size = max(1, int(round(n_proc * 0.9)))
 
     learner = Learner(
