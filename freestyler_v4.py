@@ -234,7 +234,7 @@ if __name__ == "__main__":
             str(max(os.listdir(CHECKPOINT_LOAD_FOLDER), key=lambda d: int(d))),
         )
 
-    n_proc = 32
+    n_proc = 8
     min_inference_size = max(1, int(round(n_proc * 0.9)))
 
     learner = Learner(
