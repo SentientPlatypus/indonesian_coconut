@@ -1,0 +1,139 @@
+"""
+Single source of truth for the V4 environment, driven by a config dict
+(see loop_config.py). Both the trainer (freestyler_v4.py) and the headless
+evaluator (eval_match.py) build their env from here so they can never drift.
+
+  build_env(cfg, for_training=True)  -> RLGymV2GymWrapper   (for rlgym_ppo Learner)
+  build_env(cfg, for_training=False) -> raw RLGym           (for eval; KICKOFF only)
+
+EVAL uses KickoffMutator regardless of cfg["curriculum"] — we measure real-match
+strength vs the opponent, not performance on the training curriculum.
+"""
+from typing import Any, Dict
+
+# Match settings (identical for train + eval so the policy behaves as trained).
+TEAM_SIZE = 1
+SPAWN_OPPONENTS = True
+ACTION_REPEAT = 8
+NO_TOUCH_TIMEOUT_S = 30
+GAME_TIMEOUT_S = 300
+
+
+def _obs_builder():
+    import numpy as np
+    from rlgym.rocket_league.obs_builders import DefaultObs
+    from rlgym.rocket_league import common_values
+    return DefaultObs(
+        zero_padding=None,
+        pos_coef=np.asarray([1 / common_values.SIDE_WALL_X,
+                             1 / common_values.BACK_NET_Y,
+                             1 / common_values.CEILING_Z]),
+        ang_coef=1 / np.pi,
+        lin_vel_coef=1 / common_values.CAR_MAX_SPEED,
+        ang_vel_coef=1 / common_values.CAR_MAX_ANG_VEL,
+        boost_coef=1 / 100.0,
+    )
+
+
+def _reward_fn(cfg: Dict[str, Any]):
+    from rlgym.rocket_league.reward_functions import CombinedReward, GoalReward, TouchReward
+    from rewards.customRewardsGYM import (
+        VelocityBallToGoalReward, BallTravelReward, EnergyReward, GoalProbReward,
+        GoalDistReward, AerialBoostTowardBallReward, DemoReward, PossessionReward,
+        SpeedTowardBallReward, InAirReward, FaceBallReward, FlickReward,
+        AerialDistanceReward, BoostChangeReward, BoostKeepReward, AngVelReward,
+        OneVOneRecoverReward,
+    )
+    from rewards.freestyleMechs import (
+        AirdribbleReward, AirDribbleSequenceReward, WallPopSetupReward, FlipResetReward,
+    )
+    w = cfg["reward_weights"]
+    return CombinedReward(
+        (GoalReward(), w["goal"]),
+        (GoalProbReward(), w["goal_prob"]),
+        (BallTravelReward(), w["ball_travel"]),
+        (VelocityBallToGoalReward(), w["vel_ball_to_goal"]),
+        (GoalDistReward(), w["goal_dist"]),
+        (SpeedTowardBallReward(), w["speed_to_ball"]),
+        (FaceBallReward(), w["face_ball"]),
+        (TouchReward(), w["touch"]),
+        (PossessionReward(), w["possession"]),
+        (EnergyReward(), w["energy"]),
+        (BoostKeepReward(), w["boost_keep"]),
+        (BoostChangeReward(lose_weight=0.8), w["boost_change"]),
+        (AerialBoostTowardBallReward(), w["aerial_boost"]),
+        (AerialDistanceReward(), w["aerial_distance"]),
+        (InAirReward(), w["in_air"]),
+        (AirdribbleReward(
+            carry_radius=380.0, min_height=210.0, max_rel_speed=1200.0,
+            per_second_scale=9.0, w_goal_align=cfg["airdribble_w_goal_align"],
+        ), w["airdribble"]),
+        (AirDribbleSequenceReward(
+            min_air_z=320.0, rel_speed_max=650.0, chain_ms=900,
+            min_start_boost=0.25, min_sustain_boost=0.08, touch_bonus=0.20,
+            chain_bonus=0.35, forward_goal_w=2.0, forward_car_w=1.0,
+        ), w["airdribble_seq"]),
+        (WallPopSetupReward(), w["wall_pop"]),
+        (FlickReward(), w["flick"]),
+        (FlipResetReward(), w["flip_reset"]),
+        (OneVOneRecoverReward(), w["recover"]),
+        (DemoReward(), w["demo"]),
+        (AngVelReward(), w["ang_vel"]),
+    )
+
+
+def _state_mutator(cfg: Dict[str, Any], for_training: bool):
+    from rlgym.rocket_league.state_mutators import (
+        MutatorSequence, FixedTeamSizeMutator, KickoffMutator,
+    )
+    blue = TEAM_SIZE
+    orange = TEAM_SIZE if SPAWN_OPPONENTS else 0
+    if for_training:
+        from curriculum_mutators import CurriculumStateMutator
+        c = cfg["curriculum"]
+        reset_mutator = CurriculumStateMutator(
+            kickoff_w=c["kickoff_w"], air_dribble_w=c["air_dribble_w"],
+            flip_reset_w=c["flip_reset_w"],
+        )
+    else:
+        reset_mutator = KickoffMutator()   # eval = standard kickoff games
+    return MutatorSequence(
+        FixedTeamSizeMutator(blue_size=blue, orange_size=orange), reset_mutator,
+    )
+
+
+def build_env(cfg: Dict[str, Any], for_training: bool = True):
+    from rlgym.api import RLGym
+    from rlgym.rocket_league.action_parsers import LookupTableAction, RepeatAction
+    from rlgym.rocket_league.done_conditions import (
+        GoalCondition, NoTouchTimeoutCondition, TimeoutCondition, AnyCondition,
+    )
+    from rlgym.rocket_league.sim import RocketSimEngine
+
+    action_parser = RepeatAction(LookupTableAction(), repeats=ACTION_REPEAT)
+    termination_condition = GoalCondition()
+    truncation_condition = AnyCondition(
+        NoTouchTimeoutCondition(timeout_seconds=NO_TOUCH_TIMEOUT_S),
+        TimeoutCondition(timeout_seconds=GAME_TIMEOUT_S),
+    )
+
+    renderer = None
+    if for_training:
+        from rsv_renderer import RocketSimVisRenderer
+        renderer = RocketSimVisRenderer()
+
+    rlgym_env = RLGym(
+        state_mutator=_state_mutator(cfg, for_training),
+        obs_builder=_obs_builder(),
+        action_parser=action_parser,
+        reward_fn=_reward_fn(cfg),
+        termination_cond=termination_condition,
+        truncation_cond=truncation_condition,
+        transition_engine=RocketSimEngine(),
+        renderer=renderer,
+    )
+
+    if for_training:
+        from rlgym_ppo.util import RLGymV2GymWrapper
+        return RLGymV2GymWrapper(rlgym_env)
+    return rlgym_env
