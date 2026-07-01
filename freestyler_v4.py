@@ -260,7 +260,7 @@ if __name__ == "__main__":
         standardize_obs=False,
         save_every_ts=1_000_000,
         timestep_limit=10_000_000_000_000,
-        log_to_wandb=False,            # set True to log to Weights & Biases
+        log_to_wandb=True,             # set True to log to Weights & Biases
         render=False,                  # EC2 training — no display. Set True locally to watch.
     )
     learner.learn()
