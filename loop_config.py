@@ -30,8 +30,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "speed_to_ball": 1.0, "face_ball": 1.0, "touch": 6.0, "possession": 55.0,
         # energy
         "energy": 3.0, "boost_keep": 5.0, "boost_change": 20.0,
-        # air
-        "aerial_boost": 4.0, "aerial_distance": 40.0, "in_air": 0.0,
+        # air  (aerial_boost ^ vs 4.0: observed failure mode was popping the
+        # ball then refusing to spend boost on the follow-up touch)
+        "aerial_boost": 8.0, "aerial_distance": 40.0, "in_air": 0.0,
         # mechanics
         "airdribble": 45.0, "airdribble_seq": 30.0, "wall_pop": 8.0,
         "flick": 10.0, "flip_reset": 140.0,
@@ -55,6 +56,10 @@ TUNABLES: List[Tuple[str, float, float, float]] = [
     ("reward_weights.flick",              4.0,  24.0,  4.0),
     ("reward_weights.goal_prob",          8.0,  20.0,  2.0),
     ("reward_weights.possession",        30.0,  75.0,  8.0),
+    # boost economics: the pursuit signal vs the hoarding penalty — the lever
+    # for "pops the ball but won't boost after it"
+    ("reward_weights.aerial_boost",       2.0,  20.0,  3.0),
+    ("reward_weights.boost_change",       8.0,  28.0,  4.0),
     ("airdribble_w_goal_align",           0.0,   0.6,  0.1),
     ("curriculum.wall_pop_w",             0.05,  0.35, 0.05),
     ("curriculum.air_dribble_w",          0.10,  0.45, 0.05),

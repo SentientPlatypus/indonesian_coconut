@@ -176,8 +176,16 @@ that is exactly what the 2B-timestep V4 run did.
 **Style stagnation:** if `style == 0` for 4 consecutive iterations, stop
 sampling knobs uniformly — pick from the mechanic set only
 (`reward_weights.airdribble`, `airdribble_seq`, `wall_pop`,
+`reward_weights.aerial_boost` UP, `reward_weights.boost_change` DOWN,
 `curriculum.wall_pop_w`, `curriculum.air_dribble_w`, `ppo_ent_coef` upward)
 and note it in `last_change`.
+
+**Known failure mode (the pre-loop 2B run):** the bot farmed wall pops —
+kick up wall, pop, hop — without boosting to the ball, because the pop paid
+per-touch with no completion requirement while three boost-economy rewards
+punished the aerial commit. The pop follow-bonus is now touch-gated, but if
+eval shows `cand_air_touch_steps` near 0 while training WallPop channels are
+hot, that pattern is back: push `aerial_boost` up / `boost_change` down first.
 
 **Guardrails (halt/escalate — don't silently continue):**
 - If `below_best_streak >= 2` **or** `best_score < best_ever_score - 0.08`:

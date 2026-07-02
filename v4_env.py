@@ -61,12 +61,21 @@ def _reward_fn(cfg: Dict[str, Any]):
         (EnergyReward(), w["energy"]),
         (BoostKeepReward(), w["boost_keep"]),
         (BoostChangeReward(lose_weight=0.8), w["boost_change"]),
-        (AerialBoostTowardBallReward(), w["aerial_boost"]),
+        # per_second_scale x8: this class still divides by TICKS_PER_SECOND
+        # (120) but is called at 15 Hz, so 0.96 restores the designed 0.12/sec.
+        # V3 trained with the diluted (~zero) value, so no critic shock — and
+        # this is THE signal that must offset the boost-spend penalties
+        # (BoostChange/BoostKeep/Energy) when committing to a popped ball.
+        (AerialBoostTowardBallReward(per_second_scale=0.96), w["aerial_boost"]),
         (AerialDistanceReward(), w["aerial_distance"]),
         (InAirReward(), w["in_air"]),
         (AirdribbleReward(
             carry_radius=380.0, min_height=210.0, max_rel_speed=1200.0,
-            per_second_scale=9.0, w_goal_align=cfg["airdribble_w_goal_align"],
+            # 4.5, not 9.0: the 9.0 was tuned against the 8x steps-vs-ticks
+            # dilution (now fixed). Undiluted 9.0 x weight 45 would pay up to
+            # ~400/sec — hovering under a pop would out-earn goals (1200) in
+            # 3s without ever touching. 4.5 lands ~4x the old effective rate.
+            per_second_scale=4.5, w_goal_align=cfg["airdribble_w_goal_align"],
         ), w["airdribble"]),
         (AirDribbleSequenceReward(
             min_air_z=320.0, rel_speed_max=650.0, chain_ms=900,

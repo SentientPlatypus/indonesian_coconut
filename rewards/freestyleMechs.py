@@ -38,9 +38,11 @@ class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
           (B) strong *infield* component (away from the wall)
       - optionally: not just a max-speed boom (encourages controllable pops)
 
-    Follow-through bonus (optional):
-      - within a short window after the pop, the same agent gets into a
-        good under-ball geometry (or gets an aerial touch).
+    Follow-through bonus:
+      - within a short window after the pop, the same agent gets an AERIAL
+        BALL TOUCH while in good under-ball geometry. Geometry alone used to
+        be enough, which let the bot farm pops + a hop without ever committing
+        boost to the ball — the observed V4 2B-timestep failure mode.
 
     Notes:
       - This is for 1v1; rewards only the popping agent.
@@ -67,8 +69,10 @@ class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
         clean_pop_bonus: float = 0.20,         # extra if not parallel-skimming & not booming
 
         # --- Follow-through window ---
-        follow_window_ms: int = 700,
-        follow_bonus: float = 0.35,
+        # 1200ms pop -> aerial touch. (The old 700ms was never actually in
+        # effect: the steps-vs-ticks bug ran it at 5.6s.)
+        follow_window_ms: int = 1200,
+        follow_bonus: float = 0.9,          # pays on COMPLETION (aerial touch), so worth more
         require_boost_for_follow: bool = True,
         min_follow_boost: float = 0.18,        # don't reward follow if clearly out of gas
 
@@ -154,14 +158,16 @@ class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
         ball_vel = np.array(state.ball.linear_velocity, dtype=float)
         ball_speed = float(np.linalg.norm(ball_vel))
 
-        # ----- Follow-through bonus (dense gate) -----
+        # ----- Follow-through bonus (completion-gated) -----
         for a in agents:
             if self.pop_active[a] and self.tick <= self.pop_until[a]:
                 car = state.cars[a]
                 if self.require_boost_for_follow and car.boost_amount < self.min_follow_boost:
                     continue
-                # reward positioning under the ball shortly after the pop
-                if not car.on_ground and self._follow_geometry_good(car, ball_pos):
+                # pay only for CONNECTING: airborne ball touch in good
+                # under-ball geometry shortly after the pop
+                if (not car.on_ground and car.ball_touches > 0
+                        and self._follow_geometry_good(car, ball_pos)):
                     rewards[a] += self.follow_bonus
                     self.pop_active[a] = False  # one-time bonus
             elif self.tick > self.pop_until[a]:
