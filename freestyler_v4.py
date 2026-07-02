@@ -15,7 +15,15 @@ Controlled by env vars (all optional):
                    simply by resuming from best again.
                    (default: latest V4 sub-checkpoint, else V3 17.9B)
   V4_SAVE_DIR    : where to save           (default: data/checkpoints/V4)
-  V4_WANDB       : "1" to log to Weights & Biases (default off)
+  V4_N_PROC      : RocketSim collector procs (default 60, sized for g6e.16xlarge
+                   = 64 vCPU; drop to ~48 if steps/sec plateaus)
+  V4_WANDB       : "0" to DISABLE Weights & Biases (default ON). Requires a
+                   one-time `wandb login` on the box, else the run errors out.
+  V4_WANDB_PROJECT : wandb project      (default "indococo-v4-loop")
+  V4_WANDB_GROUP   : wandb group; the loop sets one stable name per session so
+                     all iterations stack in one view (default: unset)
+  V4_WANDB_RUN     : wandb run name; the loop sets "iter_<N>" per phase so each
+                     eval-gated phase is its own line (default: wandb auto-name)
 
 The loop runs this in the background and stops it after a phase, then evaluates
 the latest saved checkpoint. Checkpoints carry optimizer state, so stop/resume
@@ -71,8 +79,10 @@ if __name__ == "__main__":
     print(f"[V4] save_dir={save_dir}")
     print(f"[V4] ent_coef={cfg['ppo_ent_coef']} curriculum={cfg['curriculum']}")
 
-    n_proc = 32
+    n_proc = int(os.environ.get("V4_N_PROC", "60"))   # 64-vCPU box; leave ~4 for the learner
     min_inference_size = max(1, int(round(n_proc * 0.9)))
+
+    log_wandb = os.environ.get("V4_WANDB", "1") != "0"   # ON by default now
 
     learner = Learner(
         build_rlgym_v2_env,
@@ -97,7 +107,14 @@ if __name__ == "__main__":
         standardize_obs=False,
         save_every_ts=1_000_000,
         timestep_limit=10_000_000_000_000,   # effectively unbounded; the loop stops it
-        log_to_wandb=os.environ.get("V4_WANDB") == "1",
+        log_to_wandb=log_wandb,
+        # load_wandb=False: each phase resumes from the BEST checkpoint but is a
+        # FRESH wandb run, so we don't reload/append the run id baked into an old
+        # checkpoint. Group + run name keep iterations comparable in one view.
+        load_wandb=False,
+        wandb_project_name=os.environ.get("V4_WANDB_PROJECT", "indococo-v4-loop"),
+        wandb_group_name=os.environ.get("V4_WANDB_GROUP"),
+        wandb_run_name=os.environ.get("V4_WANDB_RUN"),
         render=False,                        # EC2 training — no display
     )
     learner.learn()

@@ -108,8 +108,13 @@ Read `state.json` first; recover whatever phase you're in.
    V4_LOOP_CONFIG=data/loop_state/current_config.json \
    V4_RESUME_DIR=<best_ckpt or unset> \
    V4_SAVE_DIR=data/checkpoints/V4 \
+   V4_WANDB_GROUP=<session tag, e.g. loop_2026-07-02> \
+   V4_WANDB_RUN=iter_<iter> \
    python freestyler_v4.py > data/loop_state/train_<iter>.log 2>&1
    ```
+   (`n_proc` defaults to 60 for the 64-vCPU g6e.16xlarge; wandb is ON by
+   default — the group tag stays fixed for the whole loop session so every
+   iteration stacks in one wandb view. Set `V4_WANDB=0` to disable.)
 4. Set `phase_running=true`, `phase_started_at=$(date +%s)`, persist state.
 5. `ScheduleWakeup` ~3600s (re-check; phase target is longer than one wake).
 
@@ -205,6 +210,9 @@ hot, that pattern is back: push `aerial_boost` up / `boost_change` down first.
 - `checkpoints_to_test/STATUS.md` — committed summary; on your local machine
   `git pull` and test `checkpoints_to_test/PPO_POLICY_V4_BEST.pt` in RLBot.
 - `train_<iter>.log` — per-phase training output (reward channels).
-- Optional in-training wandb: launch the phase with `V4_WANDB=1`.
+- **wandb (ON by default):** run `wandb login` ONCE on the box before the
+  first phase (a headless run with no login errors out). Each phase is its own
+  run `iter_<N>` under group `V4_WANDB_GROUP`; compare reward/PPO curves across
+  iterations there. Set `V4_WANDB=0` on a launch to disable.
 - **Stop:** end the `/loop` (don't schedule the next wakeup), or in tmux Ctrl-C.
   The best policy is always `state.best_ever_ckpt`.
