@@ -15,8 +15,9 @@ Controlled by env vars (all optional):
                    simply by resuming from best again.
                    (default: latest V4 sub-checkpoint, else V3 17.9B)
   V4_SAVE_DIR    : where to save           (default: data/checkpoints/V4)
-  V4_N_PROC      : RocketSim collector procs (default 60, sized for g6e.16xlarge
-                   = 64 vCPU; drop to ~48 if steps/sec plateaus)
+  V4_N_PROC      : RocketSim collector procs (default 40, sized for g6e.12xlarge
+                   = 48 vCPU; scales with CPUs, not GPUs — raise toward 44 if
+                   steps/sec is still climbing, drop if it plateaus)
   V4_WANDB       : "0" to DISABLE Weights & Biases (default ON). Requires a
                    one-time `wandb login` on the box, else the run errors out.
   V4_WANDB_PROJECT : wandb project      (default "indococo-v4-loop")
@@ -79,7 +80,7 @@ if __name__ == "__main__":
     print(f"[V4] save_dir={save_dir}")
     print(f"[V4] ent_coef={cfg['ppo_ent_coef']} curriculum={cfg['curriculum']}")
 
-    n_proc = int(os.environ.get("V4_N_PROC", "60"))   # 64-vCPU box; leave ~4 for the learner
+    n_proc = int(os.environ.get("V4_N_PROC", "40"))   # 48-vCPU g6e.12xlarge; leaves ~8 for the learner + GPU feed
     min_inference_size = max(1, int(round(n_proc * 0.9)))
 
     log_wandb = os.environ.get("V4_WANDB", "1") != "0"   # ON by default now
