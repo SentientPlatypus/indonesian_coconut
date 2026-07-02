@@ -112,7 +112,7 @@ Read `state.json` first; recover whatever phase you're in.
    V4_WANDB_RUN=iter_<iter> \
    python freestyler_v4.py > data/loop_state/train_<iter>.log 2>&1
    ```
-   (`n_proc` defaults to 40 for the 48-vCPU g6e.12xlarge; wandb is ON by
+   (`n_proc` defaults to 28 for the 32-vCPU g6.8xlarge; wandb is ON by
    default — the group tag stays fixed for the whole loop session so every
    iteration stacks in one wandb view. Set `V4_WANDB=0` to disable.)
 4. Set `phase_running=true`, `phase_started_at=$(date +%s)`, persist state.
