@@ -11,6 +11,10 @@ WHY THIS EXISTS:
 
 THE MIX (curriculum):
   - kickoff   : real-game play, keeps scoring / fundamentals sharp (don't forget!)
+  - wall_pop  : ball rolling toward a side wall, car chasing it grounded — the
+                ENTRY to an air dribble from a state the bot reaches in real
+                games (drive up wall -> pop -> get under). Without this bridge
+                the mid-air setups never transfer to kickoff play.
   - air_dribble: ball popped low-to-mid, drifting goalward, car under/behind it
   - flip_reset : ball high, car spawned below it airborne with boost, no flip
 
@@ -56,12 +60,14 @@ class CurriculumStateMutator(StateMutator[GameState]):
     Weights are normalized, so they don't have to sum to 1.
     """
 
-    def __init__(self, kickoff_w: float = 0.50, air_dribble_w: float = 0.30, flip_reset_w: float = 0.20):
-        total = kickoff_w + air_dribble_w + flip_reset_w
+    def __init__(self, kickoff_w: float = 0.50, air_dribble_w: float = 0.30,
+                 flip_reset_w: float = 0.20, wall_pop_w: float = 0.0):
+        total = kickoff_w + air_dribble_w + flip_reset_w + wall_pop_w
         assert total > 0, "curriculum weights must sum to > 0"
         self.kickoff_w = kickoff_w / total
         self.air_dribble_w = air_dribble_w / total
         self.flip_reset_w = flip_reset_w / total
+        self.wall_pop_w = wall_pop_w / total
         self._kickoff = KickoffMutator()
 
     # -- helpers --------------------------------------------------------------
@@ -130,6 +136,48 @@ class CurriculumStateMutator(StateMutator[GameState]):
         for d in defenders:
             self._park_defender(d)
 
+    def _wall_pop_setup(self, state: GameState) -> None:
+        """The air-dribble ENTRY: ball rolling toward a side wall, attacker
+        chasing it grounded with boost. Unlike the mid-air setups, this is a
+        state the bot reaches constantly in kickoff play, so the learned
+        behavior (carry up wall -> pop infield -> get under) transfers."""
+        attacker, defenders = self._split_cars(state)
+        attack = self._attack_dir(attacker.team_num)
+
+        # Ball: on the ground in the attacking half-ish, rolling toward a side wall.
+        wall_sign = random.choice([-1.0, 1.0])
+        bx = wall_sign * random.uniform(1800, 3100)          # partway to the wall
+        by = attack * random.uniform(-800, 2600)             # mostly attacking half
+        state.ball.position = _f32(bx, by, 93.15)
+        state.ball.linear_velocity = _f32(
+            wall_sign * random.uniform(700, 1400),           # toward the wall
+            attack * random.uniform(100, 700),               # drifting downfield
+            0.0,
+        )
+        state.ball.angular_velocity = _f32(0, 0, 0)
+
+        # Car: grounded behind the ball, chasing it with speed + boost.
+        chase_dir = _f32(wall_sign * random.uniform(0.55, 0.9),
+                         attack * random.uniform(0.1, 0.5), 0.0)
+        chase_dir = chase_dir / np.linalg.norm(chase_dir)
+        back = random.uniform(700, 1400)
+        attacker.physics.position = _f32(
+            float(np.clip(bx - chase_dir[0] * back, -3900, 3900)),
+            float(np.clip(by - chase_dir[1] * back, -4900, 4900)),
+            17.0,
+        )
+        speed = random.uniform(900, 1700)
+        attacker.physics.linear_velocity = _f32(chase_dir[0] * speed, chase_dir[1] * speed, 0.0)
+        attacker.physics.angular_velocity = _f32(0, 0, 0)
+        # euler order is (pitch, yaw, roll); yaw 0 faces +X, pi/2 faces +Y
+        yaw = float(np.arctan2(chase_dir[1], chase_dir[0]))
+        attacker.physics.euler_angles = _f32(0.0, yaw, 0.0)
+        attacker.boost_amount = random.uniform(65, 100)
+        attacker.on_ground = True
+
+        for d in defenders:
+            self._park_defender(d)
+
     def _flip_reset_setup(self, state: GameState) -> None:
         attacker, defenders = self._split_cars(state)
 
@@ -171,7 +219,9 @@ class CurriculumStateMutator(StateMutator[GameState]):
         r = random.random()
         if r < self.kickoff_w:
             self._kickoff.apply(state, shared_info)
-        elif r < self.kickoff_w + self.air_dribble_w:
+        elif r < self.kickoff_w + self.wall_pop_w:
+            self._wall_pop_setup(state)
+        elif r < self.kickoff_w + self.wall_pop_w + self.air_dribble_w:
             self._air_dribble_setup(state)
         else:
             self._flip_reset_setup(state)

@@ -40,6 +40,9 @@ Pass criteria:
 3. In `smoke_train.log`, the **FlipReset** reward channel is **not flat at 0**.
    If it is, RocketSim isn't granting resets from the curriculum spawn — lower
    `curriculum.flip_reset_w` and lean on air dribbles (note it to the user).
+4. **Airdribble** and **WallPopSetup** channels are alive too (the curriculum
+   now includes a `wall_pop` entry state, and the Airdribble dense rate was
+   fixed from an unintended 8x dilution — both should be clearly nonzero).
 
 Delete `data/checkpoints/V4_smoke` afterwards.
 
@@ -71,6 +74,7 @@ Create on iteration 0 if missing. Schema:
   "pre_phase_latest_ts": null,
   "best_ckpt": null,
   "best_score": null,
+  "best_style": null,
   "best_ever_ckpt": null,
   "best_ever_score": null,
   "below_best_streak": 0,
@@ -126,29 +130,54 @@ Read `state.json` first; recover whatever phase you're in.
         --opponent <state.opponent> --games <state.eval_games> \
         --out data/loop_state/eval_<iter>.json
       ```
-   d. Read `score` (= P(candidate scores | a goal)) and `margin` from the JSON.
+   d. Read `score` (= P(candidate scores | a goal)), `margin`, and the style
+      metrics (`style` = air dribbles/game, `cand_flip_resets`) from the JSON.
    e. **Decide** (see §4), update state + `best_config.json`, append a row to
       `data/loop_state/history.csv`
-      (`iteration,last_change,score,margin,decided,decision`).
-   f. `iteration += 1`, `phase_running=false`, persist, then go to step A
+      (`iteration,last_change,score,margin,decided,style,flip_resets,decision`).
+   f. **On PROMOTE** (and at least every 5 iterations): refresh the pull-and-
+      test folder and push it so the user can test locally —
+      ```bash
+      python tools/export_best.py
+      git add checkpoints_to_test && git commit -m "Export V4 best (iter <N>)" && git push
+      ```
+   g. `iteration += 1`, `phase_running=false`, persist, then go to step A
       (or `ScheduleWakeup` ~60s to start the next phase promptly).
 
 ---
 
 ## 4. Decision policy (noise-aware; ~60 trials ⇒ margin σ ≈ 8 goals)
 
-Let `s` = candidate score, `b` = `best_score`.
-- iteration 0: set `best_score=s`, `best_ckpt=candidate`, also `best_ever_*=` these.
+Let `s` = candidate score, `b` = `best_score`, `y` = candidate `style`
+(air dribbles/game), `by` = `best_style`.
+
+The objective is LEXICOGRAPHIC: strength first (never give up win-rate beyond
+noise), then style. Win-rate alone would silently optimize air dribbles away —
+that is exactly what the 2B-timestep V4 run did.
+
+- iteration 0: set `best_score=s`, `best_style=y`, `best_ckpt=candidate`, also
+  `best_ever_*=` these.
 - **Clear regression** (`s < b - 0.05`): **ROLLBACK** — leave `best_ckpt`/
   `best_config` unchanged (next phase resumes from best, discarding the
   candidate). `below_best_streak += 1`.
 - **Clear improvement** (`s >= b + 0.03`): **PROMOTE** — `best_ckpt=candidate`,
-  `best_score=s`, copy `current_config.json` → `best_config.json`.
+  `best_score=s`, `best_style=y`, copy `current_config.json` → `best_config.json`.
   `below_best_streak=0`.
-- **Neutral** (within noise): **keep the training, drop the knob** — set
-  `best_ckpt=candidate`, `best_score=s` (training progressed), but leave
-  `best_config.json` unchanged (revert the unproven knob). `below_best_streak=0`.
+- **Neutral score** (within noise) — style breaks the tie:
+  - `y >= by + 0.15` (clearly more air dribbles): treat as **PROMOTE** — the
+    knob bought style without costing strength. Update `best_*` incl. config.
+  - `y <= by - 0.15` (style clearly lost): **keep the training, drop the knob**
+    — `best_ckpt=candidate`, `best_score=s` but leave `best_config.json` AND
+    `best_style` unchanged.
+  - otherwise: **keep the training, drop the knob** (as above), and set
+    `best_style=max(by, y)`.
 - Update `best_ever_*` whenever `s` beats `best_ever_score`.
+
+**Style stagnation:** if `style == 0` for 4 consecutive iterations, stop
+sampling knobs uniformly — pick from the mechanic set only
+(`reward_weights.airdribble`, `airdribble_seq`, `wall_pop`,
+`curriculum.wall_pop_w`, `curriculum.air_dribble_w`, `ppo_ent_coef` upward)
+and note it in `last_change`.
 
 **Guardrails (halt/escalate — don't silently continue):**
 - If `below_best_streak >= 2` **or** `best_score < best_ever_score - 0.08`:
@@ -165,6 +194,8 @@ Let `s` = candidate score, `b` = `best_score`.
 
 ## 5. Monitoring / stopping
 - `data/loop_state/history.csv` — one row per iteration (plot to see the climb).
+- `checkpoints_to_test/STATUS.md` — committed summary; on your local machine
+  `git pull` and test `checkpoints_to_test/PPO_POLICY_V4_BEST.pt` in RLBot.
 - `train_<iter>.log` — per-phase training output (reward channels).
 - Optional in-training wandb: launch the phase with `V4_WANDB=1`.
 - **Stop:** end the `/loop` (don't schedule the next wakeup), or in tmux Ctrl-C.

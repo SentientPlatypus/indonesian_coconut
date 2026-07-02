@@ -39,7 +39,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "recover": 45.0, "demo": 50.0, "ang_vel": 1.0,
     },
     "airdribble_w_goal_align": 0.25,
-    "curriculum": {"kickoff_w": 0.50, "air_dribble_w": 0.30, "flip_reset_w": 0.20},
+    "curriculum": {"kickoff_w": 0.40, "wall_pop_w": 0.20, "air_dribble_w": 0.25,
+                   "flip_reset_w": 0.15},
     "ppo_ent_coef": 0.01,
 }
 
@@ -55,7 +56,8 @@ TUNABLES: List[Tuple[str, float, float, float]] = [
     ("reward_weights.goal_prob",          8.0,  20.0,  2.0),
     ("reward_weights.possession",        30.0,  75.0,  8.0),
     ("airdribble_w_goal_align",           0.0,   0.6,  0.1),
-    ("curriculum.air_dribble_w",          0.15,  0.45, 0.05),
+    ("curriculum.wall_pop_w",             0.05,  0.35, 0.05),
+    ("curriculum.air_dribble_w",          0.10,  0.45, 0.05),
     ("curriculum.flip_reset_w",           0.05,  0.35, 0.05),
     ("ppo_ent_coef",                      0.008, 0.02, 0.002),
 ]
@@ -82,21 +84,25 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 def normalize_curriculum(cfg: Dict[str, Any]) -> None:
-    """Keep curriculum weights >= 0 and re-derive kickoff_w so the three sum to 1.
+    """Keep curriculum weights >= 0 and re-derive kickoff_w so they sum to 1.
 
-    The hill-climb only ever moves air_dribble_w / flip_reset_w; kickoff_w is
-    whatever is left (floored at 0.20 so we never starve real-game play).
+    The hill-climb only ever moves wall_pop_w / air_dribble_w / flip_reset_w;
+    kickoff_w is whatever is left (floored at 0.20 so we never starve
+    real-game play).
     """
     c = cfg["curriculum"]
+    wp = _clamp(float(c.get("wall_pop_w", 0.0)), 0.0, 0.70)
     ad = _clamp(float(c.get("air_dribble_w", 0.30)), 0.0, 0.70)
     fr = _clamp(float(c.get("flip_reset_w", 0.20)), 0.0, 0.70)
-    if ad + fr > 0.80:                       # leave >= 0.20 for kickoffs
-        scale = 0.80 / (ad + fr)
+    if wp + ad + fr > 0.80:                  # leave >= 0.20 for kickoffs
+        scale = 0.80 / (wp + ad + fr)
+        wp *= scale
         ad *= scale
         fr *= scale
+    c["wall_pop_w"] = round(wp, 4)
     c["air_dribble_w"] = round(ad, 4)
     c["flip_reset_w"] = round(fr, 4)
-    c["kickoff_w"] = round(1.0 - ad - fr, 4)
+    c["kickoff_w"] = round(1.0 - wp - ad - fr, 4)
 
 
 def propose(best_cfg: Dict[str, Any], rng) -> Tuple[Dict[str, Any], str]:

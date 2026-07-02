@@ -13,7 +13,14 @@ Usage:
 
 Writes a JSON result (also printed) the /loop reads to decide promote/rollback:
   {"candidate_goals": 38, "opponent_goals": 22, "truncations": 4,
-   "games": 60, "decided": 60, "score": 0.633, "margin": 16, ...}
+   "games": 60, "decided": 60, "score": 0.633, "margin": 16,
+   "cand_air_dribbles": 5, "cand_flip_resets": 1, "style": 0.083, ...}
+
+STYLE METRICS (candidate only, per real kickoff games — the thing the user
+actually watches): an "air dribble" = >=3 airborne ball touches, each within
+1.5s of the last, spanning >=0.75s, with the ball above 300uu. A "flip reset" =
+has_flip regained while airborne. Win-rate alone would let the hill-climb
+optimize the mechanics away; the loop must see them to keep them.
 
 NOTE (unverified on WSL): the opponent .pt must use the SAME observation as
 training (DefaultObs). The loader asserts the opponent's input size matches the
@@ -94,6 +101,7 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
     env = build_env(cfg, for_training=False)
 
     cand_goals = opp_goals = truncs = 0
+    air_touch_steps = air_dribbles = flip_resets = 0
     for g in range(games):
         obs = env.reset()
         state = env.state
@@ -109,6 +117,12 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
             f"opponent input {opp_in} != obs {obs_len} -- opponent likely uses a "
             f"different observation than DefaultObs; pick a compatible .pt")
 
+        # --- style tracking (candidate only) -----------------------------
+        chain = 0
+        chain_start_tick = 0
+        last_air_touch_tick = -10**9
+        prev_has_flip = state.cars[cand_agent].has_flip
+
         terminated = False
         while True:
             actions = {}
@@ -116,6 +130,27 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
                 pol = cand if a == cand_agent else opp
                 actions[a] = np.array([pol.act(obs[a], deterministic)], dtype=np.int64)
             obs, _, term, trunc = env.step(actions)
+
+            # --- style tracking ------------------------------------------
+            s = env.state
+            car = s.cars[cand_agent]
+            airborne = not car.on_ground
+            if airborne and car.has_flip and not prev_has_flip:
+                flip_resets += 1            # regained flip mid-air == reset
+            prev_has_flip = car.has_flip
+            if airborne and car.ball_touches > 0 and s.ball.position[2] > 300.0:
+                air_touch_steps += 1
+                if s.tick_count - last_air_touch_tick > 180:   # >1.5s gap: new chain
+                    chain = 0
+                    chain_start_tick = s.tick_count
+                chain += 1
+                last_air_touch_tick = s.tick_count
+                # >=3 chained air touches sustained >=0.75s == one air dribble
+                if chain == 3 and s.tick_count - chain_start_tick >= 90:
+                    air_dribbles += 1
+                elif chain == 3:            # too fast; keep waiting on this chain
+                    chain = 2
+
             if any(term.values()):
                 terminated = True
                 break
@@ -141,6 +176,11 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
         "opponent_goals": opp_goals,
         "margin": cand_goals - opp_goals,
         "score": (cand_goals / decided) if decided else 0.0,  # P(candidate scores | a goal)
+        # style: how often the mechanics we're training for actually happen
+        "cand_air_touch_steps": air_touch_steps,
+        "cand_air_dribbles": air_dribbles,
+        "cand_flip_resets": flip_resets,
+        "style": round(air_dribbles / games, 4),   # air dribbles per game
         "deterministic": deterministic,
     }
     if out:

@@ -17,6 +17,16 @@ def _unit(v):
 BACK_WALL_Y = 5120
 TICKS_PER_SECOND = 120
 
+# Reward functions are called once per env STEP, not per physics tick.
+# With RepeatAction(repeats=8) that is 120/8 = 15 calls per second. Rewards
+# that scale "per second" from a per-call counter must divide by THIS, not by
+# TICKS_PER_SECOND — using 120 silently diluted AirdribbleReward 8x (the
+# designed 9.0/sec dense carry signal actually paid 1.125/sec, one reason 2B
+# timesteps produced zero air dribbles in game). Rewards that difference
+# state.tick_count (physics ticks) are unaffected and still use TICKS_PER_SECOND.
+ACTION_REPEAT = 8
+STEPS_PER_SECOND = TICKS_PER_SECOND / ACTION_REPEAT  # 15.0
+
 class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
     """
     Rewards "good wall pops" that set up air-dribbles.
@@ -82,7 +92,8 @@ class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
         self.infield_scale = infield_scale
         self.clean_pop_bonus = clean_pop_bonus
 
-        self.follow_ticks = max(1, int(round(follow_window_ms * TICKS_PER_SECOND / 1000.0)))
+        # self.tick increments once per env step (15 Hz) -> window in STEPS
+        self.follow_ticks = max(1, int(round(follow_window_ms * STEPS_PER_SECOND / 1000.0)))
         self.follow_bonus = follow_bonus
         self.require_boost_for_follow = require_boost_for_follow
         self.min_follow_boost = min_follow_boost
@@ -336,7 +347,8 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         self.carry_radius = carry_radius
         self.min_height = min_height
         self.max_rel_speed = max_rel_speed
-        self.per_tick = per_second_scale / TICKS_PER_SECOND
+        # paid once per env step (15 Hz), so scale by steps — NOT physics ticks
+        self.per_tick = per_second_scale / STEPS_PER_SECOND
 
         self.roof_min_up = roof_min_up
         self.roof_max_up = roof_max_up
