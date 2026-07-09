@@ -103,14 +103,21 @@ Read `state.json` first; recover whatever phase you're in.
      Record `desc` in `state.last_change`.
 2. **Record** `pre_phase_latest_ts` = newest numbered dir in `data/checkpoints/V4`
    (or null). Set `V4_RESUME_DIR` = `best_ckpt` (omit if null).
-3. **Launch training in the background** (Bash `run_in_background: true`):
+3. **Launch training in the background** (Bash `run_in_background: true`).
+   MUST wrap in `script` to allocate a PTY: `rlgym_ppo`'s `Learner` builds a
+   `KBHit()` that calls `termios.tcgetattr(stdin)`. A backgrounded Bash job has
+   stdin=`/dev/null` (no TTY) → `termios.error: (25) Inappropriate ioctl` and the
+   learn loop dies after 0 new steps. `script -q -c '<cmd>' <log>` gives the child
+   a pseudo-terminal so KBHit succeeds. (The foreground smoke test never hits this
+   because it has a real terminal.)
    ```bash
-   V4_LOOP_CONFIG=data/loop_state/current_config.json \
-   V4_RESUME_DIR=<best_ckpt or unset> \
-   V4_SAVE_DIR=data/checkpoints/V4 \
-   V4_WANDB_GROUP=<session tag, e.g. loop_2026-07-02> \
-   V4_WANDB_RUN=iter_<iter> \
-   python freestyler_v4.py > data/loop_state/train_<iter>.log 2>&1
+   script -q -c 'env \
+     V4_LOOP_CONFIG=data/loop_state/current_config.json \
+     V4_RESUME_DIR=<best_ckpt or omit this line> \
+     V4_SAVE_DIR=data/checkpoints/V4 \
+     V4_WANDB_GROUP=<session tag, e.g. loop_2026-07-03> \
+     V4_WANDB_RUN=iter_<iter> \
+     python freestyler_v4.py' data/loop_state/train_<iter>.log
    ```
    (`n_proc` defaults to 28 for the 32-vCPU g6.8xlarge; wandb is ON by
    default — the group tag stays fixed for the whole loop session so every
@@ -140,6 +147,19 @@ Read `state.json` first; recover whatever phase you're in.
    e. **Decide** (see §4), update state + `best_config.json`, append a row to
       `data/loop_state/history.csv`
       (`iteration,last_change,score,margin,decided,style,flip_resets,decision`).
+   e2. **Protect the new best from rotation (CRITICAL).** The training save dir
+      keeps only the last 5 checkpoints, so `best_ckpt` gets DELETED once the
+      next phase trains ~5M steps past it — which silently breaks resume (the
+      loop then feeds a dead path to the loader and the phase dies with an empty
+      log). On any PROMOTE (or style-tie PROMOTE), snapshot the FULL candidate
+      dir to the rotation-safe `data/checkpoints/V4_best/` and point state at it:
+      ```bash
+      SNAP=data/checkpoints/V4_best/$(basename <candidate>)
+      mkdir -p "$SNAP" && cp <candidate>/* "$SNAP"/
+      # set state.best_ckpt (and best_ever_ckpt if best-ever) = "$SNAP"
+      ```
+      `_resolve_resume_dir` now hard-errors on a missing resume dir, so a
+      regression here fails loud instead of producing a zero-byte train log.
    f. **On PROMOTE** (and at least every 5 iterations): refresh the pull-and-
       test folder and push it so the user can test locally —
       ```bash

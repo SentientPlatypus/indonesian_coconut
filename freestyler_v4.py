@@ -35,6 +35,15 @@ documented in loop_config.py / curriculum_mutators.py / v4_env.py.
 """
 import os
 
+# Workaround: if the forkserver-based collector handshake deadlocks (collectors
+# stuck in recv waiting for init data), set RLGYM_FORCE_SPAWN=1 to make rlgym_ppo
+# fall back to the 'spawn' start method (it only picks forkserver when that method
+# is reported available). Fresh 'spawn' children don't inherit a wedged forkserver.
+if os.environ.get("RLGYM_FORCE_SPAWN") == "1":
+    import multiprocessing as _mp
+    _orig_methods = _mp.get_all_start_methods
+    _mp.get_all_start_methods = lambda: [m for m in _orig_methods() if m != "forkserver"]
+
 V3_FALLBACK = "data/checkpoints/V3/17.9B"   # first-ever start point (the 47-3 policy)
 DEFAULT_SAVE_DIR = "data/checkpoints/V4"
 
@@ -53,6 +62,16 @@ def _resolve_resume_dir(save_dir):
     """V4_RESUME_DIR if set, else latest V4 checkpoint, else the V3 fallback."""
     explicit = os.environ.get("V4_RESUME_DIR")
     if explicit:
+        # Fail loud: a missing resume dir must not be fed to the loader (it used
+        # to crash the phase with an empty log). The loop tracks best_ckpt, but
+        # checkpoint rotation can delete it out from under us — surface that here.
+        if not os.path.isdir(explicit):
+            raise FileNotFoundError(
+                f"V4_RESUME_DIR={explicit} does not exist. The tracked best "
+                f"checkpoint was likely rotated out of the save dir. Restore it "
+                f"(e.g. from data/checkpoints/V4_best/ or checkpoints_to_test/) "
+                f"before resuming the loop."
+            )
         return explicit
     latest_v4 = _latest_subcheckpoint(save_dir)
     if latest_v4:
