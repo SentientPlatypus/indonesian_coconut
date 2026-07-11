@@ -58,3 +58,12 @@ NOTE,best-recheck 9/60=0.15; pooled best 25/120=0.208; candidates pool 34/180=0.
 4,"[style-stagnation] reward_weights.airdribble_seq: 30.0 -> 38.0",0.1567,-206,300,0.0033,88,ROLLBACK
 5,"[style-stagnation] reward_weights.aerial_boost: 8.0 -> 11.0",0.16,-204,300,0.01,90,ROLLBACK+GUARDRAIL
 ```
+
+## Air-dribble capability (spawn-eval, tools/eval_airdribble_spawn.py)
+PPO_POLICY_V4_AIRDRIBBLE.pt = best air-dribble-capability policy after the
+carry-reward fix (softened dense AirdribbleReward: removed hard zero-gate that
+starved PPO's gradient on imperfect carries).
+- completed_frac ~0.065 (sustained air dribble from an ideal spawn) vs
+  frozen baseline 0.033 and pre-fix plateau ~0.01 — ~2x baseline, ~6x pre-fix.
+- Still strength-oriented weights cut; this policy is for testing the air-dribble
+  CARRY, not win-rate.
