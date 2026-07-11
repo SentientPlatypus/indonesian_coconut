@@ -18,9 +18,33 @@ This exceeds the statistical significance threshold by a wide margin, providing 
 ![alt text](assets/score.png)
 
 ### Clips: (Embeds may not show, see the `docs/highlights` folder.)
-<video controls src="https://genewica.com/images/Flick_over.mp4" title="Flick_over"></video>
-<video controls src="https://genewica.com/images/off_wall.mp4" title="Off_wall"></video>
-<video controls src="https://genewica.com/images/speedflip_flick.mp4" title="Speedflip_flick"></video>
+
+
+https://github.com/user-attachments/assets/a6fbd3f0-1ac5-4743-aaa9-623a436a91cb
+
+
+
+https://github.com/user-attachments/assets/5a0db27f-5fa8-43c9-a8f0-c499cd43ec8e
+
+
+
+
+https://github.com/user-attachments/assets/331c0da3-2ae0-4913-abcc-333f4cec973e
+
+
+
+
+https://github.com/user-attachments/assets/1408bd04-f5e8-4ea6-bcd0-2c9569e2b319
+
+
+
+https://github.com/user-attachments/assets/cb4de19f-d744-4262-949c-cc7a6b2d71c8
+
+
+
+https://github.com/user-attachments/assets/51c9a929-da8c-4328-8bf6-856f14cc8c4f
+
+
 
 ## Project layout
 
