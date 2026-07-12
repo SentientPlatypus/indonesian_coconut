@@ -63,7 +63,7 @@ NOTE,best-recheck 9/60=0.15; pooled best 25/120=0.208; candidates pool 34/180=0.
 PPO_POLICY_V4_AIRDRIBBLE.pt = best air-dribble-capability policy after the
 carry-reward fix (softened dense AirdribbleReward: removed hard zero-gate that
 starved PPO's gradient on imperfect carries).
-- completed_frac ~0.127 (300-ep) — climbing; ~4x frozen 0.033, ~13x pre-fix 0.01
+- completed_frac ~0.133 (300-ep) — best air-dribble policy; ~4x frozen 0.033, ~13x pre-fix
   frozen baseline 0.033 and pre-fix plateau ~0.01 — ~2x baseline, ~6x pre-fix.
 - Still strength-oriented weights cut; this policy is for testing the air-dribble
   CARRY, not win-rate.
