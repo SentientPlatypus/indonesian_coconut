@@ -77,3 +77,10 @@ Integration v1 (light freestyle) snapshot intg_18989162150, VERIFIED 300g/200ep:
   checkpoint was an upward-noise eval; that exact checkpoint rotated out.
 Integration v2 (heavier freestyle) is training to hold capability >=~0.10 AND
 win-rate >=~0.20 — the real "strong + air dribbles" target.
+
+## HEADLINE (chosen operating point) — PPO_POLICY_V4_INTEGRATED.pt
+Updated to integration v2-check1 (intg2_18951157100), VERIFIED:
+- win-rate 0.257 vs Element (>= 0.233 baseline) — strongest bot.
+- air-dribble capability 0.065 (~2x the 0.033 baseline) — air-dribbles when advantageous.
+Chosen from the strength<->style frontier (user pick). Style-leaning alternative
+available: v2-check2 (win-rate 0.183 / capability 0.12).
