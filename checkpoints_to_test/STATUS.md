@@ -67,3 +67,13 @@ starved PPO's gradient on imperfect carries).
   frozen baseline 0.033 and pre-fix plateau ~0.01 — ~2x baseline, ~6x pre-fix.
 - Still strength-oriented weights cut; this policy is for testing the air-dribble
   CARRY, not win-rate.
+
+## INTEGRATED policy (v1) — PPO_POLICY_V4_INTEGRATED.pt
+Integration v1 (light freestyle) snapshot intg_18989162150, VERIFIED 300g/200ep:
+- win-rate 0.213 vs Element (~= 0.233 baseline, within noise) — strong.
+- air-dribble capability 0.055 (spawn-eval) — only ~1.7x the 0.033 baseline;
+  the mechanic largely eroded under light freestyle (the 0.13 air-dribble policy
+  is PPO_POLICY_V4_AIRDRIBBLE.pt). NOTE: the "0.243/0.125" seen on a neighboring
+  checkpoint was an upward-noise eval; that exact checkpoint rotated out.
+Integration v2 (heavier freestyle) is training to hold capability >=~0.10 AND
+win-rate >=~0.20 — the real "strong + air dribbles" target.
