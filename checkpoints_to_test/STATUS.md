@@ -84,3 +84,12 @@ Updated to integration v2-check1 (intg2_18951157100), VERIFIED:
 - air-dribble capability 0.065 (~2x the 0.033 baseline) — air-dribbles when advantageous.
 Chosen from the strength<->style frontier (user pick). Style-leaning alternative
 available: v2-check2 (win-rate 0.183 / capability 0.12).
+
+## NEW HEADLINE (6-day run breakthrough) — PPO_POLICY_V4_INTEGRATED.pt
+After ~6 days / ~3.7B continuous steps at the frontier config, the policy broke
+PAST the apparent strength<->style frontier — improved on BOTH axes:
+- win-rate 0.297 vs Element (300g, 89-211) — best ever (> 0.233 baseline, > 0.257 prior headline)
+- air-dribble capability 0.63 (spawn-eval, 200ep) — ~10x prior headline, ~19x baseline
+- in-game: 15 air-dribbles / 362 air-touches per 300 games (vs ~1-3 / ~200 before)
+LESSON: the "firm frontier" was an artifact of undertrained 2-3h runs; it needed
+billions of steps. Run was still training/improving when snapshotted.
