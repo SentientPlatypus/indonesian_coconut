@@ -329,9 +329,10 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
 
         # roof / under-ball geometry
         roof_min_up: float = 50.0,
-        roof_max_up: float = 260.0,
-        roof_target_up: float = 140.0,   # NEW: "sweet spot" height above car
-        roof_target_halfwidth: float = 90.0,  # NEW: softness around target
+        roof_max_up: float = 340.0,      # widened (was 260): bigger reward basin so
+                                         # imperfect carries still earn a gradient
+        roof_target_up: float = 150.0,   # "sweet spot" height above car
+        roof_target_halfwidth: float = 140.0,  # widened (was 90): softer falloff
 
         lateral_max: float = 200.0,
         forward_min: float = -40.0,
@@ -348,7 +349,25 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         w_rel_speed: float = 1.0,
         w_under: float = 2.5,            # NEW: strong driver of "get under it"
         w_goal_align: float = 0,
+
+        # NEW: sustain-duration escalation — the per-step reward grows the LONGER
+        # a carry is held unbroken, so PPO is pushed from repeated brief touches
+        # (high engagement, capped completion) toward SUSTAINED dribbles.
+        sustain_ramp: float = 0.08,
+        sustain_cap: int = 15,
+
+        # NEW (user feedback): stop rewarding a passive hover that doesn't drive
+        # the ball to net, and stop rewarding no-boost aerial commits.
+        min_carry_boost: float = 0.10,       # below this, an aerial "carry" isn't real
+        low_boost_penalty: float = 0.012,    # small per-step penalty for no-boost commit
+        goal_progress_floor: float = 0.15,   # hover w/o goal-ward ball motion pays only this frac
     ):
+        self.sustain_ramp = sustain_ramp
+        self.sustain_cap = sustain_cap
+        self.sustain_streak = {}
+        self.min_carry_boost = min_carry_boost
+        self.low_boost_penalty = low_boost_penalty
+        self.goal_progress_floor = goal_progress_floor
         super().__init__()
         self.carry_radius = carry_radius
         self.min_height = min_height
@@ -379,6 +398,7 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
 
     def reset(self, agents, initial_state, shared_info):
         self.last_touch_agent = None
+        self.sustain_streak = {a: 0 for a in agents}
 
     def _goal_dir(self, car, ball_pos_np):
         goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
@@ -412,10 +432,12 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         a = self.last_touch_agent
         car = state.cars[a]
 
-        # basic gates
+        # basic gates (break the carry streak when the state is no longer a carry)
         if car.on_ground:
+            self.sustain_streak[a] = 0
             return rewards
         if ball.position[2] < self.min_height:
+            self.sustain_streak[a] = 0
             return rewards
 
         car_pos = np.array(car.physics.position, dtype=float)
@@ -426,6 +448,15 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         diff = bpos - car_pos
         dist = float(np.linalg.norm(diff))
         if dist > self.carry_radius:
+            self.sustain_streak[a] = 0
+            return rewards
+
+        # BOOST DISCIPLINE (user feedback): don't reward — mildly penalize —
+        # committing to an aerial carry with no boost to finish it. This kills
+        # the "goes for wall aerials with empty boost / risky no-boost catch".
+        if car.boost_amount < self.min_carry_boost:
+            self.sustain_streak[a] = 0
+            rewards[a] = -self.low_boost_penalty
             return rewards
 
         up = np.array(car.physics.up, dtype=float)
@@ -469,8 +500,12 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         under_term = (under_cos - self.under_cos_min) / (self.under_cos_soft - self.under_cos_min + 1e-6)
         under_term = float(np.clip(under_term, 0.0, 1.0))
 
-        if under_term < 0.25 or center_term < 0.25:
-            return rewards
+        # NOTE: previously a hard early-out here (`if under_term<0.25 or
+        # center_term<0.25: return 0`) zeroed reward for imperfect carries,
+        # leaving PPO no gradient to climb from mediocre attempts. Removed so
+        # partial carries earn smooth partial reward (the weighted `score` below
+        # still decays to ~0 for bad geometry). This is the air-dribble-capability
+        # fix: reward the CARRY continuously, not only when it's already perfect.
 
         # (F) Goal alignment (small)
         goal_dir = self._goal_dir(car, bpos)
@@ -493,7 +528,16 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         total_w = (self.w_roof + self.w_center + self.w_forward + self.w_rel_speed + self.w_under + self.w_goal_align)
         score /= (total_w + 1e-6)
 
-        rewards[a] = score * self.per_tick
+        # GOAL-DIRECTION GATE (user feedback): a passive hover that isn't moving
+        # the ball toward the opponent net pays only `goal_progress_floor` of the
+        # carry reward; a carry that drives the ball goal-ward pays full. This is
+        # what turns "hover under the ball" into "carry it at the net".
+        score *= (self.goal_progress_floor + (1.0 - self.goal_progress_floor) * goal_term)
+
+        # sustain-duration escalation: reward grows with unbroken carry length
+        self.sustain_streak[a] = self.sustain_streak.get(a, 0) + 1
+        sustain_mult = 1.0 + self.sustain_ramp * min(self.sustain_streak[a], self.sustain_cap)
+        rewards[a] = score * self.per_tick * sustain_mult
 
         # Optional debug
         shared_info["airdribble_dense"] = {
