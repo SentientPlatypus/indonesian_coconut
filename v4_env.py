@@ -70,7 +70,10 @@ def _reward_fn(cfg: Dict[str, Any]):
         (AerialDistanceReward(), w["aerial_distance"]),
         (InAirReward(), w["in_air"]),
         (AirdribbleReward(
-            carry_radius=380.0, min_height=210.0, max_rel_speed=1200.0,
+            carry_radius=520.0, min_height=210.0, max_rel_speed=1200.0,
+            sustain_ramp=0.0,   # REVERTED: duration-escalation induced hover-farming
+                                # (v3 completion ~0.10 < v2 ~0.13); back to v2 reward.
+
             # 4.5, not 9.0: the 9.0 was tuned against the 8x steps-vs-ticks
             # dilution (now fixed). Undiluted 9.0 x weight 45 would pay up to
             # ~400/sec — hovering under a pop would out-earn goals (1200) in
@@ -78,9 +81,14 @@ def _reward_fn(cfg: Dict[str, Any]):
             per_second_scale=4.5, w_goal_align=cfg["airdribble_w_goal_align"],
         ), w["airdribble"]),
         (AirDribbleSequenceReward(
-            min_air_z=320.0, rel_speed_max=650.0, chain_ms=900,
-            min_start_boost=0.25, min_sustain_boost=0.08, touch_bonus=0.20,
+            # v2 (user feedback): the dense "glue" carry is boost-INefficient so
+            # successes clustered near the opponent net. Reward SPACED, boost-
+            # efficient chains (touch, let it travel, catch up) that cover distance
+            # goal-ward, while the glue reward keeps close-range control.
+            min_air_z=320.0, rel_speed_max=950.0, chain_ms=1400,   # was 650 / 900: allow faster, more-spaced touches to chain
+            min_start_boost=0.30, min_sustain_boost=0.08, touch_bonus=0.20,
             chain_bonus=0.35, forward_goal_w=2.0, forward_car_w=1.0,
+            carry_scale=1.7 / (2 * 5120),   # was 1/(2*5120): pay ~1.7x for ground covered between touches
         ), w["airdribble_seq"]),
         (WallPopSetupReward(), w["wall_pop"]),
         (FlickReward(), w["flick"]),

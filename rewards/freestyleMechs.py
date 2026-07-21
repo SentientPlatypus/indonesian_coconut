@@ -358,8 +358,11 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
 
         # NEW (user feedback): stop rewarding a passive hover that doesn't drive
         # the ball to net, and stop rewarding no-boost aerial commits.
-        min_carry_boost: float = 0.10,       # below this, an aerial "carry" isn't real
-        low_boost_penalty: float = 0.012,    # small per-step penalty for no-boost commit
+        min_carry_boost: float = 0.20,       # v2 (user): 0.10 let it commit no-boost
+                                             # carries that lose possession; raised so it
+                                             # won't start a carry it can't finish. Kept
+                                             # modest so short close-range dribbles survive.
+        low_boost_penalty: float = 0.025,    # v2: stronger deterrent for no-boost commit
         goal_progress_floor: float = 0.15,   # hover w/o goal-ward ball motion pays only this frac
     ):
         self.sustain_ramp = sustain_ramp
