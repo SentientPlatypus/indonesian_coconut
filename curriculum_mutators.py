@@ -61,13 +61,15 @@ class CurriculumStateMutator(StateMutator[GameState]):
     """
 
     def __init__(self, kickoff_w: float = 0.50, air_dribble_w: float = 0.30,
-                 flip_reset_w: float = 0.20, wall_pop_w: float = 0.0):
-        total = kickoff_w + air_dribble_w + flip_reset_w + wall_pop_w
+                 flip_reset_w: float = 0.20, wall_pop_w: float = 0.0,
+                 ground_dribble_w: float = 0.0):
+        total = kickoff_w + air_dribble_w + flip_reset_w + wall_pop_w + ground_dribble_w
         assert total > 0, "curriculum weights must sum to > 0"
         self.kickoff_w = kickoff_w / total
         self.air_dribble_w = air_dribble_w / total
         self.flip_reset_w = flip_reset_w / total
         self.wall_pop_w = wall_pop_w / total
+        self.ground_dribble_w = ground_dribble_w / total
         self._kickoff = KickoffMutator()
 
     # -- helpers --------------------------------------------------------------
@@ -214,6 +216,63 @@ class CurriculumStateMutator(StateMutator[GameState]):
         for d in defenders:
             self._park_defender(d)
 
+    def _active_defender(self, car, bx: float, by: float, attack: float) -> None:
+        """Position a car as an ACTIVE defender (not parked at the net): goal-side
+        of the ball — between the ball and the net the attacker is attacking — at a
+        challenging gap, grounded, facing back toward the oncoming attacker. `attack`
+        is the ATTACKER's attack dir; the defended net is at attack*BACK_NET_Y."""
+        # goal-side of the ball, ahead toward the defended net but in front of it
+        def_y = by + attack * random.uniform(1300, 3300)
+        def_y = float(np.clip(def_y, -BACK_NET_Y + 400.0, BACK_NET_Y - 400.0))
+        def_x = float(np.clip(bx + random.uniform(-1000, 1000), -3500, 3500))
+        car.physics.position = _f32(def_x, def_y, 17.0)
+        # a little closing speed toward the ball sometimes (challenge vs. contain)
+        close = random.uniform(0.0, 700.0)
+        car.physics.linear_velocity = _f32(0.0, -attack * close, 0.0)
+        car.physics.angular_velocity = _f32(0, 0, 0)
+        # face the oncoming attacker (toward -attack in Y): yaw -attack*pi/2
+        car.physics.euler_angles = _f32(0.0, -attack * np.pi / 2.0, 0.0)
+        car.boost_amount = random.uniform(30.0, 70.0)
+        car.on_ground = True
+
+    def _ground_dribble_setup(self, state: GameState) -> None:
+        """Attacker ground-dribbling the ball toward the attacking net, with the
+        other car placed as an ACTIVE defender goal-side of the ball. Because the
+        attacker is chosen from a random team, our policy trains BOTH dribble
+        offense (carry the ball to net past a defender) and dribble defense
+        (challenge/contain an incoming ball-carrier)."""
+        attacker, defenders = self._split_cars(state)
+        attack = self._attack_dir(attacker.team_num)
+
+        # Attacker in own half / midfield, carrying the ball toward the net.
+        bx = random.uniform(-1500, 1500)
+        by = attack * random.uniform(-2400, 300)        # own half to just past midfield
+        carry_speed = random.uniform(650, 1300)         # rolling toward the net
+
+        # Ball resting on the hood/roof, moving with the car (low rel speed), gentle bounce.
+        state.ball.position = _f32(
+            bx, by + attack * random.uniform(40, 120), random.uniform(150, 240),
+        )
+        state.ball.linear_velocity = _f32(
+            random.uniform(-90, 90), attack * carry_speed, random.uniform(-40, 130),
+        )
+        state.ball.angular_velocity = _f32(0, 0, 0)
+
+        # Attacker just under/behind the ball, grounded, moving with it toward net.
+        attacker.physics.position = _f32(
+            bx + random.uniform(-70, 70), by - attack * random.uniform(20, 130), 17.0,
+        )
+        attacker.physics.linear_velocity = _f32(
+            random.uniform(-70, 70), attack * carry_speed * random.uniform(0.9, 1.05), 0.0,
+        )
+        attacker.physics.angular_velocity = _f32(0, 0, 0)
+        attacker.physics.euler_angles = _f32(0.0, attack * np.pi / 2.0, 0.0)   # face the net
+        attacker.boost_amount = random.uniform(30, 80)
+        attacker.on_ground = True
+
+        for d in defenders:
+            self._active_defender(d, bx, by, attack)
+
     # -- entry point ----------------------------------------------------------
     def apply(self, state: GameState, shared_info: Dict[str, Any]) -> None:
         r = random.random()
@@ -223,5 +282,7 @@ class CurriculumStateMutator(StateMutator[GameState]):
             self._wall_pop_setup(state)
         elif r < self.kickoff_w + self.wall_pop_w + self.air_dribble_w:
             self._air_dribble_setup(state)
+        elif r < self.kickoff_w + self.wall_pop_w + self.air_dribble_w + self.ground_dribble_w:
+            self._ground_dribble_setup(state)
         else:
             self._flip_reset_setup(state)

@@ -41,7 +41,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "airdribble_w_goal_align": 0.25,
     "curriculum": {"kickoff_w": 0.40, "wall_pop_w": 0.20, "air_dribble_w": 0.25,
-                   "flip_reset_w": 0.15},
+                   "flip_reset_w": 0.15, "ground_dribble_w": 0.0},
     "ppo_ent_coef": 0.01,
 }
 
@@ -49,9 +49,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 # Deliberately a SMALL, mechanic/scoring-focused subset — not all 23 weights.
 # Bounds are sane guardrails so the search can't drive a weight to an absurd value.
 TUNABLES: List[Tuple[str, float, float, float]] = [
-    ("reward_weights.flip_reset",        80.0, 220.0, 25.0),
-    ("reward_weights.airdribble",        25.0,  70.0,  8.0),
-    ("reward_weights.airdribble_seq",    15.0,  50.0,  8.0),
+    # floors lowered after the 300-game finding that heavy freestyle weights
+    # (esp. flip_reset=140) traded away scoring vs Element; the rebalanced
+    # baseline sits near these lows, so the search must be able to stay there.
+    ("reward_weights.flip_reset",        30.0, 220.0, 25.0),
+    ("reward_weights.airdribble",        12.0,  70.0,  8.0),
+    ("reward_weights.airdribble_seq",     8.0,  50.0,  8.0),
     ("reward_weights.wall_pop",           0.0,  24.0,  4.0),
     ("reward_weights.flick",              4.0,  24.0,  4.0),
     ("reward_weights.goal_prob",          8.0,  20.0,  2.0),

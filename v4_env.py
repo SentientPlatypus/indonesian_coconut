@@ -111,6 +111,7 @@ def _state_mutator(cfg: Dict[str, Any], for_training: bool):
         reset_mutator = CurriculumStateMutator(
             kickoff_w=c["kickoff_w"], air_dribble_w=c["air_dribble_w"],
             flip_reset_w=c["flip_reset_w"], wall_pop_w=c.get("wall_pop_w", 0.0),
+            ground_dribble_w=c.get("ground_dribble_w", 0.0),
         )
     else:
         reset_mutator = KickoffMutator()   # eval = standard kickoff games
