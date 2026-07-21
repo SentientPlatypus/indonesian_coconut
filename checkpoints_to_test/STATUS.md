@@ -16,10 +16,11 @@ Reward was reshaped (not just more training) to fix exactly those two things:
   raised the touch-chain reward, so boosting *up* to re-hit the ball toward net
   is rewarded, not punished.
 
-Resumed from the 7-day headline and trained ~180M more steps with the new reward.
-Headless metrics (these CANNOT see the behavior change — that's why I need your
-in-game read): strength score **0.38** vs Element (>= the 0.34 headline, well
-above floor), spawn air-dribble capability ~0.68-0.87 (noisy proxy).
+Resumed from the 7-day headline and trained ~650M more steps with the new reward
+(this file = the 634M-step checkpoint; run has since CONVERGED). Headless metrics
+(these CANNOT see the behavior change — that's why I need your in-game read):
+strength score **~0.37** vs Element across 8 evals (>= the 0.34 headline, well
+above floor), spawn air-dribble capability **~0.80** (noisy proxy, up from 0.66).
 
 **What to check when you play it:** Does it still go for aerials off walls with
 no boost? When it air-dribbles, does it now try to move the ball toward the goal
