@@ -364,13 +364,6 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
                                              # below this, an aerial carry isn't finishable.
         low_boost_penalty: float = 0.025,    # per-step penalty for a no-boost aerial commit
         goal_progress_floor: float = 0.15,   # hover w/o goal-ward ball motion pays only this frac
-
-        # v5 (user): near the opponent net, don't pin the ball to the BACKBOARD —
-        # bring it infield to the goal mouth. Penalize a deep carry high against
-        # the back wall (scaled by how deep past backboard_y it is).
-        backboard_y: float = 4300.0,         # |ball_y| beyond this = backboard zone
-        backboard_z: float = 480.0,          # and above this height (backboard, not floor)
-        backboard_penalty: float = 0.6,      # up to this frac of the carry reward removed
     ):
         self.sustain_ramp = sustain_ramp
         self.sustain_cap = sustain_cap
@@ -378,9 +371,6 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         self.min_carry_boost = min_carry_boost
         self.low_boost_penalty = low_boost_penalty
         self.goal_progress_floor = goal_progress_floor
-        self.backboard_y = backboard_y
-        self.backboard_z = backboard_z
-        self.backboard_penalty = backboard_penalty
         super().__init__()
         self.carry_radius = carry_radius
         self.min_height = min_height
@@ -547,14 +537,11 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         # what turns "hover under the ball" into "carry it at the net".
         score *= (self.goal_progress_floor + (1.0 - self.goal_progress_floor) * goal_term)
 
-        # BACKBOARD penalty (v5, user): a carry pinned deep and high against the
-        # opponent back wall pays less, so the policy learns to bring it infield
-        # to the goal mouth instead of stalling it on the backboard.
-        depth_past = abs(float(bpos[1])) - self.backboard_y
-        if depth_past > 0.0 and float(bpos[2]) > self.backboard_z:
-            band = max(1.0, BACK_NET_Y - self.backboard_y)
-            near = min(1.0, depth_past / band)
-            score *= (1.0 - self.backboard_penalty * near)
+        # NOTE (v5): a backboard penalty was tried here and REMOVED — a negative
+        # penalty near the opponent net risks discouraging air-dribble attempts
+        # altogether. On-target aiming is instead driven POSITIVELY by GoalReward
+        # (1200) + GoalProbReward (goal-view), which reward the goal mouth without
+        # suppressing attempts. Infield behavior comes from those + more training.
 
         # sustain-duration escalation: reward grows with unbroken carry length
         self.sustain_streak[a] = self.sustain_streak.get(a, 0) + 1
