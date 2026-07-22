@@ -37,7 +37,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "airdribble": 45.0, "airdribble_seq": 30.0, "wall_pop": 8.0,
         "flick": 10.0, "flip_reset": 140.0,
         # hygiene
-        "recover": 45.0, "demo": 50.0, "ang_vel": 1.0,
+        "recover": 45.0, "demo": 50.0, "overextend": 8.0, "ang_vel": 1.0,
     },
     "airdribble_w_goal_align": 0.25,
     "curriculum": {"kickoff_w": 0.40, "wall_pop_w": 0.20, "air_dribble_w": 0.25,

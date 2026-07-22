@@ -407,6 +407,39 @@ from rl_math.ball import GOAL_THRESHOLD
 from rl_math.solid_angle import view_goal_ratio
 
 
+class NoBoostOverextendReward(RewardFunction[AgentID, GameState, float]):
+    """v5 (user): penalize the 'overextend on empty' mistake — being GROUNDED,
+    deep in the opponent's half, with LOW BOOST — where a well-placed clear/shot
+    by the defender beats you to a fast break. NOTE boost_amount is 0-100.
+
+    Penalty = weight * boost_deficit * opp_half_depth, only when on the ground and
+    below min_boost and past the deadzone into the attacking half. Zero elsewhere,
+    so it never discourages a committed play or normal attacking with boost."""
+    def __init__(self, min_boost: float = 25.0, deadzone_frac: float = 0.10,
+                 weight: float = 1.0):
+        self.min_boost = min_boost           # 0-100 scale
+        self.deadzone = deadzone_frac        # fraction of half past midfield before it bites
+        self.weight = weight
+
+    def reset(self, agents, initial_state, shared_info):
+        pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        for a in agents:
+            car = state.cars[a]
+            if not car.on_ground or car.boost_amount >= self.min_boost:
+                continue
+            attack = -1.0 if car.is_orange else 1.0
+            depth = attack * float(car.physics.position[1]) / BACK_NET_Y   # -1..1, + into opp half
+            if depth <= self.deadzone:
+                continue
+            deficit = (self.min_boost - car.boost_amount) / self.min_boost   # 0..1
+            depth_frac = min(1.0, (depth - self.deadzone) / (1.0 - self.deadzone))
+            rewards[a] = -self.weight * deficit * depth_frac
+        return rewards
+
+
 class GoalProbReward(RewardFunction[AgentID, GameState, float]):
     def __init__(self, gamma: float = 1):
         """
