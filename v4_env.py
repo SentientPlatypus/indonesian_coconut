@@ -94,7 +94,10 @@ def _reward_fn(cfg: Dict[str, Any]):
         (FlickReward(), w["flick"]),
         (FlipResetReward(), w["flip_reset"]),
         (OneVOneRecoverReward(), w["recover"]),
-        (DemoReward(), w["demo"]),
+        # v4 (user): enable BUMPS (not just demos) — reward knocking the defender
+        # off course proportional to how hard the bump displaces them, to beat
+        # Nexto's jump-to-challenge. Modest to avoid bump-farming vs. scoring.
+        (DemoReward(bump_acceleration_reward=0.35), w["demo"]),
         (AngVelReward(), w["ang_vel"]),
     )
 
