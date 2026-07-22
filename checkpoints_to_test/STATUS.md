@@ -4,9 +4,9 @@
 V3 = V2 (boost discipline + spaced carries) PLUS a NEW **ground-dribble offense/
 defense** curriculum spawn: attacker ground-dribbles the ball toward the net while
 the other car is placed as an ACTIVE defender goal-side of the ball. Trained both
-roles (random attacker team). Headless at ~118M v3 steps: strength **0.403** (best
-of the whole lineage — held/improved WITH the defensive scenarios), spawn capability
-**0.92**, air-touch **10.06/ep**. **Check in-game:** (a) does it defend an incoming
+roles (random attacker team). Headless at ~247M v3 steps: strength **~0.38** (0.367 this read; band 0.37-0.40,
+held WITH the defensive scenarios), spawn capability **0.95** (best of the run),
+air-touch **~10/ep**. **Check in-game:** (a) does it defend an incoming
 dribbler now (position goal-side, challenge)? (b) can it carry the ball to net past
 a defender? (c) still boost-disciplined on air dribbles + carrying from range (v2 fixes)?
 
