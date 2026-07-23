@@ -447,13 +447,17 @@ class SafeBoostCollectReward(RewardFunction[AgentID, GameState, float]):
     position is SAFE, so the bot proactively grabs boost and is rarely empty in the
     first place. boost_amount is 0-100.
 
-    SAFE = the ball is on the attacking half OR we are goal-side of the ball (between
-    the ball and our own net) — peeling off for a pad then doesn't expose our net.
-    Only pays while boost < target (no reward for hoarding at full), and scales with
-    how far below target we are, so topping up from empty pays most."""
-    def __init__(self, target_boost: float = 60.0, weight: float = 1.0):
-        self.target_boost = target_boost      # 0-100 scale
+    SAFE = we are goal-side of the ball (between the ball and our own net) AND the
+    ball is FAR from us (min_ball_dist) — i.e. we're genuinely off-ball, not in a
+    contestable play. This is the v6.1 fix: the earlier version peeled off for boost
+    even when the ball was close/contestable near kickoff and GAVE UP POSSESSION
+    (user). Only pays while boost < target (no hoarding), scaled by how far below.
+    Kept deliberately small so it never outweighs pressing a play."""
+    def __init__(self, target_boost: float = 45.0, weight: float = 1.0,
+                 min_ball_dist: float = 2500.0):
+        self.target_boost = target_boost      # 0-100 scale; only top up when below this
         self.weight = weight
+        self.min_ball_dist = min_ball_dist    # ball must be at least this far to count as off-ball
         self.prev_boost: Dict[AgentID, float] = {}
 
     def reset(self, agents, initial_state, shared_info):
@@ -467,10 +471,16 @@ class SafeBoostCollectReward(RewardFunction[AgentID, GameState, float]):
             self.prev_boost[a] = car.boost_amount
             if gained <= 0.0 or car.boost_amount > self.target_boost:
                 continue
+            # off-ball guard: don't reward peeling off for boost near a contestable ball
+            bp = state.ball.position
+            cp = car.physics.position
+            ball_dist = ((bp[0] - cp[0]) ** 2 + (bp[1] - cp[1]) ** 2 + (bp[2] - cp[2]) ** 2) ** 0.5
+            if ball_dist < self.min_ball_dist:
+                continue
             attack = -1.0 if car.is_orange else 1.0
-            ball_depth = attack * float(state.ball.position[1])   # >0 = ball on opp (attacking) half
-            car_depth = attack * float(car.physics.position[1])
-            safe = (ball_depth > 0.0) or (car_depth < ball_depth)  # goal-side of the ball
+            ball_depth = attack * float(bp[1])       # >0 = ball on opp (attacking) half
+            car_depth = attack * float(cp[1])
+            safe = (car_depth < ball_depth)          # goal-side of the ball
             if not safe:
                 continue
             need = (self.target_boost - car.boost_amount) / self.target_boost   # 0..1

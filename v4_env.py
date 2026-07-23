@@ -104,7 +104,10 @@ def _reward_fn(cfg: Dict[str, Any]):
          w.get("overextend", 0.0)),
         # v6 (user): the POSITIVE fix — go for boost when low AND in a safe position,
         # so we're rarely caught empty (replaces the negative overextend penalty).
-        (SafeBoostCollectReward(target_boost=60.0),
+        # v6.1 (user): was too strong — peeled off for boost near a contestable ball
+        # and gave up possession. Lowered weight (10->5), target (60->45), and added
+        # an off-ball guard (min_ball_dist) so it only tops up when genuinely off-ball.
+        (SafeBoostCollectReward(target_boost=45.0, min_ball_dist=2500.0),
          w.get("safe_boost", 0.0)),
         (AngVelReward(), w["ang_vel"]),
     )
