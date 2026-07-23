@@ -97,17 +97,20 @@ def _reward_fn(cfg: Dict[str, Any]):
         # v4 (user): enable BUMPS (not just demos) — reward knocking the defender
         # off course proportional to how hard the bump displaces them, to beat
         # Nexto's jump-to-challenge. Modest to avoid bump-farming vs. scoring.
-        (DemoReward(bump_acceleration_reward=0.35), w["demo"]),
+        # v6.2 (user: "totally increase the bumps" — the 7-6 vs Nexto bot already
+        # bumps some; reward it harder). 0.35 -> 0.65 (~1.9x the per-bump incentive).
+        (DemoReward(bump_acceleration_reward=0.65), w["demo"]),
         # v5 (user): punish overextending grounded + deep + low boost. REVERTED in
         # v6 (user: made the bot too passive/slow) — disabled via weight 0 in config.
         (NoBoostOverextendReward(min_boost=25.0, deadzone_frac=0.10),
          w.get("overextend", 0.0)),
         # v6 (user): the POSITIVE fix — go for boost when low AND in a safe position,
         # so we're rarely caught empty (replaces the negative overextend penalty).
-        # v6.1 (user): was too strong — peeled off for boost near a contestable ball
-        # and gave up possession. Lowered weight (10->5), target (60->45), and added
-        # an off-ball guard (min_ball_dist) so it only tops up when genuinely off-ball.
-        (SafeBoostCollectReward(target_boost=45.0, min_ball_dist=2500.0),
+        # v6.2 (user): the 7-6-vs-Nexto bot's boost behavior was liked — "dial back a
+        # little", not the big v6.1 cut. weight 10->8 (config), target back to 60, and
+        # a LIGHT off-ball guard (1800) so it still won't grab boost on top of a
+        # contestable ball (the one kickoff giveaway they saw) but otherwise unchanged.
+        (SafeBoostCollectReward(target_boost=60.0, min_ball_dist=1800.0),
          w.get("safe_boost", 0.0)),
         (AngVelReward(), w["ang_vel"]),
     )
