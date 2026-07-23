@@ -42,7 +42,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         GoalDistReward, AerialBoostTowardBallReward, DemoReward, PossessionReward,
         SpeedTowardBallReward, InAirReward, FaceBallReward, FlickReward,
         AerialDistanceReward, BoostChangeReward, BoostKeepReward, AngVelReward,
-        OneVOneRecoverReward, NoBoostOverextendReward,
+        OneVOneRecoverReward, NoBoostOverextendReward, SafeBoostCollectReward,
     )
     from rewards.freestyleMechs import (
         AirdribbleReward, AirDribbleSequenceReward, WallPopSetupReward, FlipResetReward,
@@ -86,7 +86,7 @@ def _reward_fn(cfg: Dict[str, Any]):
             # efficient chains (touch, let it travel, catch up) that cover distance
             # goal-ward, while the glue reward keeps close-range control.
             min_air_z=320.0, rel_speed_max=950.0, chain_ms=1400,   # was 650 / 900: allow faster, more-spaced touches to chain
-            min_start_boost=30.0, min_sustain_boost=8.0, touch_bonus=0.20,   # v5 BUGFIX: boost is 0-100, not 0-1 (old 0.30/0.08 never gated)
+            min_start_boost=0.30, min_sustain_boost=0.08, touch_bonus=0.20,   # v6 REVERT to v4 (inert on 0-100): the v5 30/8 gate made it pass up chains w/o boost -> passive/slow (user)
             chain_bonus=0.35, forward_goal_w=2.0, forward_car_w=1.0,
             carry_scale=1.7 / (2 * 5120),   # was 1/(2*5120): pay ~1.7x for ground covered between touches
         ), w["airdribble_seq"]),
@@ -98,10 +98,14 @@ def _reward_fn(cfg: Dict[str, Any]):
         # off course proportional to how hard the bump displaces them, to beat
         # Nexto's jump-to-challenge. Modest to avoid bump-farming vs. scoring.
         (DemoReward(bump_acceleration_reward=0.35), w["demo"]),
-        # v5 (user): punish overextending grounded + deep + low boost (the
-        # "on their side with no boost -> lose the goal off a clear" mistake).
+        # v5 (user): punish overextending grounded + deep + low boost. REVERTED in
+        # v6 (user: made the bot too passive/slow) — disabled via weight 0 in config.
         (NoBoostOverextendReward(min_boost=25.0, deadzone_frac=0.10),
          w.get("overextend", 0.0)),
+        # v6 (user): the POSITIVE fix — go for boost when low AND in a safe position,
+        # so we're rarely caught empty (replaces the negative overextend penalty).
+        (SafeBoostCollectReward(target_boost=60.0),
+         w.get("safe_boost", 0.0)),
         (AngVelReward(), w["ang_vel"]),
     )
 

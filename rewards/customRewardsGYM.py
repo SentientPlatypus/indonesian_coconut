@@ -440,6 +440,44 @@ class NoBoostOverextendReward(RewardFunction[AgentID, GameState, float]):
         return rewards
 
 
+class SafeBoostCollectReward(RewardFunction[AgentID, GameState, float]):
+    """v6 (user): 'go for more boost when we're in a safe position' — the POSITIVE
+    counterpart to the removed NoBoostOverextendReward. Instead of punishing being
+    caught empty, reward topping up boost (pad pickups) when we're LOW and the
+    position is SAFE, so the bot proactively grabs boost and is rarely empty in the
+    first place. boost_amount is 0-100.
+
+    SAFE = the ball is on the attacking half OR we are goal-side of the ball (between
+    the ball and our own net) — peeling off for a pad then doesn't expose our net.
+    Only pays while boost < target (no reward for hoarding at full), and scales with
+    how far below target we are, so topping up from empty pays most."""
+    def __init__(self, target_boost: float = 60.0, weight: float = 1.0):
+        self.target_boost = target_boost      # 0-100 scale
+        self.weight = weight
+        self.prev_boost: Dict[AgentID, float] = {}
+
+    def reset(self, agents, initial_state, shared_info):
+        self.prev_boost = {a: initial_state.cars[a].boost_amount for a in agents}
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        for a in agents:
+            car = state.cars[a]
+            gained = max(0.0, car.boost_amount - self.prev_boost.get(a, car.boost_amount))
+            self.prev_boost[a] = car.boost_amount
+            if gained <= 0.0 or car.boost_amount > self.target_boost:
+                continue
+            attack = -1.0 if car.is_orange else 1.0
+            ball_depth = attack * float(state.ball.position[1])   # >0 = ball on opp (attacking) half
+            car_depth = attack * float(car.physics.position[1])
+            safe = (ball_depth > 0.0) or (car_depth < ball_depth)  # goal-side of the ball
+            if not safe:
+                continue
+            need = (self.target_boost - car.boost_amount) / self.target_boost   # 0..1
+            rewards[a] = self.weight * (gained / 100.0) * need
+        return rewards
+
+
 class GoalProbReward(RewardFunction[AgentID, GameState, float]):
     def __init__(self, gamma: float = 1):
         """

@@ -358,10 +358,12 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
 
         # NEW (user feedback): stop rewarding a passive hover that doesn't drive
         # the ball to net, and stop rewarding no-boost aerial commits.
-        min_carry_boost: float = 20.0,       # v5 BUGFIX: boost_amount is 0-100, not 0-1,
-                                             # so the old 0.20 threshold ~never fired (the
-                                             # v2/v3 boost gate was inert). 20 = 20% boost:
-                                             # below this, an aerial carry isn't finishable.
+        min_carry_boost: float = 0.20,       # v6 REVERT to v4: the v5 value (20 on the 0-100
+                                             # scale) made the low-boost gate fire and the bot
+                                             # refuse/abort aerials without boost -> passive &
+                                             # slow (user). Back to the v4-inert 0.20 so it
+                                             # air-dribbles freely; boost economy is handled
+                                             # positively via SafeBoostCollectReward instead.
         low_boost_penalty: float = 0.025,    # per-step penalty for a no-boost aerial commit
         goal_progress_floor: float = 0.15,   # hover w/o goal-ward ball motion pays only this frac
     ):
