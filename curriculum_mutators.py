@@ -62,14 +62,16 @@ class CurriculumStateMutator(StateMutator[GameState]):
 
     def __init__(self, kickoff_w: float = 0.50, air_dribble_w: float = 0.30,
                  flip_reset_w: float = 0.20, wall_pop_w: float = 0.0,
-                 ground_dribble_w: float = 0.0):
-        total = kickoff_w + air_dribble_w + flip_reset_w + wall_pop_w + ground_dribble_w
+                 ground_dribble_w: float = 0.0, ground_to_air_w: float = 0.0):
+        total = (kickoff_w + air_dribble_w + flip_reset_w + wall_pop_w
+                 + ground_dribble_w + ground_to_air_w)
         assert total > 0, "curriculum weights must sum to > 0"
         self.kickoff_w = kickoff_w / total
         self.air_dribble_w = air_dribble_w / total
         self.flip_reset_w = flip_reset_w / total
         self.wall_pop_w = wall_pop_w / total
         self.ground_dribble_w = ground_dribble_w / total
+        self.ground_to_air_w = ground_to_air_w / total
         self._kickoff = KickoffMutator()
 
     # -- helpers --------------------------------------------------------------
@@ -273,6 +275,42 @@ class CurriculumStateMutator(StateMutator[GameState]):
         for d in defenders:
             self._active_defender(d, bx, by, attack)
 
+    def _ground_to_air_setup(self, state: GameState) -> None:
+        """v7 (user): BOTH cars grounded with a contestable ball on the ground and
+        the defender set goal-side — the exact 'we're both on the ground vs a
+        defender' spot where just being fast into a flat ground shot loses. The
+        good play is to POP the ball up and follow it into an AERIAL play toward
+        goal. Attacker is grounded, approaching with boost (enough to go up); the
+        aerial follow-up is rewarded by aerial_boost / AirdribbleReward / GoalProb."""
+        attacker, defenders = self._split_cars(state)
+        attack = self._attack_dir(attacker.team_num)
+
+        # Ball on the ground, midfield to attacking half, slow (a 50-50 / loose ball).
+        bx = random.uniform(-1500, 1500)
+        by = attack * random.uniform(-300, 2400)
+        state.ball.position = _f32(bx, by, 93.15)
+        state.ball.linear_velocity = _f32(
+            random.uniform(-150, 150), attack * random.uniform(-150, 300), 0.0,
+        )
+        state.ball.angular_velocity = _f32(0, 0, 0)
+
+        # Attacker grounded, behind the ball, closing with boost so an aerial pop
+        # is the natural next move (rather than a flat ground poke into the wall).
+        back = random.uniform(500, 1100)
+        attacker.physics.position = _f32(
+            float(np.clip(bx + random.uniform(-300, 300), -3500, 3500)),
+            by - attack * back, 17.0,
+        )
+        speed = random.uniform(500, 1150)
+        attacker.physics.linear_velocity = _f32(random.uniform(-80, 80), attack * speed, 0.0)
+        attacker.physics.angular_velocity = _f32(0, 0, 0)
+        attacker.physics.euler_angles = _f32(0.0, attack * np.pi / 2.0, 0.0)   # face the net
+        attacker.boost_amount = random.uniform(45, 100)                        # boost to go up
+        attacker.on_ground = True
+
+        for d in defenders:
+            self._active_defender(d, bx, by, attack)
+
     # -- entry point ----------------------------------------------------------
     def apply(self, state: GameState, shared_info: Dict[str, Any]) -> None:
         r = random.random()
@@ -284,5 +322,8 @@ class CurriculumStateMutator(StateMutator[GameState]):
             self._air_dribble_setup(state)
         elif r < self.kickoff_w + self.wall_pop_w + self.air_dribble_w + self.ground_dribble_w:
             self._ground_dribble_setup(state)
+        elif (r < self.kickoff_w + self.wall_pop_w + self.air_dribble_w
+                + self.ground_dribble_w + self.ground_to_air_w):
+            self._ground_to_air_setup(state)
         else:
             self._flip_reset_setup(state)

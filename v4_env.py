@@ -97,9 +97,10 @@ def _reward_fn(cfg: Dict[str, Any]):
         # v4 (user): enable BUMPS (not just demos) — reward knocking the defender
         # off course proportional to how hard the bump displaces them, to beat
         # Nexto's jump-to-challenge. Modest to avoid bump-farming vs. scoring.
-        # v6.2 (user: "totally increase the bumps" — the 7-6 vs Nexto bot already
-        # bumps some; reward it harder). 0.35 -> 0.65 (~1.9x the per-bump incentive).
-        (DemoReward(bump_acceleration_reward=0.65), w["demo"]),
+        # v7 (user): REVERT bumps to the GOALDIRECTED6 level (0.35). The v6.2 0.65
+        # increase regressed air-dribble finishing + recoveries in-game vs Nexto,
+        # so BUMPS was worse than GOALDIRECTED6. Back to the validated 0.35.
+        (DemoReward(bump_acceleration_reward=0.35), w["demo"]),
         # v5 (user): punish overextending grounded + deep + low boost. REVERTED in
         # v6 (user: made the bot too passive/slow) — disabled via weight 0 in config.
         (NoBoostOverextendReward(min_boost=25.0, deadzone_frac=0.10),
@@ -129,6 +130,7 @@ def _state_mutator(cfg: Dict[str, Any], for_training: bool):
             kickoff_w=c["kickoff_w"], air_dribble_w=c["air_dribble_w"],
             flip_reset_w=c["flip_reset_w"], wall_pop_w=c.get("wall_pop_w", 0.0),
             ground_dribble_w=c.get("ground_dribble_w", 0.0),
+            ground_to_air_w=c.get("ground_to_air_w", 0.0),
         )
     else:
         reset_mutator = KickoffMutator()   # eval = standard kickoff games

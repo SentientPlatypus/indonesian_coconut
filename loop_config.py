@@ -41,7 +41,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "airdribble_w_goal_align": 0.25,
     "curriculum": {"kickoff_w": 0.40, "wall_pop_w": 0.20, "air_dribble_w": 0.25,
-                   "flip_reset_w": 0.15, "ground_dribble_w": 0.0},
+                   "flip_reset_w": 0.15, "ground_dribble_w": 0.0, "ground_to_air_w": 0.0},
     "ppo_ent_coef": 0.01,
 }
 
