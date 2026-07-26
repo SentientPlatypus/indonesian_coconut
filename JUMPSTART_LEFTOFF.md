@@ -57,9 +57,14 @@ Three changes, all from user feedback that **BUMPS (v6.2) was WORSE than GOALDIR
    boost — so the learned play is **pop-up-and-aerial** vs a set defender instead of a
    flat ground shot. Aerial follow-up paid by existing aerial_boost/AirdribbleReward/GoalProb.
 
-**Next steps for v7:** let it train, dual-eval periodically (see §4), and push a v7
-checkpoint for the user to retest vs Nexto — watching (a) recoveries are faster/cleaner,
-(b) it makes aerial plays off the ground vs a defending Nexto. GOALDIRECTED6 stays fallback.
+**v7 FIRST EVAL (2026-07-26, ~1.03B steps past resume, snapshot `gdv7_25964078070`):**
+strength **0.48** (margin -12, even with Element, >= GOALDIRECTED6's 0.46), capability
+**0.955**, and style **0.36 air-dribbles/game — 2x GOALDIRECTED6's 0.17**, the highest of
+the project. Ground-to-air curriculum bought big style at no headless strength cost.
+Pushed as `checkpoints_to_test/PPO_POLICY_V4_GROUNDTOAIR.pt` + `AB_GROUNDTOAIR.md`
+(commit `63bfac5`). **AWAITING the user's Nexto A/B** — watching (a) recoveries are
+faster/cleaner, (b) it makes aerial plays off the ground vs a defending Nexto,
+(c) strength held. GOALDIRECTED6 stays the untouched fallback. Training continues.
 
 ## 3. LINEAGE / what the user has said (so you don't repeat mistakes)
 
