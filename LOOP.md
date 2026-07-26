@@ -94,6 +94,44 @@ Create on iteration 0 if missing. Schema:
 
 Read `state.json` first; recover whatever phase you're in.
 
+> **CAPABILITY MODE** (`state.mode == "airdribble_capability"`): the win-rate
+> hill-climb below is SUSPENDED. We found (300-game evals + `tools/eval_airdribble_spawn.py`)
+> that win-rate vs Element is orthogonal to the real goal ("air dribbles when
+> advantageous"), and the bot can't carry the ball (~3% completion from an ideal
+> spawn). This mode runs ONE long dedicated air-dribble training run
+> (`data/loop_state/airdribble_config.json`, curriculum ~80% air-dribble,
+> resumed from the frozen 0.233 policy) and gates on **spawn-eval capability**,
+> not win-rate. Each `/loop` wake:
+> 1. If training is running, leave it running. Spawn-eval the NEWEST complete
+>    `data/checkpoints/V4/*` checkpoint (read-only; training keeps going):
+>    `python tools/eval_airdribble_spawn.py --candidate <newest>/PPO_POLICY.pt --episodes 120 --out data/loop_state/spawn_<ts>.json`
+> 2. Append `completed_frac`/`engaged_frac` to `data/loop_state/capability.csv`.
+>    If `completed_frac` beats `best_completed_frac`, snapshot that checkpoint to
+>    `data/checkpoints/V4_best/cap_<ts>` and update `best_capability_ckpt`/`best_completed_frac`.
+> 3. If `completed_frac` climbs → keep training, `ScheduleWakeup` ~3600s.
+>    If it's flat for ~4 checks (plateau) or training died → stop, summarize to
+>    the user (the mechanic may need a reward-shape fix, i.e. reward the CARRY
+>    not just the touch — see the deferred "carry reward" investigation).
+> Skip §A/§B below while in this mode.
+
+> **INTEGRATION MODE** (`state.mode == "integration"`): the air-dribble carry
+> mechanic is trained (~0.13 spawn completion, 4x baseline). Now teach the bot to
+> use it *when advantageous* without losing strength. ONE long run
+> (`data/loop_state/integration_config.json`: scoring-dominant rewards + LIGHT
+> freestyle, MIXED curriculum ~55% kickoff / 30% air-dribble), resumed from the
+> best air-dribble policy (`state.best_capability_ckpt`). Gate on TWO metrics each
+> wake, on the newest complete `data/checkpoints/V4/*` checkpoint (training keeps
+> running). **SNAPSHOT that checkpoint to `data/checkpoints/V4_best/intg_<ts>`
+> BEFORE the evals** — the dual-eval takes ~20min and the checkpoint rotates out
+> of the save dir meanwhile; eval the snapshot, not the live dir.
+> 1. Win-rate: `python eval_match.py --candidate <newest>/PPO_POLICY.pt --opponent <state.opponent> --games 300 --out ...` — must stay >= `state.integration_winrate_floor` (0.18).
+> 2. Capability: `python tools/eval_airdribble_spawn.py --candidate <newest>/PPO_POLICY.pt --episodes 200 --out ...` — completed_frac should stay >= `state.integration_capability_floor` (0.08).
+> Append both to `data/loop_state/integration.csv`. Snapshot to
+> `data/checkpoints/V4_best/intg_<ts>` when BOTH floors hold and win-rate improves.
+> If win-rate recovers toward ~0.23 while capability stays >= floor → success,
+> export+push. If freestyle rewards drag win-rate below floor → cut them further
+> and note it. Skip §A/§B while in this mode.
+
 ### A. If no phase is running (`phase_running == false`)
 1. **Pick the config for this phase:**
    - iteration 0: use `best_config.json` as-is (baseline, to set `best_score`).
