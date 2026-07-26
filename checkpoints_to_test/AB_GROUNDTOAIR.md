@@ -36,6 +36,16 @@ rate while holding strength even with Element (the second read even went +2 on g
 Both reads agree closely, so this isn't an eval spike — the ground-to-air curriculum appears
 to be doing exactly what it was meant to do.
 
+## Optional: `PPO_POLICY_V4_GROUNDTOAIR2.pt` (newer v7 snapshot)
+
+Same v7 recipe, ~170M steps further on. Pooled 600 games: **strength 0.488** (same as
+GROUNDTOAIR within noise) with **0.447 air dribbles/game** — an all-time project high and
+~2.6x GOALDIRECTED6. Spawn capability also crept up to 0.975.
+
+**Test GROUNDTOAIR first** — it's the one this A/B is about. GROUNDTOAIR2 is there if you
+want to see whether the extra aerial appetite helps or starts costing goals in-game; it's
+the more aggressive point on the same line.
+
 ## What to watch in your A/B
 
 Headless strength has never predicted your Nexto result (GOALDIRECTED6 was only ~0.46 headless
