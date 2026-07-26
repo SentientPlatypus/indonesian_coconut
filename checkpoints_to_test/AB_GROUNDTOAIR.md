@@ -38,13 +38,18 @@ to be doing exactly what it was meant to do.
 
 ## Optional: `PPO_POLICY_V4_GROUNDTOAIR2.pt` (newer v7 snapshot)
 
-Same v7 recipe, ~170M steps further on. Pooled 600 games: **strength 0.488** (same as
-GROUNDTOAIR within noise) with **0.447 air dribbles/game** — an all-time project high and
-~2.6x GOALDIRECTED6. Spawn capability also crept up to 0.975.
+Same v7 recipe, ~170M steps further on. Pooled 600 games: strength 0.488, air dribbles
+0.447/game. It initially looked like a step up in aerial rate, but a further snapshot came
+back at 0.367, so 0.447 was the top of the noise band — **GROUNDTOAIR and GROUNDTOAIR2 are
+statistically indistinguishable**. Just test GROUNDTOAIR; GROUNDTOAIR2 is only worth a look
+if you want a second sample of the same policy.
 
-**Test GROUNDTOAIR first** — it's the one this A/B is about. GROUNDTOAIR2 is there if you
-want to see whether the extra aerial appetite helps or starts costing goals in-game; it's
-the more aggressive point on the same line.
+### Where the v7 line settled (5 pooled 600-game reads over 232M steps)
+
+Strength 0.492 / 0.460 / 0.430 / 0.488 / 0.487 — mean ~0.47, i.e. **stable and even with
+Element**. Air dribbles 0.358 / 0.375 / 0.353 / 0.447 / 0.367 — mean ~0.38, i.e. **~2.2x
+GOALDIRECTED6's 0.17**. Spawn capability has saturated at 0.98. The line is converged, so
+the in-game A/B is the only thing left that can move the decision.
 
 ## What to watch in your A/B
 
