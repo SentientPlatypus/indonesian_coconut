@@ -20,18 +20,21 @@ actually wanted:
    aerially**. This is the "air-dribble when advantageous" behavior rather than air-dribbling
    from a gifted setup.
 
-## Headless numbers (vs Element, 300 games)
+## Headless numbers (vs Element)
+
+Two independent 300-game evals on this exact checkpoint (pooled 600 games):
 
 | | GOALDIRECTED6 | BUMPS (v6.2, rejected) | **GROUNDTOAIR (v7)** |
 |---|---|---|---|
-| Strength (P score) | ~0.46 | ~0.485 pooled | **0.48** (margin -12) |
-| Air dribbles / game | ~0.17 | ~0.21 | **0.36** |
+| Strength (P score) | ~0.46 | ~0.485 pooled | **0.492** pooled (0.48 / 0.503) |
+| Air dribbles / game | ~0.17 | ~0.21 | **0.358** (0.36 / 0.357) |
 | Spawn air-dribble capability | ~0.95 | ~0.95 | **0.955** |
-| Flip resets (300g) | — | — | 73 |
+| Flip resets (per 300g) | — | — | 73 / 66 |
 
 The headline is the **style column**: v7 roughly doubles GOALDIRECTED6's in-match air-dribble
-rate while holding strength even with Element. The ground-to-air curriculum appears to be
-doing exactly what it was meant to do.
+rate while holding strength even with Element (the second read even went +2 on goal margin).
+Both reads agree closely, so this isn't an eval spike — the ground-to-air curriculum appears
+to be doing exactly what it was meant to do.
 
 ## What to watch in your A/B
 
