@@ -1,9 +1,21 @@
-# A/B test: v7 GROUNDTOAIR vs GOALDIRECTED6
+# A/B test: v7 vs GOALDIRECTED6
 
-Two policies to compare **in RLBot vs Nexto**:
+> **UPDATE 2026-07-26 — test `PPO_POLICY_V4_V7STRONG.pt`, it supersedes GROUNDTOAIR.**
+> The v7 line kept improving with training and broke clearly past every previous result:
+> **0.553 strength over 1200 games (+128 goals) with 0.418 air dribbles/game**. That is the
+> best headless result in the project's history — the previous best, v6.2, only just reached
+> even at 0.505 — and it carries ~2.5x GOALDIRECTED6's aerial rate. Four independent
+> 300-game reads all landed above 0.53 (0.533 / 0.533 / 0.583 / 0.563), so this is a real
+> step change rather than a lucky sample.
+>
+> If you haven't started testing yet, **run V7STRONG vs GOALDIRECTED6** and ignore
+> GROUNDTOAIR / GROUNDTOAIR2 — they're the same recipe caught earlier and weaker.
+
+Policies to compare **in RLBot vs Nexto**:
 
 - `PPO_POLICY_V4_GOALDIRECTED6.pt` — your validated best (beat Nexto **7-6**). Unchanged fallback.
-- `PPO_POLICY_V4_GROUNDTOAIR.pt` — **v7**, resumed from GOALDIRECTED6 and trained ~1.03B steps.
+- `PPO_POLICY_V4_V7STRONG.pt` — **v7 at 26.29B steps. The one to test.**
+- `PPO_POLICY_V4_GROUNDTOAIR.pt` — v7 caught ~325M steps earlier (superseded, kept for reference).
 
 ## What changed in v7
 
