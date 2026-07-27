@@ -44,6 +44,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "airdribble_goal_speed_target": 900.0,
     "airdribble_push_floor": 0.35,
     "airdribble_finish_floor": 0.40,
+    # v8: collect more boost
+    "safe_boost_target": 80.0,
+    "safe_boost_min_ball_dist": 1400.0,
     "curriculum": {"kickoff_w": 0.40, "wall_pop_w": 0.20, "air_dribble_w": 0.25,
                    "flip_reset_w": 0.15, "ground_dribble_w": 0.0, "ground_to_air_w": 0.0},
     "ppo_ent_coef": 0.01,

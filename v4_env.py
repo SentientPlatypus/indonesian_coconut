@@ -121,7 +121,13 @@ def _reward_fn(cfg: Dict[str, Any]):
         # little", not the big v6.1 cut. weight 10->8 (config), target back to 60, and
         # a LIGHT off-ball guard (1800) so it still won't grab boost on top of a
         # contestable ball (the one kickoff giveaway they saw) but otherwise unchanged.
-        (SafeBoostCollectReward(target_boost=60.0, min_ball_dist=1800.0),
+        # v8 (user): "we should also get more boost, boost is important". Raise the
+        # pull (weight 8->16 in config) and top up to 80 rather than 60, and let it
+        # take pads a bit closer in (1800->1400). The off-ball guard and the
+        # goal-side test stay, since those are what stopped the v6.1-era giveaway,
+        # and PossessionReward (68) still dominates near a contestable ball.
+        (SafeBoostCollectReward(target_boost=cfg["safe_boost_target"],
+                                min_ball_dist=cfg["safe_boost_min_ball_dist"]),
          w.get("safe_boost", 0.0)),
         (AngVelReward(), w["ang_vel"]),
     )
