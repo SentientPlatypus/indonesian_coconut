@@ -366,7 +366,33 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
                                              # positively via SafeBoostCollectReward instead.
         low_boost_penalty: float = 0.025,    # per-step penalty for a no-boost aerial commit
         goal_progress_floor: float = 0.15,   # hover w/o goal-ward ball motion pays only this frac
+
+        # v8 (user feedback): "on a ground-to-air dribble we don't push the ball
+        # forward enough". goal_term below is a pure DIRECTION cosine, so a ball
+        # creeping goal-ward at 100uu/s scored the same as one driven at 1500uu/s
+        # — combined with w_rel_speed (which pays for matching the ball's speed)
+        # the optimum was a slow glued carry that barely advances. This pays for
+        # actual goal-ward ball SPEED, with a floor so control carries still earn.
+        goal_speed_target: float = 900.0,
+        push_floor: float = 0.35,
+
+        # v8 (user feedback): "lots of upper crossbar hits when air dribbling".
+        # Nothing in the carry cared about ball height, so it arrived at the net
+        # still climbing and clipped the bar. Near the net only, pay full reward
+        # for having the ball UNDER the crossbar and taper above it. Kept as a
+        # floored multiplier (not a penalty) per the v5 lesson that a negative
+        # near the opponent net suppresses attempts altogether.
+        finish_zone_y: float = 2200.0,
+        finish_max_z: float = GOAL_HEIGHT * 0.78,
+        finish_fade_z: float = GOAL_HEIGHT * 1.5,
+        finish_floor: float = 0.40,
     ):
+        self.goal_speed_target = goal_speed_target
+        self.push_floor = push_floor
+        self.finish_zone_y = finish_zone_y
+        self.finish_max_z = finish_max_z
+        self.finish_fade_z = finish_fade_z
+        self.finish_floor = finish_floor
         self.sustain_ramp = sustain_ramp
         self.sustain_cap = sustain_cap
         self.sustain_streak = {}
@@ -538,6 +564,26 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         # carry reward; a carry that drives the ball goal-ward pays full. This is
         # what turns "hover under the ball" into "carry it at the net".
         score *= (self.goal_progress_floor + (1.0 - self.goal_progress_floor) * goal_term)
+
+        # PUSH IT FORWARD (v8): pay for goal-ward ball SPEED, not just heading.
+        goal_speed = float(np.dot(bvel, goal_dir))
+        push_term = float(np.clip(goal_speed / (self.goal_speed_target + 1e-6), 0.0, 1.0))
+        score *= (self.push_floor + (1.0 - self.push_floor) * push_term)
+
+        # UNDER THE BAR (v8): approaching the net, prefer the ball below the
+        # crossbar. Ramps in only inside finish_zone_y so mid-field carries,
+        # which legitimately run high, are untouched.
+        goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+        y_to_goal = abs(goal_y - bpos[1])
+        if y_to_goal < self.finish_zone_y:
+            zone = 1.0 - (y_to_goal / (self.finish_zone_y + 1e-6))
+            if bpos[2] <= self.finish_max_z:
+                height_term = 1.0
+            else:
+                span = self.finish_fade_z - self.finish_max_z
+                height_term = max(0.0, 1.0 - (bpos[2] - self.finish_max_z) / (span + 1e-6))
+            finish_mult = 1.0 - zone * (1.0 - self.finish_floor) * (1.0 - height_term)
+            score *= finish_mult
 
         # NOTE (v5): a backboard penalty was tried here and REMOVED — a negative
         # penalty near the opponent net risks discouraging air-dribble attempts

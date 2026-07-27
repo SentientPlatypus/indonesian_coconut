@@ -40,6 +40,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "recover": 45.0, "demo": 50.0, "overextend": 8.0, "ang_vel": 1.0,
     },
     "airdribble_w_goal_align": 0.25,
+    # v8: drive the carry goal-ward and finish under the crossbar
+    "airdribble_goal_speed_target": 900.0,
+    "airdribble_push_floor": 0.35,
+    "airdribble_finish_floor": 0.40,
     "curriculum": {"kickoff_w": 0.40, "wall_pop_w": 0.20, "air_dribble_w": 0.25,
                    "flip_reset_w": 0.15, "ground_dribble_w": 0.0, "ground_to_air_w": 0.0},
     "ppo_ent_coef": 0.01,

@@ -79,6 +79,16 @@ def _reward_fn(cfg: Dict[str, Any]):
             # ~400/sec — hovering under a pop would out-earn goals (1200) in
             # 3s without ever touching. 4.5 lands ~4x the old effective rate.
             per_second_scale=4.5, w_goal_align=cfg["airdribble_w_goal_align"],
+
+            # v8 (user, in-game vs Nexto with V7STRONG): "on a ground to air
+            # dribble we don't push the ball forward enough" and "a lot of upper
+            # crossbar hits when air dribbling". First pays for goal-ward ball
+            # SPEED (the old goal gate only looked at direction, so a slow glued
+            # carry scored full marks); second prefers the ball under the bar
+            # once inside the finishing zone.
+            goal_speed_target=cfg["airdribble_goal_speed_target"],
+            push_floor=cfg["airdribble_push_floor"],
+            finish_floor=cfg["airdribble_finish_floor"],
         ), w["airdribble"]),
         (AirDribbleSequenceReward(
             # v2 (user feedback): the dense "glue" carry is boost-INefficient so
