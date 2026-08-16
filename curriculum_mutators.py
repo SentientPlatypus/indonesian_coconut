@@ -17,6 +17,9 @@ THE MIX (curriculum):
                 the mid-air setups never transfer to kickoff play.
   - air_dribble: ball popped low-to-mid, drifting goalward, car under/behind it
   - flip_reset : ball high, car spawned below it airborne with boost, no flip
+                 (half of these draws are mid-carry FR: air-dribble geometry with
+                 no flip left + slight wheels-up roll — teaches reset-then-power
+                 during a carry, not just isolated hover resets)
 
 SAFETY NOTES:
   - Kept kickoff-heavy by default so the resumed 47-3 policy isn't destabilized.
@@ -218,6 +221,56 @@ class CurriculumStateMutator(StateMutator[GameState]):
         for d in defenders:
             self._park_defender(d)
 
+    def _air_dribble_flip_reset_setup(self, state: GameState) -> None:
+        """Mid-carry flip-reset drill: air-dribble geometry (ball drifting
+        goalward, car under/behind it) but the attacker has NO flip left and a
+        slight wheels-up roll so a reset-on-ball is the natural next skill —
+        then a powered follow-up hit. Transfers better than the static hover FR
+        spawn because the bot already reaches this state from air dribbles."""
+        attacker, defenders = self._split_cars(state)
+        attack = self._attack_dir(attacker.team_num)
+
+        # Ball: mid-to-high air-dribble height, drifting goalward (carry in progress).
+        bx = random.uniform(-1400, 1400)
+        by = random.uniform(-2000, 2200)
+        bz = random.uniform(520, 980)
+        up_v = random.uniform(180, 420)
+        fwd_v = attack * random.uniform(280, 700)
+        state.ball.position = _f32(bx, by, bz)
+        state.ball.linear_velocity = _f32(random.uniform(-100, 100), fwd_v, up_v)
+        state.ball.angular_velocity = _f32(0, 0, 0)
+
+        # Car: under/behind the ball (carry pose) but rolled toward wheels-up and
+        # past the double-jump window so has_flip is False — must reset to flick.
+        cx = bx + random.uniform(-90, 90)
+        cy = by - attack * random.uniform(40, 140)
+        cz = max(100.0, bz - random.uniform(140, 280))
+        attacker.physics.position = _f32(cx, cy, cz)
+        attacker.physics.linear_velocity = _f32(
+            random.uniform(-80, 80),
+            fwd_v * random.uniform(0.65, 1.0),
+            up_v * random.uniform(0.4, 0.85),
+        )
+        attacker.physics.angular_velocity = _f32(
+            random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5),
+        )
+        # Face net, pitched up a bit, rolled ~halfway toward inverted so wheels
+        # can find the ball without being a pure hover drill.
+        attacker.physics.euler_angles = _f32(
+            random.uniform(0.05, 0.35),
+            attack * np.pi / 2.0,
+            random.uniform(1.2, 2.0) * random.choice([-1.0, 1.0]),  # ~70–115° roll
+        )
+        attacker.boost_amount = random.uniform(60, 100)
+        attacker.on_ground = False
+        attacker.has_jumped = True
+        attacker.has_flipped = False
+        attacker.has_double_jumped = False
+        attacker.air_time_since_jump = DOUBLEJUMP_MAX_DELAY + 0.25  # no flip
+
+        for d in defenders:
+            self._park_defender(d)
+
     def _active_defender(self, car, bx: float, by: float, attack: float) -> None:
         """Position a car as an ACTIVE defender (not parked at the net): goal-side
         of the ball — between the ball and the net the attacker is attacking — at a
@@ -326,4 +379,8 @@ class CurriculumStateMutator(StateMutator[GameState]):
                 + self.ground_dribble_w + self.ground_to_air_w):
             self._ground_to_air_setup(state)
         else:
-            self._flip_reset_setup(state)
+            # Split flip_reset_w mass ~50/50: classic hover FR vs mid-carry FR.
+            if random.random() < 0.5:
+                self._flip_reset_setup(state)
+            else:
+                self._air_dribble_flip_reset_setup(state)

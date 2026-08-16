@@ -618,11 +618,17 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
     def __init__(
         self,
         obtain_flip_weight: float = 1.0,
-        hit_ball_weight: float = 1.0,
+        hit_ball_weight: float = 1.5,     # post-reset hit pays more than obtain
         min_ball_z: float = GOAL_HEIGHT * 0.55,
         min_wheels_cos: float = 0.80,      # ~36° cone; wheels must be aimed at ball
         max_car_ball_dist: float = 260.0,  # keep it local so it’s really a reset contact
-        require_airborne: bool = True
+        require_airborne: bool = True,
+        # Power-scale the post-reset hit by goalward ball speed (and Δv).
+        # Weak taps still pay power_floor; a hard goalward smash approaches 1x+.
+        power_speed_target: float = 1200.0,
+        power_floor: float = 0.35,
+        power_dv_target: float = 600.0,
+        power_dv_weight: float = 0.35,
     ):
         self.obtain_flip_weight = obtain_flip_weight
         self.hit_ball_weight = hit_ball_weight
@@ -630,21 +636,28 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
         self.min_wheels_cos = min_wheels_cos
         self.max_car_ball_dist = max_car_ball_dist
         self.require_airborne = require_airborne
+        self.power_speed_target = power_speed_target
+        self.power_floor = power_floor
+        self.power_dv_target = power_dv_target
+        self.power_dv_weight = power_dv_weight
 
         self.prev_state = None
         self.has_reset = None
         self.has_flipped = None
+        self.prev_ball_vel = None
 
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         self.prev_state = initial_state
         self.has_reset = set()
         self.has_flipped = set()
+        self.prev_ball_vel = np.array(initial_state.ball.linear_velocity, dtype=float)
 
     def get_rewards(self, agents: List[AgentID], state: GameState,
                     is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
                     shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
 
         rewards = {k: 0.0 for k in agents}
+        ball_vel = np.array(state.ball.linear_velocity, dtype=float)
 
         for agent in agents:
             car = state.cars[agent]
@@ -683,8 +696,21 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
 
             if touched and agent in self.has_flipped:
                 self.has_flipped.remove(agent)
-                rewards[agent] += self.hit_ball_weight
+                # Power: goalward ball speed + impulse on the ball after the reset-flip.
+                goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+                to_goal = np.array([0.0, goal_y - state.ball.position[1], 0.0], dtype=float)
+                to_goal_u = to_goal / _safe_norm(to_goal)
+                goalward_speed = max(0.0, float(np.dot(ball_vel, to_goal_u)))
+                speed_scale = min(1.25, goalward_speed / max(1.0, self.power_speed_target))
+                dv = _safe_norm(ball_vel - self.prev_ball_vel)
+                dv_scale = min(1.0, dv / max(1.0, self.power_dv_target))
+                power = self.power_floor + (1.0 - self.power_floor) * (
+                    (1.0 - self.power_dv_weight) * speed_scale
+                    + self.power_dv_weight * dv_scale
+                )
+                rewards[agent] += self.hit_ball_weight * power
 
+        self.prev_ball_vel = ball_vel
         self.prev_state = state
         return rewards
     
