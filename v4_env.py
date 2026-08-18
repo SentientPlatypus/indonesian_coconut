@@ -43,6 +43,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         SpeedTowardBallReward, InAirReward, FaceBallReward, FlickReward,
         AerialDistanceReward, BoostChangeReward, BoostKeepReward, AngVelReward,
         OneVOneRecoverReward, NoBoostOverextendReward, SafeBoostCollectReward,
+        OpponentPossessionSpaceReward,
     )
     from rewards.freestyleMechs import (
         AirdribbleReward, AirDribbleSequenceReward, WallPopSetupReward, FlipResetReward,
@@ -110,7 +111,14 @@ def _reward_fn(cfg: Dict[str, Any]):
         # v7 (user): REVERT bumps to the GOALDIRECTED6 level (0.35). The v6.2 0.65
         # increase regressed air-dribble finishing + recoveries in-game vs Nexto,
         # so BUMPS was worse than GOALDIRECTED6. Back to the validated 0.35.
-        (DemoReward(bump_acceleration_reward=0.35), w["demo"]),
+        # Base bump 0.35 (GOALDIRECTED6 / v7). Optional aerial_attack_extra (config)
+        # gates a higher payout only for airborne + attacking-half + boost bumps —
+        # air-dribble bumps into Nexto's challenge without a global bump raise.
+        (DemoReward(
+            bump_acceleration_reward=0.35,
+            aerial_attack_extra=cfg.get("aerial_bump_extra", 0.0),
+            aerial_attack_min_boost=cfg.get("aerial_bump_min_boost", 20.0),
+        ), w["demo"]),
         # v5 (user): punish overextending grounded + deep + low boost. REVERTED in
         # v6 (user: made the bot too passive/slow) — disabled via weight 0 in config.
         (NoBoostOverextendReward(min_boost=25.0, deadzone_frac=0.10),
@@ -129,6 +137,9 @@ def _reward_fn(cfg: Dict[str, Any]):
         (SafeBoostCollectReward(target_boost=cfg["safe_boost_target"],
                                 min_ball_dist=cfg["safe_boost_min_ball_dist"]),
          w.get("safe_boost", 0.0)),
+        # v9 bump_shadow (user on V10STRONG vs Nexto): "we stay close when Nexto
+        # has possession, then he flicks and scores". Shadow at a gap instead.
+        (OpponentPossessionSpaceReward(), w.get("shadow_space", 0.0)),
         (AngVelReward(), w["ang_vel"]),
     )
 

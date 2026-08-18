@@ -369,10 +369,18 @@ class BoostKeepReward(RewardFunction[AgentID, GameState, float]):
     
 class DemoReward(RewardFunction[AgentID, GameState, float]):
     def __init__(self, attacker_reward: float = 1.0, victim_punishment: float = 1.0,
-                 bump_acceleration_reward: float = 0.0):
+                 bump_acceleration_reward: float = 0.0,
+                 # Offensive aerial bump bonus (user / v8 notes): do NOT raise the
+                 # global bump rate (v6.2 0.65 regressed). Extra payout only when
+                 # airborne + attacking half + enough boost — i.e. air-dribble bumps
+                 # into a challenger near their net.
+                 aerial_attack_extra: float = 0.0,
+                 aerial_attack_min_boost: float = 20.0):
         self.attacker_reward = attacker_reward
         self.victim_punishment = victim_punishment
         self.bump_acceleration_reward = bump_acceleration_reward
+        self.aerial_attack_extra = aerial_attack_extra
+        self.aerial_attack_min_boost = aerial_attack_min_boost
 
         self.prev_state = None
 
@@ -395,7 +403,14 @@ class DemoReward(RewardFunction[AgentID, GameState, float]):
                     acceleration = np.linalg.norm(state.cars[victim].physics.linear_velocity
                                                   - self.prev_state.cars[victim].physics.linear_velocity)
                     is_teammate = car.team_num == victim_car.team_num
-                    reward = self.bump_acceleration_reward * acceleration / CAR_MAX_SPEED
+                    bump_scale = self.bump_acceleration_reward
+                    if (self.aerial_attack_extra > 0.0
+                            and (not car.on_ground)
+                            and car.boost_amount >= self.aerial_attack_min_boost):
+                        attack = -1.0 if car.is_orange else 1.0
+                        if attack * float(car.physics.position[1]) > 0.0:  # attacking half
+                            bump_scale = self.bump_acceleration_reward + self.aerial_attack_extra
+                    reward = bump_scale * acceleration / CAR_MAX_SPEED
                     rewards[agent] += reward if not is_teammate else -reward
 
         self.prev_state = state
@@ -437,6 +452,91 @@ class NoBoostOverextendReward(RewardFunction[AgentID, GameState, float]):
             deficit = (self.min_boost - car.boost_amount) / self.min_boost   # 0..1
             depth_frac = min(1.0, (depth - self.deadzone) / (1.0 - self.deadzone))
             rewards[a] = -self.weight * deficit * depth_frac
+        return rewards
+
+
+class OpponentPossessionSpaceReward(RewardFunction[AgentID, GameState, float]):
+    """When the opponent has ground control, don't crowd into flick range.
+
+    In-game (user vs Nexto on V10STRONG): we sit too close while they dribble,
+    they flick, and they score. This pays for shadowing at a challengeable gap
+    (goal-side) and lightly penalizes being inside flick range. Positive-first:
+    the band reward is the main signal; the crowd penalty is a soft floor.
+    """
+
+    def __init__(
+        self,
+        opp_control_radius: float = 380.0,
+        ball_max_z: float = 280.0,
+        crowd_dist: float = 700.0,
+        ideal_min: float = 950.0,
+        ideal_max: float = 1700.0,
+        far_dist: float = 2400.0,
+        per_second: float = 1.0,
+        crowd_penalty_per_second: float = 1.2,
+    ):
+        self.opp_control_radius = opp_control_radius
+        self.ball_max_z = ball_max_z
+        self.crowd_dist = crowd_dist
+        self.ideal_min = ideal_min
+        self.ideal_max = ideal_max
+        self.far_dist = far_dist
+        self.per_tick = per_second / TICKS_PER_SECOND
+        self.crowd_per_tick = crowd_penalty_per_second / TICKS_PER_SECOND
+
+    def reset(self, agents, initial_state, shared_info):
+        pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball = state.ball.position
+        ball_z = float(ball[2])
+        if ball_z > self.ball_max_z:
+            return rewards
+
+        for a in agents:
+            me = state.cars[a]
+            # Find the (single) opponent in 1v1.
+            opp = None
+            for oid, ocar in state.cars.items():
+                if oid != a and ocar.team_num != me.team_num:
+                    opp = ocar
+                    break
+            if opp is None or opp.is_demoed:
+                continue
+
+            me_pos = np.array(me.physics.position, dtype=float)
+            opp_pos = np.array(opp.physics.position, dtype=float)
+            ball_pos = np.array(ball, dtype=float)
+            d_me = float(np.linalg.norm(me_pos - ball_pos))
+            d_opp = float(np.linalg.norm(opp_pos - ball_pos))
+
+            # Opponent has ground-ish control: closer than us and cradling the ball.
+            if d_opp > self.opp_control_radius or d_opp >= d_me:
+                continue
+
+            attack = -1.0 if me.is_orange else 1.0
+            # Goal-side of the ball (between ball and our net) — shadow, don't dive past.
+            goal_side = (attack * float(me_pos[1])) < (attack * float(ball_pos[1]))
+            if not goal_side:
+                # Mild nudge to get back goal-side rather than sitting past the ball.
+                rewards[a] -= 0.35 * self.per_tick
+                continue
+
+            if d_me < self.crowd_dist:
+                # Inside flick range — the failure mode vs Nexto.
+                scale = 1.0 - (d_me / max(self.crowd_dist, 1.0))
+                rewards[a] -= self.crowd_per_tick * scale
+            elif d_me <= self.ideal_max:
+                # Ideal shadow band: peak at midpoint of [ideal_min, ideal_max].
+                mid = 0.5 * (self.ideal_min + self.ideal_max)
+                half = 0.5 * (self.ideal_max - self.ideal_min)
+                band = max(0.0, 1.0 - abs(d_me - mid) / max(half, 1.0))
+                rewards[a] += self.per_tick * band
+            elif d_me < self.far_dist:
+                # Still goal-side but a bit soft — small retain so we don't camp forever.
+                fade = 1.0 - (d_me - self.ideal_max) / max(self.far_dist - self.ideal_max, 1.0)
+                rewards[a] += 0.25 * self.per_tick * max(0.0, fade)
         return rewards
 
 
