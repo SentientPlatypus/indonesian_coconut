@@ -540,6 +540,281 @@ class OpponentPossessionSpaceReward(RewardFunction[AgentID, GameState, float]):
         return rewards
 
 
+class PressureFlickToGoalReward(RewardFunction[AgentID, GameState, float]):
+    """When WE cradle the ball and the opponent is near (open field, not on a wall),
+    flick it away toward their net.
+
+    Complements OpponentPossessionSpaceReward (defense) and the generic FlickReward.
+    FlickReward often zeros under real challenge because of its ETA-advantage gate —
+    exactly when we want a pressure flick. This channel pays for that play:
+    possession + opp close + floor (not wall) + goalward Δv.
+    """
+
+    def __init__(
+        self,
+        velocity_threshold: float = 450.0,
+        dribble_radius: float = 200.0,
+        min_ball_height: float = 100.0,
+        max_ball_height: float = 320.0,
+        opp_near_dist: float = 900.0,
+        wall_x_thresh: float = 3200.0,
+        wall_z_thresh: float = 280.0,
+        min_goalward: float = 400.0,
+    ):
+        self.velocity_threshold = velocity_threshold
+        self.dribble_radius = dribble_radius
+        self.min_ball_height = min_ball_height
+        self.max_ball_height = max_ball_height
+        self.opp_near_dist = opp_near_dist
+        self.wall_x_thresh = wall_x_thresh
+        self.wall_z_thresh = wall_z_thresh
+        self.min_goalward = min_goalward
+        self.last_ball_velocity = None
+        self.last_touch_agent = None
+
+    def reset(self, agents, initial_state, shared_info):
+        self.last_ball_velocity = np.array(initial_state.ball.linear_velocity, dtype=float)
+        self.last_touch_agent = None
+
+    def _on_wall(self, car) -> bool:
+        pos = car.physics.position
+        # Side-wall / elevated wall surface — skip; those plays are wall-pop / air-dribble.
+        return abs(float(pos[0])) >= self.wall_x_thresh or float(pos[2]) >= self.wall_z_thresh
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball_vel = np.array(state.ball.linear_velocity, dtype=float)
+        ball_pos = np.array(state.ball.position, dtype=float)
+        delta_v = float(np.linalg.norm(ball_vel - self.last_ball_velocity))
+
+        if (
+            delta_v > self.velocity_threshold
+            and self.last_touch_agent is not None
+            and self.last_touch_agent in state.cars
+        ):
+            agent = self.last_touch_agent
+            car = state.cars[agent]
+            car_pos = np.array(car.physics.position, dtype=float)
+            dist = float(np.linalg.norm(ball_pos - car_pos))
+            ball_z = float(ball_pos[2])
+
+            cradling = (
+                dist < self.dribble_radius
+                and self.min_ball_height <= ball_z <= self.max_ball_height
+            )
+            if cradling and not self._on_wall(car):
+                # Opponent near enough to threaten the 50/50 / steal.
+                opp_near = False
+                for oid, opp in state.cars.items():
+                    if oid == agent or opp.team_num == car.team_num or opp.is_demoed:
+                        continue
+                    if float(np.linalg.norm(
+                        np.array(opp.physics.position, dtype=float) - ball_pos
+                    )) < self.opp_near_dist:
+                        opp_near = True
+                        break
+
+                if opp_near:
+                    attack = -1.0 if car.is_orange else 1.0
+                    goalward = float(ball_vel[1]) * attack
+                    if goalward >= self.min_goalward:
+                        # Magnitude × how goalward (positive-first; no ETA gate).
+                        power = min(delta_v / BALL_MAX_SPEED, 1.0)
+                        aim = min(goalward / BALL_MAX_SPEED, 1.0)
+                        reward = power * (0.45 + 0.55 * aim)
+                        if car.is_flipping:
+                            reward *= 1.35
+                        rewards[agent] = float(reward)
+
+        self.last_ball_velocity = ball_vel
+        for a in agents:
+            if state.cars[a].ball_touches > 0:
+                self.last_touch_agent = a
+                break
+        return rewards
+
+
+class ContestHighBallReward(RewardFunction[AgentID, GameState, float]):
+    """Go up for high balls instead of waiting underneath.
+
+    User vs Nexto: opponent jumps/aerials a high ball while we sit on the floor
+    under it. AerialBoostTowardBallReward only pays once already airborne +
+    boosting — it never pulls us OFF the ground. This is the missing positive
+    signal: when the ball is elevated and we're below it in range, reward
+    climbing and closing the 3D gap.
+    """
+
+    def __init__(
+        self,
+        ball_z_min: float = 420.0,
+        max_horiz_dist: float = 1600.0,
+        under_margin: float = 60.0,
+        per_second: float = 1.0,
+        climb_w: float = 1.0,
+        close_w: float = 1.2,
+        air_bonus: float = 0.35,
+    ):
+        self.ball_z_min = ball_z_min
+        self.max_horiz_dist = max_horiz_dist
+        self.under_margin = under_margin
+        self.per_tick = per_second / TICKS_PER_SECOND
+        self.climb_w = climb_w
+        self.close_w = close_w
+        self.air_bonus = air_bonus
+        self.prev_dist: Dict[Any, float] = {}
+
+    def reset(self, agents, initial_state, shared_info):
+        ball = np.array(initial_state.ball.position, dtype=float)
+        self.prev_dist = {}
+        for a in agents:
+            car = np.array(initial_state.cars[a].physics.position, dtype=float)
+            self.prev_dist[a] = float(np.linalg.norm(ball - car))
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball = np.array(state.ball.position, dtype=float)
+        ball_z = float(ball[2])
+        if ball_z < self.ball_z_min:
+            for a in agents:
+                car = np.array(state.cars[a].physics.position, dtype=float)
+                self.prev_dist[a] = float(np.linalg.norm(ball - car))
+            return rewards
+
+        # Higher balls matter more (up to ~ceiling).
+        height_scale = min(1.0, (ball_z - self.ball_z_min) / max(CEILING_Z - self.ball_z_min, 1.0))
+        height_scale = 0.45 + 0.55 * height_scale
+
+        for a in agents:
+            car = state.cars[a]
+            if car.is_demoed:
+                continue
+            pos = np.array(car.physics.position, dtype=float)
+            vel = np.array(car.physics.linear_velocity, dtype=float)
+            to_ball = ball - pos
+            dist = float(np.linalg.norm(to_ball))
+            horiz = float(np.linalg.norm(to_ball[:2]))
+            prev = self.prev_dist.get(a, dist)
+            self.prev_dist[a] = dist
+
+            # Only when under the ball and in horizontal reach (the "waiting below" case).
+            if float(pos[2]) > ball_z - self.under_margin:
+                continue
+            if horiz > self.max_horiz_dist:
+                continue
+
+            # Climb toward it (upward speed).
+            climb = max(0.0, float(vel[2])) / CAR_MAX_SPEED
+            # Close 3D gap this tick.
+            closed = max(0.0, prev - dist) / max(CAR_MAX_SPEED / TICKS_PER_SECOND, 1e-6)
+            closed = min(closed, 1.0)
+            # Alignment of velocity with direction to ball.
+            align = 0.0
+            speed = float(np.linalg.norm(vel))
+            if speed > 50.0 and dist > 1e-3:
+                align = max(0.0, float(np.dot(vel, to_ball)) / (speed * dist))
+
+            r = (self.climb_w * climb + self.close_w * closed) * (0.5 + 0.5 * align)
+            if not car.on_ground:
+                r *= (1.0 + self.air_bonus)
+            rewards[a] = float(self.per_tick * height_scale * r)
+        return rewards
+
+
+class PossessionRangeCarryReward(RewardFunction[AgentID, GameState, float]):
+    """Opp far → bring the ball upfield; within ~half field → start the play.
+
+    User clarification: we don't *have* to ground-dribble when Nexto is far —
+    just advance the ball toward their half. Once they're about half a field
+    away, that's when we start the aerial play (air dribble / freestyle). The
+    far-opp soft-gate on AirdribbleReward still suppresses launching the carry
+    from across the map. Positive-only.
+    """
+
+    def __init__(
+        self,
+        half_field: float = 5120.0,
+        control_radius: float = 550.0,
+        play_min_opp: float = 700.0,
+        per_second: float = 1.0,
+    ):
+        self.half_field = half_field
+        self.control_radius = control_radius
+        self.play_min_opp = play_min_opp
+        self.per_tick = per_second / TICKS_PER_SECOND
+        self.prev_ball_y: Dict[Any, float] = {}
+        self.last_touch_agent = None
+
+    def reset(self, agents, initial_state, shared_info):
+        y = float(initial_state.ball.position[1])
+        self.prev_ball_y = {a: y for a in agents}
+        self.last_touch_agent = None
+
+    def _opp_dist(self, agent, state) -> float:
+        me = state.cars[agent]
+        me_pos = np.array(me.physics.position, dtype=float)
+        best = None
+        for oid, opp in state.cars.items():
+            if oid == agent or opp.team_num == me.team_num or opp.is_demoed:
+                continue
+            d = float(np.linalg.norm(np.array(opp.physics.position, dtype=float) - me_pos))
+            best = d if best is None else min(best, d)
+        return best if best is not None else 1e9
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball = np.array(state.ball.position, dtype=float)
+        bvel = np.array(state.ball.linear_velocity, dtype=float)
+        ball_y = float(ball[1])
+        ball_z = float(ball[2])
+
+        for a in agents:
+            if state.cars[a].ball_touches > 0:
+                self.last_touch_agent = a
+
+        for a in agents:
+            car = state.cars[a]
+            if car.is_demoed:
+                continue
+            car_pos = np.array(car.physics.position, dtype=float)
+            dist = float(np.linalg.norm(ball - car_pos))
+            # "Our ball": recent touch or still near it.
+            ours = (self.last_touch_agent == a) or (dist < self.control_radius)
+            prev_y = self.prev_ball_y.get(a, ball_y)
+            self.prev_ball_y[a] = ball_y
+            if not ours:
+                continue
+
+            opp_d = self._opp_dist(a, state)
+            attack = -1.0 if car.is_orange else 1.0
+            goalward_v = max(0.0, float(bvel[1]) * attack) / CAR_MAX_SPEED
+            goalward_v = min(goalward_v, 1.0)
+            # Ball actually moved toward their net this tick.
+            y_progress = max(0.0, (ball_y - prev_y) * attack)
+            y_progress = min(y_progress / max(CAR_MAX_SPEED / TICKS_PER_SECOND, 1e-6), 1.0)
+
+            if opp_d > self.half_field:
+                # FAR: just bring it up the field (any sensible advance — not a
+                # forced ground cradle).
+                rewards[a] = float(self.per_tick * (0.85 * goalward_v + 0.65 * y_progress))
+            elif opp_d >= self.play_min_opp:
+                # WITHIN ~half field: start the PLAY — get under / up with the
+                # ball for the air-dribble freestyle sequence.
+                under = (not car.on_ground) and ball_z > 220.0 and dist < 520.0
+                popping = float(bvel[2]) > 250.0 and ball_z > 180.0 and dist < 600.0
+                if under or popping:
+                    # Stronger as we first enter the half-field window.
+                    prox = 1.0 - (opp_d - self.play_min_opp) / max(
+                        self.half_field - self.play_min_opp, 1.0
+                    )
+                    prox = float(np.clip(prox, 0.30, 1.0))
+                    lift = min(1.0, max(0.0, float(bvel[2])) / 1200.0)
+                    air = 0.0 if car.on_ground else 0.45
+                    rewards[a] = float(
+                        self.per_tick * prox * (0.55 + 0.7 * lift + air + 0.35 * goalward_v)
+                    )
+        return rewards
+
+
 class SafeBoostCollectReward(RewardFunction[AgentID, GameState, float]):
     """v6 (user): 'go for more boost when we're in a safe position' — the POSITIVE
     counterpart to the removed NoBoostOverextendReward. Instead of punishing being

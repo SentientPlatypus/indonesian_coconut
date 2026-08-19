@@ -386,6 +386,11 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         finish_max_z: float = GOAL_HEIGHT * 0.78,
         finish_fade_z: float = GOAL_HEIGHT * 1.5,
         finish_floor: float = 0.40,
+
+        # v9.3 (user): don't air-dribble from across the map when opp is far —
+        # full carry pay only once they're within ~half field; farther → floor.
+        opp_close_dist: float = 0.0,       # 0 disables; typically BACK_WALL_Y (~5120)
+        far_opp_floor: float = 0.12,
     ):
         self.goal_speed_target = goal_speed_target
         self.push_floor = push_floor
@@ -393,6 +398,8 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         self.finish_max_z = finish_max_z
         self.finish_fade_z = finish_fade_z
         self.finish_floor = finish_floor
+        self.opp_close_dist = float(opp_close_dist)
+        self.far_opp_floor = float(far_opp_floor)
         self.sustain_ramp = sustain_ramp
         self.sustain_cap = sustain_cap
         self.sustain_streak = {}
@@ -594,6 +601,26 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         # sustain-duration escalation: reward grows with unbroken carry length
         self.sustain_streak[a] = self.sustain_streak.get(a, 0) + 1
         sustain_mult = 1.0 + self.sustain_ramp * min(self.sustain_streak[a], self.sustain_cap)
+
+        # FAR-OPP GATE (v9.3): full air-dribble pay once opp is within ~half field;
+        # farther away, fade toward far_opp_floor so we don't launch from mid-own-half.
+        if self.opp_close_dist > 1.0:
+            opp_d = None
+            for oid, opp in state.cars.items():
+                if oid == a or opp.team_num == car.team_num or opp.is_demoed:
+                    continue
+                d = float(np.linalg.norm(
+                    np.array(opp.physics.position, dtype=float) - car_pos
+                ))
+                opp_d = d if opp_d is None else min(opp_d, d)
+            if opp_d is not None and opp_d > self.opp_close_dist:
+                excess = (opp_d - self.opp_close_dist) / self.opp_close_dist
+                fade = min(1.0, excess)
+                score *= max(
+                    self.far_opp_floor,
+                    1.0 - fade * (1.0 - self.far_opp_floor),
+                )
+
         rewards[a] = score * self.per_tick * sustain_mult
 
         # Optional debug

@@ -43,7 +43,8 @@ def _reward_fn(cfg: Dict[str, Any]):
         SpeedTowardBallReward, InAirReward, FaceBallReward, FlickReward,
         AerialDistanceReward, BoostChangeReward, BoostKeepReward, AngVelReward,
         OneVOneRecoverReward, NoBoostOverextendReward, SafeBoostCollectReward,
-        OpponentPossessionSpaceReward,
+        OpponentPossessionSpaceReward, PressureFlickToGoalReward, ContestHighBallReward,
+        PossessionRangeCarryReward,
     )
     from rewards.freestyleMechs import (
         AirdribbleReward, AirDribbleSequenceReward, WallPopSetupReward, FlipResetReward,
@@ -90,6 +91,9 @@ def _reward_fn(cfg: Dict[str, Any]):
             goal_speed_target=cfg["airdribble_goal_speed_target"],
             push_floor=cfg["airdribble_push_floor"],
             finish_floor=cfg["airdribble_finish_floor"],
+            # v9.3: full air-dribble pay once opp within ~half field.
+            opp_close_dist=cfg.get("airdribble_opp_close", 0.0),
+            far_opp_floor=cfg.get("airdribble_far_floor", 0.12),
         ), w["airdribble"]),
         (AirDribbleSequenceReward(
             # v2 (user feedback): the dense "glue" carry is boost-INefficient so
@@ -140,6 +144,17 @@ def _reward_fn(cfg: Dict[str, Any]):
         # v9 bump_shadow (user on V10STRONG vs Nexto): "we stay close when Nexto
         # has possession, then he flicks and scores". Shadow at a gap instead.
         (OpponentPossessionSpaceReward(), w.get("shadow_space", 0.0)),
+        # v9.1 (user): when WE have possession and opp is near (not on a wall),
+        # flick it away toward net. Separate from FlickReward — that channel's
+        # ETA gate often zeros the exact pressure-flick we want here.
+        (PressureFlickToGoalReward(), w.get("pressure_flick", 0.0)),
+        # v9.2 (user): Nexto beats us by jumping/aerialing high balls while we
+        # wait underneath. Climb/close on elevated balls (positive-only).
+        (ContestHighBallReward(), w.get("high_ball", 0.0)),
+        # v9.3 (user): opp far → ground dribble; within ~half field → start G2A.
+        (PossessionRangeCarryReward(
+            half_field=cfg.get("range_carry_half_field", 5120.0),
+        ), w.get("range_carry", 0.0)),
         (AngVelReward(), w["ang_vel"]),
     )
 
