@@ -5,7 +5,10 @@ The **brain** is Claude running in `/loop`; the **hands** are two scripts:
 Element bot). Each loop iteration trains a while, evaluates, then keeps or
 reverts a single reward/curriculum tweak. State lives in `data/loop_state/`.
 
-- **Yardstick:** `Rlgym-v2-to-rlbot-v5/src/element_killer.pt` (fallback `47-3.pt`).
+- **Yardstick (both, every eval):** `checkpoints_to_test/PPO_POLICY_V4_V10STRONG.pt`
+  **and** `Rlgym-v2-to-rlbot-v5/src/element_killer.pt`. Same 4×300g protocol on each.
+  Promote bar is still a clear 0.7086 vs V10STRONG (plus a confirm 1200g). Element is
+  the original strength floor — report it every tick; do not drop it.
 - **Search:** eval-gated hill-climb — one clamped knob per phase (`loop_config.TUNABLES`).
 - **Safety:** training always resumes from the tracked *best* checkpoint, so a
   bad tweak is discarded; an all-time-best guardrail prevents slow drift.

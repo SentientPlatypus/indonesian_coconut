@@ -2,10 +2,18 @@
 
 Test **`PPO_POLICY_V4_V13NG19.pt`** in RLBot vs Nexto.
 
-**This is not a headless upgrade.** V10FR2 remains the strongest model on the yardstick
+**This is not a headless upgrade.** V10FR2 remains the strongest model vs V10STRONG
 (0.704 over 2400g). Push reason: you asked for this snapshot after liking V12FB's
 front-of-ball bumps but calling many of them soft wheel hits. Headless cannot measure
 bumper-vs-wheel quality.
+
+## Headless metric (both yardsticks)
+
+Official headless eval is now **1200g vs V10STRONG and 1200g vs Element Killer**.
+A single frozen opponent missed real regressions (v6.2 outscored Element ~0.50 but
+lost in-game to GOALDIRECTED6 at ~0.46). Two bars catch different things: Element
+is the original strength floor; V10STRONG is the current bar (promote only on a
+clear 0.7086 vs V10STRONG, confirmed on a second 1200g).
 
 ## Headless (1200g vs V10STRONG)
 
@@ -17,6 +25,13 @@ bumper-vs-wheel quality.
 | cap (air-dribble spawn) | 0.90 | 0.92 | 0.91 |
 
 Packs: 0.703 / 0.737 / 0.683 / 0.690.
+
+## Headless (1200g vs Element Killer)
+
+Element pool for this snapshot is running (`eval_v13ng19_el_1..4.json`). Historical
+Element anchors: GOALDIRECTED6 ~0.46 (beat Nexto 7–6), V7STRONG 0.553, V8STRONG 0.571,
+BUMPSHADOW34 0.646, V10STRONG 0.652. We do not yet have a 1200g Element pool for
+V10FR2 / V12FB; those will be filled the same way going forward.
 
 Best *consistent* v13 read at 578M into the phase (all four packs 0.68–0.74). The
 noisier v13ng7 0.708 had one 0.76 pack and did not repeat. The next snapshot after
