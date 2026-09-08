@@ -28,10 +28,17 @@ Packs: 0.703 / 0.737 / 0.683 / 0.690.
 
 ## Headless (1200g vs Element Killer)
 
-Element pool for this snapshot is running (`eval_v13ng19_el_1..4.json`). Historical
-Element anchors: GOALDIRECTED6 ~0.46 (beat Nexto 7–6), V7STRONG 0.553, V8STRONG 0.571,
-BUMPSHADOW34 0.646, V10STRONG 0.652. We do not yet have a 1200g Element pool for
-V10FR2 / V12FB; those will be filled the same way going forward.
+| | V10STRONG (anchor) | BUMPSHADOW34 | **V13NG19** |
+|---|---:|---:|---:|
+| score vs Element | 0.652 | 0.646 | **0.678** |
+| style (air dribbles/game) | — | 0.889 | 0.636 |
+| flip resets / game | — | 0.117 | 0.122 |
+
+Packs: 0.683 / 0.687 / 0.690 / 0.653.
+
+Clears the original Element floor (GOALDIRECTED6 ~0.46, V7STRONG 0.553, V8STRONG 0.571)
+and sits above V10STRONG's own Element pool (0.652). We do not yet have a 1200g
+Element pool for V10FR2 / V12FB.
 
 Best *consistent* v13 read at 578M into the phase (all four packs 0.68–0.74). The
 noisier v13ng7 0.708 had one 0.76 pack and did not repeat. The next snapshot after
