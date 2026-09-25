@@ -103,6 +103,8 @@ if __name__ == "__main__":
     min_inference_size = max(1, int(round(n_proc * 0.9)))
 
     log_wandb = os.environ.get("V4_WANDB", "1") != "0"   # ON by default now
+    ppo = cfg["ppo"]
+    print(f"[V4] ppo={ppo} zero_sum={cfg.get('zero_sum')}")
 
     learner = Learner(
         build_rlgym_v2_env,
@@ -112,17 +114,20 @@ if __name__ == "__main__":
         add_unix_timestamp=False,            # stable, discoverable path the loop reads
         min_inference_size=min_inference_size,
         metrics_logger=None,
-        ppo_batch_size=100_000,
+        ppo_batch_size=int(ppo["ppo_batch_size"]),
         # Layer sizes MUST match the 17.9B checkpoint to resume — do not change.
         policy_layer_sizes=[2048, 2048, 1024, 1024],
         critic_layer_sizes=[2048, 2048, 1024, 1024],
-        ts_per_iteration=100_000,
-        exp_buffer_size=300_000,
-        ppo_minibatch_size=50_000,
+        ts_per_iteration=int(ppo["ts_per_iteration"]),
+        exp_buffer_size=int(ppo["exp_buffer_size"]),
+        ppo_minibatch_size=int(ppo["ppo_minibatch_size"]),
         ppo_ent_coef=cfg["ppo_ent_coef"],    # tunable knob (loop may nudge it)
-        policy_lr=1e-4,
-        critic_lr=1e-4,
-        ppo_epochs=2,
+        policy_lr=float(ppo["policy_lr"]),
+        critic_lr=float(ppo["critic_lr"]),
+        ppo_epochs=int(ppo["ppo_epochs"]),
+        ppo_clip_range=float(ppo["ppo_clip_range"]),
+        gae_gamma=float(ppo["gae_gamma"]),
+        gae_lambda=float(ppo["gae_lambda"]),
         standardize_returns=True,
         standardize_obs=False,
         save_every_ts=1_000_000,

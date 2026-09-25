@@ -100,6 +100,47 @@ Create on iteration 0 if missing. Schema:
 
 Read `state.json` first; recover whatever phase you're in.
 
+> **PLATEAU-BREAK EXPERIMENTS** (active since 2026-09-25; supersedes the
+> single-line triple/confirm evals below). User: "we have plateaued — make
+> informed reward/curriculum experiments every 5 loop iterations, revertible,
+> benchmark vs multiple models." State: `data/loop_state/experiments/registry.json`
+> (queue, hypothesis, evidence, config, revert recipe per experiment).
+> Status + mechanical decision: `python tools/exp_status.py`.
+>
+> - **Iteration** = one benchmark panel on a new snapshot of the running
+>   experiment, snapshots ≥ ~90M steps apart (~3.5–4h). Snapshot the newest
+>   complete `data/checkpoints/V4/<ts>` to `V4_best/exp<ID>_<ts>`, then
+>   `nohup tools/exp_panel.sh <ID>_it<N> <snap> <experiment resume snap> > data/loop_state/panel_<ID>_it<N>.log &`
+>   and `python tools/exp_status.py --record <ID>_it<N> <snap>` once it prints ALL_DONE.
+> - **Panel** (4 packs in parallel, ~1h): head-to-head vs the experiment's own
+>   launch checkpoint (`base`, 1200g — the primary "moved off the plateau"
+>   signal), V10STRONG 1200g (promote-bar continuity), Element 600g, V13NG54
+>   600g (in-game liked), V13NG119 600g (confirmed champion), GOALDIRECTED6 300g
+>   and BUMPSHADOW34 300g (held-out older lineages the user liked vs Nexto), plus
+>   the 200-episode air-dribble cap eval. Control reading: panel `ctrl_52307`.
+> - **Decide every 5 iterations** (pooled last 2 iterations, skips the
+>   post-change readaptation dip): KEEP if base ≥ 0.53 and V10STRONG ≥ 0.725
+>   and Element ≥ 0.72 and style ≥ 0.8; EXTEND once to 8 if base 0.51–0.53 and
+>   rising; else REVERT. Early REVERT from iteration 3 on collapse (base < 0.44,
+>   V10STRONG < 0.66, or style < 0.5). Plateau band for reference: V10STRONG
+>   0.738±0.015, Element 0.743±0.017, NG54 0.534, style 1.13.
+> - **KEEP** → the experiment's best snapshot (base + V10STRONG) becomes
+>   `registry.base_for_next` with its config; `git tag exp-<ID>-keep`. If it also
+>   beats NG119 (≥ 0.55 h2h, or V10STRONG ≥ 0.768 on a 2400g confirm), push it
+>   for the user's in-game A/B like before.
+> - **REVERT** → stop training; `git tag exp-<ID>-revert`; next experiment
+>   resumes from `base_for_next` (unchanged). All knobs are config-gated
+>   (`zero_sum`, `ppo`, `opponent_pool`, `curriculum`) with defaults equal to the
+>   pre-experiment trainer, so reverting is only a config/resume pointer change;
+>   code baseline is git tag `exp-base-v13goalprob`.
+> - **Launch next**: write `experiments/<ID>_<name>.json` = base config + the one
+>   change; relaunch (`script` PTY wrapper, §A.3) with `V4_RESUME_DIR=base_for_next.snap`,
+>   `V4_WANDB_RUN=exp_<ID>_<name>`, log `data/loop_state/train_exp_<ID>_<name>.log`;
+>   move old `data/checkpoints/V4/*` to `V4_prev/` first. Run
+>   `tools/reward_audit.py` on reward changes before launch to verify the effect.
+> - When the queue empties, design new experiments from the results + a fresh
+>   reward audit + `ideas_backlog`; record the evidence for each in the registry.
+
 > **CAPABILITY MODE** (`state.mode == "airdribble_capability"`): the win-rate
 > hill-climb below is SUSPENDED. We found (300-game evals + `tools/eval_airdribble_spawn.py`)
 > that win-rate vs Element is orthogonal to the real goal ("air dribbles when

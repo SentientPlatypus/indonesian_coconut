@@ -52,6 +52,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                    "aerial_front_bump_w": 0.0, "double_tap_w": 0.0,
                    "wall_leak_w": 0.0, "awkward_ball_w": 0.0},
     "ppo_ent_coef": 0.01,
+    # Plateau experiments (defaults reproduce the pre-experiment trainer/rewards).
+    # zero_sum: {reward_weight_key: opp_scale}; see rewards/zero_sum.py.
+    "zero_sum": {},
+    "ppo": {
+        "gae_gamma": 0.99, "gae_lambda": 0.95,
+        "policy_lr": 1e-4, "critic_lr": 1e-4,
+        "ppo_epochs": 2, "ppo_clip_range": 0.2,
+        "ts_per_iteration": 100_000, "ppo_batch_size": 100_000,
+        "ppo_minibatch_size": 50_000, "exp_buffer_size": 300_000,
+    },
 }
 
 # Tunable knobs the hill-climb is allowed to touch: (dotted_path, min, max, step).

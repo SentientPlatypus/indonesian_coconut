@@ -49,7 +49,15 @@ def _reward_fn(cfg: Dict[str, Any]):
     from rewards.freestyleMechs import (
         AirdribbleReward, AirDribbleSequenceReward, WallPopSetupReward, FlipResetReward,
     )
+    from rewards.zero_sum import ZeroSumReward
     w = cfg["reward_weights"]
+    # Plateau experiments: {weight_key: opp_scale}. Empty == original rewards.
+    zs = cfg.get("zero_sum", {}) or {}
+
+    def _z(key, fn):
+        s = float(zs.get(key, 0.0))
+        return ZeroSumReward(fn, s) if s > 0 else fn
+
     return CombinedReward(
         (GoalReward(), w["goal"]),
         # v13 (user on V13NG65 vs Nexto): good air dribbles, finishes hit the
@@ -57,14 +65,14 @@ def _reward_fn(cfg: Dict[str, Any]):
         # — the mouth vs bar/post signal. 26 -> 40 in bump_shadow_config.
         (GoalProbReward(), w["goal_prob"]),
         (BallTravelReward(), w["ball_travel"]),
-        (VelocityBallToGoalReward(), w["vel_ball_to_goal"]),
-        (GoalDistReward(), w["goal_dist"]),
-        (SpeedTowardBallReward(), w["speed_to_ball"]),
-        (FaceBallReward(), w["face_ball"]),
-        (TouchReward(), w["touch"]),
+        (_z("vel_ball_to_goal", VelocityBallToGoalReward()), w["vel_ball_to_goal"]),
+        (_z("goal_dist", GoalDistReward()), w["goal_dist"]),
+        (_z("speed_to_ball", SpeedTowardBallReward()), w["speed_to_ball"]),
+        (_z("face_ball", FaceBallReward()), w["face_ball"]),
+        (_z("touch", TouchReward()), w["touch"]),
         # Zero-sum exclusive possession: +r / -r on retain and steal.
         (PossessionReward(), w["possession"]),
-        (EnergyReward(), w["energy"]),
+        (_z("energy", EnergyReward()), w["energy"]),
         (BoostKeepReward(), w["boost_keep"]),
         (BoostChangeReward(lose_weight=0.8), w["boost_change"]),
         # per_second_scale x8: this class still divides by TICKS_PER_SECOND
@@ -291,5 +299,9 @@ def build_env(cfg: Dict[str, Any], for_training: bool = True):
 
     if for_training:
         from rlgym_ppo.util import RLGymV2GymWrapper
+        pool = cfg.get("opponent_pool") or {}
+        if float(pool.get("frac", 0.0)) > 0 and pool.get("paths"):
+            from opponent_pool import OpponentPoolEnv
+            rlgym_env = OpponentPoolEnv(rlgym_env, pool["paths"], pool["frac"])
         return RLGymV2GymWrapper(rlgym_env)
     return rlgym_env
