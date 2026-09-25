@@ -44,7 +44,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         AerialDistanceReward, BoostChangeReward, BoostKeepReward, AngVelReward,
         OneVOneRecoverReward, NoBoostOverextendReward, SafeBoostCollectReward,
         OpponentPossessionSpaceReward, PressureFlickToGoalReward, ContestHighBallReward,
-        PossessionRangeCarryReward,
+        PossessionRangeCarryReward, ClearPathFinishReward, AerialFrontBumpSetupReward,
     )
     from rewards.freestyleMechs import (
         AirdribbleReward, AirDribbleSequenceReward, WallPopSetupReward, FlipResetReward,
@@ -52,6 +52,9 @@ def _reward_fn(cfg: Dict[str, Any]):
     w = cfg["reward_weights"]
     return CombinedReward(
         (GoalReward(), w["goal"]),
+        # v13 (user on V13NG65 vs Nexto): good air dribbles, finishes hit the
+        # crossbar or the post. GoalProb is goal-view solid angle from the ball
+        # — the mouth vs bar/post signal. 26 -> 40 in bump_shadow_config.
         (GoalProbReward(), w["goal_prob"]),
         (BallTravelReward(), w["ball_travel"]),
         (VelocityBallToGoalReward(), w["vel_ball_to_goal"]),
@@ -59,6 +62,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         (SpeedTowardBallReward(), w["speed_to_ball"]),
         (FaceBallReward(), w["face_ball"]),
         (TouchReward(), w["touch"]),
+        # Zero-sum exclusive possession: +r / -r on retain and steal.
         (PossessionReward(), w["possession"]),
         (EnergyReward(), w["energy"]),
         (BoostKeepReward(), w["boost_keep"]),
@@ -91,9 +95,16 @@ def _reward_fn(cfg: Dict[str, Any]):
             goal_speed_target=cfg["airdribble_goal_speed_target"],
             push_floor=cfg["airdribble_push_floor"],
             finish_floor=cfg["airdribble_finish_floor"],
-            # v9.3: full air-dribble pay once opp within ~half field.
-            opp_close_dist=cfg.get("airdribble_opp_close", 0.0),
-            far_opp_floor=cfg.get("airdribble_far_floor", 0.12),
+            # v9.5: takeoff speed scales with remaining distance to their net.
+            # Far + fast (wall carry) still pays; far + slow ground pop does not.
+            # Opp-distance fade retired — it punished good long launches.
+            takeoff_speed_near=cfg.get("airdribble_takeoff_speed_near", 350.0),
+            takeoff_speed_far=cfg.get("airdribble_takeoff_speed_far", 1700.0),
+            takeoff_dist_ref=cfg.get("airdribble_takeoff_dist_ref", 9000.0),
+            takeoff_floor=cfg.get("airdribble_takeoff_floor", 0.08),
+            pressure_dist=cfg.get("airdribble_pressure_dist", 1200.0),
+            pressure_floor=cfg.get("airdribble_pressure_floor", 0.10),
+            advantage_floor=cfg.get("airdribble_advantage_floor", 0.25),
         ), w["airdribble"]),
         (AirDribbleSequenceReward(
             # v2 (user feedback): the dense "glue" carry is boost-INefficient so
@@ -104,10 +115,32 @@ def _reward_fn(cfg: Dict[str, Any]):
             min_start_boost=0.30, min_sustain_boost=0.08, touch_bonus=0.20,   # v6 REVERT to v4 (inert on 0-100): the v5 30/8 gate made it pass up chains w/o boost -> passive/slow (user)
             chain_bonus=0.35, forward_goal_w=2.0, forward_car_w=1.0,
             carry_scale=1.7 / (2 * 5120),   # was 1/(2*5120): pay ~1.7x for ground covered between touches
+            takeoff_speed_near=cfg.get("airdribble_takeoff_speed_near", 350.0),
+            takeoff_speed_far=cfg.get("airdribble_takeoff_speed_far", 1700.0),
+            takeoff_dist_ref=cfg.get("airdribble_takeoff_dist_ref", 9000.0),
+            takeoff_floor=cfg.get("airdribble_takeoff_floor", 0.08),
+            pressure_dist=cfg.get("airdribble_pressure_dist", 1200.0),
+            pressure_floor=cfg.get("airdribble_pressure_floor", 0.10),
+            advantage_floor=cfg.get("airdribble_advantage_floor", 0.25),
         ), w["airdribble_seq"]),
         (WallPopSetupReward(), w["wall_pop"]),
         (FlickReward(), w["flick"]),
-        (FlipResetReward(), w["flip_reset"]),
+        # v10 (user: "never seen a flip reset in game"). Staged now: approach-under
+        # (dense, only when the flip is already spent so a reset is actually
+        # available) -> obtain -> hold control -> USE the flip. The old version was
+        # two sparse events behind a ~36deg wheel cone, so PPO had no gradient to
+        # find it. Nothing here is negative: plain air dribbles are unaffected.
+        (FlipResetReward(
+            min_wheels_cos=cfg.get("fr_min_wheels_cos", 0.55),
+            approach_per_second=cfg.get("fr_approach_per_second", 0.30),
+            approach_radius=cfg.get("fr_approach_radius", 700.0),
+            approach_budget_ms=cfg.get("fr_approach_budget_ms", 1500),
+            hold_per_second=cfg.get("fr_hold_per_second", 0.25),
+            hold_window_ms=cfg.get("fr_hold_window_ms", 1200),
+            use_window_ms=cfg.get("fr_use_window_ms", 2500),
+            hit_ball_weight=cfg.get("fr_use_weight", 2.5),
+            obtain_decay=cfg.get("fr_obtain_decay", 0.55),
+        ), w["flip_reset"]),
         (OneVOneRecoverReward(), w["recover"]),
         # v4 (user): enable BUMPS (not just demos) — reward knocking the defender
         # off course proportional to how hard the bump displaces them, to beat
@@ -118,11 +151,35 @@ def _reward_fn(cfg: Dict[str, Any]):
         # Base bump 0.35 (GOALDIRECTED6 / v7). Optional aerial_attack_extra (config)
         # gates a higher payout only for airborne + attacking-half + boost bumps —
         # air-dribble bumps into Nexto's challenge without a global bump raise.
+        # v11 (user on V10FR2): air dribbles got nicer but the air-dribble BUMP
+        # stopped producing goals — "we need to hit Nexto harder". The aerial
+        # bonus is now superlinear in impact and gated on a real air-dribble bump
+        # (ball up + nearby) that knocks the defender away from the ball.
+        # v12 (user on V11HB): carry-bumps dump the ball off course. Extra now
+        # requires leaving the ball, boosting in FRONT of it, then knocking
+        # the defender away.
+        # v13 (user on V12FB): wheel bumps are soft. Extra also requires the
+        # nose pointed at their net and the bumper (not wheels) into the victim.
+        # Ground bumps get the same nose/bumper extra (not the global base raise).
         (DemoReward(
             bump_acceleration_reward=0.35,
             aerial_attack_extra=cfg.get("aerial_bump_extra", 0.0),
             aerial_attack_min_boost=cfg.get("aerial_bump_min_boost", 20.0),
+            aerial_hard_target=cfg.get("aerial_bump_hard_target", 900.0),
+            aerial_hard_power=cfg.get("aerial_bump_hard_power", 2.0),
+            aerial_ball_min_z=cfg.get("aerial_bump_ball_min_z", 300.0),
+            aerial_ball_max_dist=cfg.get("aerial_bump_ball_max_dist", 1800.0),
+            aerial_away_weight=cfg.get("aerial_bump_away_weight", 0.5),
+            aerial_carry_min_dist=cfg.get("aerial_bump_carry_min_dist", 300.0),
+            aerial_front_margin=cfg.get("aerial_bump_front_margin", 80.0),
+            aerial_require_boost=cfg.get("aerial_bump_require_boost", True),
+            aerial_nose_goal_min=cfg.get("aerial_bump_nose_goal_min", 0.40),
+            aerial_nose_hit_min=cfg.get("aerial_bump_nose_hit_min", 0.10),
+            ground_attack_extra=cfg.get("ground_bump_extra", 0.0),
+            ground_ball_max_dist=cfg.get("ground_bump_ball_max_dist", 2200.0),
+            ground_carry_min_dist=cfg.get("ground_bump_carry_min_dist", 180.0),
         ), w["demo"]),
+        (AerialFrontBumpSetupReward(), w.get("front_bump_setup", 0.0)),
         # v5 (user): punish overextending grounded + deep + low boost. REVERTED in
         # v6 (user: made the bot too passive/slow) — disabled via weight 0 in config.
         (NoBoostOverextendReward(min_boost=25.0, deadzone_frac=0.10),
@@ -147,14 +204,27 @@ def _reward_fn(cfg: Dict[str, Any]):
         # v9.1 (user): when WE have possession and opp is near (not on a wall),
         # flick it away toward net. Separate from FlickReward — that channel's
         # ETA gate often zeros the exact pressure-flick we want here.
+        # v9.4: wider opp window (1400) so flicks fire earlier under approach.
         (PressureFlickToGoalReward(), w.get("pressure_flick", 0.0)),
         # v9.2 (user): Nexto beats us by jumping/aerialing high balls while we
         # wait underneath. Climb/close on elevated balls (positive-only).
         (ContestHighBallReward(), w.get("high_ball", 0.0)),
-        # v9.3 (user): opp far → ground dribble; within ~half field → start G2A.
+        # v9.5: aerial start only when takeoff speed matches remaining
+        # distance to their net; under pressure stay on the flick/shot path.
         (PossessionRangeCarryReward(
-            half_field=cfg.get("range_carry_half_field", 5120.0),
+            takeoff_speed_near=cfg.get("airdribble_takeoff_speed_near", 350.0),
+            takeoff_speed_far=cfg.get("airdribble_takeoff_speed_far", 1700.0),
+            takeoff_dist_ref=cfg.get("airdribble_takeoff_dist_ref", 9000.0),
+            takeoff_ok_frac=cfg.get("airdribble_takeoff_ok_frac", 0.85),
+            pressure_dist=cfg.get("airdribble_pressure_dist", 1200.0),
         ), w.get("range_carry", 0.0)),
+        # v10 (user): once the defender is beaten and the lane is open, stop
+        # setting up another aerial — put velocity on the ball. The matching
+        # AD-start fade is advantage_ad_mult inside the two air-dribble rewards.
+        (ClearPathFinishReward(
+            min_lead=cfg.get("clear_path_min_lead", 900.0),
+            lane_radius=cfg.get("clear_path_lane_radius", 1100.0),
+        ), w.get("clear_path", 0.0)),
         (AngVelReward(), w["ang_vel"]),
     )
 
@@ -173,6 +243,13 @@ def _state_mutator(cfg: Dict[str, Any], for_training: bool):
             flip_reset_w=c["flip_reset_w"], wall_pop_w=c.get("wall_pop_w", 0.0),
             ground_dribble_w=c.get("ground_dribble_w", 0.0),
             ground_to_air_w=c.get("ground_to_air_w", 0.0),
+            aerial_front_bump_w=c.get("aerial_front_bump_w", 0.0),
+            double_tap_w=c.get("double_tap_w", 0.0),
+            wall_leak_w=c.get("wall_leak_w", 0.0),
+            awkward_ball_w=c.get("awkward_ball_w", 0.0),
+            # v10: shift FR mass toward the NATURAL stage as the mechanic lands.
+            fr_easy_frac=c.get("fr_easy_frac", 0.25),
+            fr_mid_frac=c.get("fr_mid_frac", 0.35),
         )
     else:
         reset_mutator = KickoffMutator()   # eval = standard kickoff games

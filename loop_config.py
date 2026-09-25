@@ -48,7 +48,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "safe_boost_target": 80.0,
     "safe_boost_min_ball_dist": 1400.0,
     "curriculum": {"kickoff_w": 0.40, "wall_pop_w": 0.20, "air_dribble_w": 0.25,
-                   "flip_reset_w": 0.15, "ground_dribble_w": 0.0, "ground_to_air_w": 0.0},
+                   "flip_reset_w": 0.15, "ground_dribble_w": 0.0, "ground_to_air_w": 0.0,
+                   "aerial_front_bump_w": 0.0, "double_tap_w": 0.0,
+                   "wall_leak_w": 0.0, "awkward_ball_w": 0.0},
     "ppo_ent_coef": 0.01,
 }
 
@@ -64,7 +66,7 @@ TUNABLES: List[Tuple[str, float, float, float]] = [
     ("reward_weights.airdribble_seq",     8.0,  50.0,  8.0),
     ("reward_weights.wall_pop",           0.0,  24.0,  4.0),
     ("reward_weights.flick",              4.0,  24.0,  4.0),
-    ("reward_weights.goal_prob",          8.0,  20.0,  2.0),
+    ("reward_weights.goal_prob",          8.0,  48.0,  2.0),
     ("reward_weights.possession",        30.0,  75.0,  8.0),
     # boost economics: the pursuit signal vs the hoarding penalty — the lever
     # for "pops the ball but won't boost after it"
@@ -98,26 +100,30 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+_CURRICULUM_NON_KICKOFF = (
+    "wall_pop_w", "air_dribble_w", "flip_reset_w",
+    "ground_dribble_w", "ground_to_air_w", "aerial_front_bump_w",
+    "double_tap_w", "wall_leak_w", "awkward_ball_w",
+)
+
+
 def normalize_curriculum(cfg: Dict[str, Any]) -> None:
     """Keep curriculum weights >= 0 and re-derive kickoff_w so they sum to 1.
 
-    The hill-climb only ever moves wall_pop_w / air_dribble_w / flip_reset_w;
-    kickoff_w is whatever is left (floored at 0.20 so we never starve
-    real-game play).
+    All non-kickoff setup weights are included (not just wall_pop / air_dribble
+    / flip_reset). Kickoff is whatever is left, floored at 0.20 so we never
+    starve real-game play.
     """
     c = cfg["curriculum"]
-    wp = _clamp(float(c.get("wall_pop_w", 0.0)), 0.0, 0.70)
-    ad = _clamp(float(c.get("air_dribble_w", 0.30)), 0.0, 0.70)
-    fr = _clamp(float(c.get("flip_reset_w", 0.20)), 0.0, 0.70)
-    if wp + ad + fr > 0.80:                  # leave >= 0.20 for kickoffs
-        scale = 0.80 / (wp + ad + fr)
-        wp *= scale
-        ad *= scale
-        fr *= scale
-    c["wall_pop_w"] = round(wp, 4)
-    c["air_dribble_w"] = round(ad, 4)
-    c["flip_reset_w"] = round(fr, 4)
-    c["kickoff_w"] = round(1.0 - wp - ad - fr, 4)
+    weights = {k: max(0.0, float(c.get(k, 0.0))) for k in _CURRICULUM_NON_KICKOFF}
+    total = sum(weights.values())
+    if total > 0.80:                         # leave >= 0.20 for kickoffs
+        scale = 0.80 / total
+        for k in weights:
+            weights[k] *= scale
+    for k, v in weights.items():
+        c[k] = round(v, 4)
+    c["kickoff_w"] = round(1.0 - sum(weights.values()), 4)
 
 
 def propose(best_cfg: Dict[str, Any], rng) -> Tuple[Dict[str, Any], str]:

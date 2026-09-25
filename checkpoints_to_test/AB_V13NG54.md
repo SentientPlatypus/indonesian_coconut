@@ -2,6 +2,10 @@
 
 Test **`PPO_POLICY_V4_V13NG54.pt`** in RLBot vs Nexto.
 
+**In-game yardstick (2026-09-16).** User: NG54 plays way better vs Nexto than
+V13NG65 (the later headless best, 0.738 / 2400g). Headless missed that. NG54 is
+now a third official eval opponent alongside V10STRONG and Element Killer.
+
 **This is a headless upgrade.** First confirmed beat of V10FR2 on the promote bar:
 **0.735 over 2400g vs V10STRONG** (first 0.729, confirm 0.741). V10FR2 was 0.704 / 2400g.
 Headless is still blind to bump quality — judge that in-game vs **V12FB** (last liked)

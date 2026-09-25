@@ -2,6 +2,11 @@
 
 Test **`PPO_POLICY_V4_V13NG65.pt`** in RLBot vs Nexto.
 
+**In-game (2026-09-16): user says V13NG54 plays way better vs Nexto than this.**
+Headless ranked NG65 higher (0.738 vs 0.735). Trust the in-game read. NG54 is now
+a headless yardstick so later snaps are measured against the bot that actually
+felt good.
+
 **This is a headless upgrade over V13NG54.** Best confirmed snapshot vs V10STRONG:
 **0.738 over 2400g** (first 0.746, confirm 0.730). NG54 was 0.735 / 2400g — about
 +7 goals. Headless is still blind to bump quality — judge that in-game vs **V13NG54**
