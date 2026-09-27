@@ -147,7 +147,7 @@ E2G1 quick read: ~0.1 double taps/game, ~0 real resets.
 |---|---|---|
 | E1ZS1 | expE1_52398221424 | E1 check 1 |
 | E1BSTYLE | expE1b_53146341650 | E1b check 5 (kept) |
-| **E2G1** | expE2_53240356340 | E2 check 1, **current recommendation** |
+| **E2G1** | expE2_53240356340 | E2 check 1, **current recommendation**. User in-game: "very good", **beats Nexto 26-6** (previous recorded best: GOALDIRECTED6 7-6) |
 
 ## Reverting
 
