@@ -88,7 +88,9 @@ def main():
         o = s["opponents"]
         row = " ".join(f"{k}={o[k]['score']:.3f}" for k in
                        ["base", "v10strong", "element", "ng54", "ng119", "gd6", "bs34"] if k in o)
-        print(f"  it{i} {it['panel']}: {row} style={s.get('style')} cap={s.get('cap')}")
+        m = s.get("mech", {})
+        mech = f" resets/g={m.get('br_pg')} dtaps/g={m.get('dt_pg')} dt_goals/g={m.get('dtg_pg')}" if m else ""
+        print(f"  it{i} {it['panel']}: {row} style={s.get('style')} cap={s.get('cap')}{mech}")
     if m:
         print("  pooled last2: " + " ".join(f"{k}={v:.3f}" for k, v in m.items() if v is not None))
     print(f"RECOMMENDATION: {rec}")

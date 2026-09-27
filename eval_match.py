@@ -100,8 +100,12 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
     cfg = load_config(os.environ.get("V4_LOOP_CONFIG"))
     env = build_env(cfg, for_training=False)
 
+    from rewards.freestyleMechs import DoubleTapTracker, wheels_on_ball
+
     cand_goals = opp_goals = truncs = 0
     air_touch_steps = air_dribbles = flip_resets = 0
+    ball_resets = double_taps = dt_goals = 0
+    dt_tracker = DoubleTapTracker()
     for g in range(games):
         obs = env.reset()
         state = env.state
@@ -122,6 +126,8 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
         chain_start_tick = 0
         last_air_touch_tick = -10**9
         prev_has_flip = state.cars[cand_agent].has_flip
+        dt_tracker.reset(state)
+        last_dt_tick = None
 
         terminated = False
         while True:
@@ -136,8 +142,15 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
             car = s.cars[cand_agent]
             airborne = not car.on_ground
             if airborne and car.has_flip and not prev_has_flip:
-                flip_resets += 1            # regained flip mid-air == reset
+                flip_resets += 1            # legacy counter (misses real resets)
+            if car.has_flip and not prev_has_flip and wheels_on_ball(
+                    car, s.ball.position, require_ground=False):
+                ball_resets += 1            # real flip reset: wheels-on-ball contact
             prev_has_flip = car.has_flip
+            for agent, kind, _ in dt_tracker.update(s):
+                if agent == cand_agent and kind == "second":
+                    double_taps += 1
+                    last_dt_tick = s.tick_count
             if airborne and car.ball_touches > 0 and s.ball.position[2] > 300.0:
                 air_touch_steps += 1
                 if s.tick_count - last_air_touch_tick > 180:   # >1.5s gap: new chain
@@ -160,6 +173,8 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
         if terminated and env.state.goal_scored:
             if env.state.scoring_team == cand_team:
                 cand_goals += 1
+                if last_dt_tick is not None and env.state.tick_count - last_dt_tick <= 360:
+                    dt_goals += 1
             else:
                 opp_goals += 1
         else:
@@ -180,6 +195,9 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
         "cand_air_touch_steps": air_touch_steps,
         "cand_air_dribbles": air_dribbles,
         "cand_flip_resets": flip_resets,
+        "cand_ball_resets": ball_resets,
+        "cand_double_taps": double_taps,
+        "cand_double_tap_goals": dt_goals,
         "style": round(air_dribbles / games, 4),   # air dribbles per game
         "deterministic": deterministic,
     }

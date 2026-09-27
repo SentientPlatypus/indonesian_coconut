@@ -23,12 +23,16 @@ def main(tag):
         r = json.load(open(f))
         cand = r["candidate"]
         b = by.setdefault(name, {"goals": 0, "decided": 0, "games": 0, "air_dribbles": 0,
-                                 "flip_resets": 0, "packs": []})
+                                 "flip_resets": 0, "ball_resets": 0, "double_taps": 0,
+                                 "dt_goals": 0, "packs": []})
         b["goals"] += r["candidate_goals"]
         b["decided"] += r["decided"]
         b["games"] += r["games"]
         b["air_dribbles"] += r["cand_air_dribbles"]
         b["flip_resets"] += r["cand_flip_resets"]
+        b["ball_resets"] += r.get("cand_ball_resets", 0)
+        b["double_taps"] += r.get("cand_double_taps", 0)
+        b["dt_goals"] += r.get("cand_double_tap_goals", 0)
         b["packs"].append(round(r["score"], 4))
     out = {"tag": tag, "candidate": cand, "time": int(time.time()), "opponents": {}}
     for name, b in by.items():
@@ -39,8 +43,17 @@ def main(tag):
             "games": b["games"],
             "style": round(b["air_dribbles"] / max(1, b["games"]), 4),
             "fr_pg": round(b["flip_resets"] / max(1, b["games"]), 4),
+            "br_pg": round(b["ball_resets"] / max(1, b["games"]), 4),
+            "dt_pg": round(b["double_taps"] / max(1, b["games"]), 4),
+            "dtg_pg": round(b["dt_goals"] / max(1, b["games"]), 4),
             "packs": b["packs"],
         }
+    # mechanic rates pooled over every matchup (rare events need all ~4200 games)
+    g = sum(b["games"] for b in by.values())
+    out["mech"] = {k: round(sum(b[src] for b in by.values()) / max(1, g), 4)
+                   for k, src in (("fr_pg", "flip_resets"), ("br_pg", "ball_resets"),
+                                  ("dt_pg", "double_taps"), ("dtg_pg", "dt_goals"))}
+    out["mech"]["games"] = g
     cap = os.path.join(d, "cap.json")
     if os.path.isfile(cap):
         out["cap"] = json.load(open(cap)).get("completed_frac")
@@ -54,10 +67,12 @@ def main(tag):
     new = not os.path.isfile(csv)
     with open(csv, "a") as fh:
         if new:
-            fh.write("time,tag,candidate," + ",".join(order) + ",style,cap\n")
+            fh.write("time,tag,candidate," + ",".join(order) + ",style,cap,br_pg,dt_pg,dtg_pg\n")
         vals = [f"{out['opponents'][k]['score']:.4f}" if k in out["opponents"] else "" for k in order]
+        m = out["mech"]
         fh.write(f"{out['time']},{tag},{cand}," + ",".join(vals) +
-                 f",{out.get('style') or ''},{out.get('cap') or ''}\n")
+                 f",{out.get('style') or ''},{out.get('cap') or ''}"
+                 f",{m['br_pg']},{m['dt_pg']},{m['dtg_pg']}\n")
     print(json.dumps(out, indent=2))
 
 

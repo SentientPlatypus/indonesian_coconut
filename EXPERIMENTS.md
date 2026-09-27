@@ -104,14 +104,39 @@ each <= 0.4% of the signal.
 | 2 | 0.642 | 0.933 | 0.915 | 0.850 | 0.828 | 0.943 | 0.940 | 0.85 | 0.875 |
 | 3 | 0.640 | 0.948 | 0.928 | 0.850 | 0.827 | 0.950 | 0.923 | 0.93 | 0.87 |
 
-## Queue
+## Queue (in run order)
 
 - **E3** — 25% of games vs a frozen pool of older bots (V13NG65, V13NG19,
   V12FB, V11HB, V10FR2, V10BS10, V9STRONG, V8STRONG, BUMPSHADOW112,
   FLIPRESET3; disjoint from the panel). Counters self-play overfitting.
   Code: `opponent_pool.py`, config key `opponent_pool`.
+- **E6 — double taps** (user request 2026-09-27). No double-tap reward
+  existed; only the goal paid. Probe on the double-tap training spawns with
+  E2G1: 21 aerial touches into the attacking backboard but only 2 follow-ups.
+  Change: new `DoubleTapReward` (small payout for an aerial touch into their
+  backboard, main payout for the airborne follow-up touch scaled by ball
+  speed toward goal, bonus if it scores within 3 s) at weight 80;
+  double-tap curriculum 0.05 -> 0.10. Config `E6_double_tap.json`.
+  Keep: double taps/game >= 1.5x before, V10 >= 0.90, base >= 0.47,
+  style >= 0.75.
+- **E7 — flip resets, bug fix** (user request 2026-09-27). Root cause found:
+  RocketSim grants a reset through wheels-on-ball contact, which it reports
+  as the car being *on the ground*. `FlipResetReward` wiped its state on any
+  ground contact, so its obtain / hold / use payouts have never been able to
+  fire in training; only the approach shaping ever paid. That is why resets
+  never showed up in-game despite several redesigns. Verified with a scripted
+  wheels-up approach (old reward 0 at the reset, fixed 1.02). E2G1 gets 2
+  real resets in 120 flip-reset spawns. Change: `fr_on_ball_contact=true`,
+  flip-reset curriculum 0.10 -> 0.15, easy-stage share 0.25 -> 0.40. Config
+  `E7_flip_reset_fix.json`. Keep: real resets/game >= 2x before (and
+  >= 0.05), V10 >= 0.90, base >= 0.47, style >= 0.75.
 - **E4** — more kickoff-state training (non-kickoff curriculum weights x0.68).
 - **E5** — PPO batch 100k -> 200k (updates are tiny: KL ~0.0016).
+
+New panel metrics from E2 check 4 on (pooled over all ~4200 panel games):
+`resets/g` = real flip resets off the ball (the old `fr_pg` counter missed
+them), `dtaps/g` = double taps, `dt_goals/g` = goals within 3 s of one.
+E2G1 quick read: ~0.1 double taps/game, ~0 real resets.
 - Backlog: scale up or prune the <=0.4% behaviour rewards; overlap collection
   and learning (GPU ~7% utilised); more PPO epochs / higher LR; zero-sum the
   freestyle terms at 0.5 (deny the opponent's air dribbles).

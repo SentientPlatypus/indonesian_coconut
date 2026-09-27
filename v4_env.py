@@ -48,6 +48,7 @@ def _reward_fn(cfg: Dict[str, Any]):
     )
     from rewards.freestyleMechs import (
         AirdribbleReward, AirDribbleSequenceReward, WallPopSetupReward, FlipResetReward,
+        DoubleTapReward,
     )
     from rewards.zero_sum import ZeroSumReward
     w = cfg["reward_weights"]
@@ -148,7 +149,12 @@ def _reward_fn(cfg: Dict[str, Any]):
             use_window_ms=cfg.get("fr_use_window_ms", 2500),
             hit_ball_weight=cfg.get("fr_use_weight", 2.5),
             obtain_decay=cfg.get("fr_obtain_decay", 0.55),
+            on_ball_contact=cfg.get("fr_on_ball_contact", False),
         ), w["flip_reset"]),
+        (DoubleTapReward(
+            bounce_weight=cfg.get("dt_bounce_weight", 0.2),
+            goal_bonus=cfg.get("dt_goal_bonus", 1.5),
+        ), w.get("double_tap", 0.0)),
         (OneVOneRecoverReward(), w["recover"]),
         # v4 (user): enable BUMPS (not just demos) — reward knocking the defender
         # off course proportional to how hard the bump displaces them, to beat

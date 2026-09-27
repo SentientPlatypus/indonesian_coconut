@@ -965,7 +965,12 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
         use_window_ms: int = 2500,
         # anti-farm
         obtain_decay: float = 0.55,
+        # RocketSim grants the reset through wheels-on-ball "ground" contact;
+        # False keeps the pre-2026-09-27 behaviour, where that contact cleared
+        # all stage state so OBTAIN/HOLD/USE could never fire.
+        on_ball_contact: bool = False,
     ):
+        self.on_ball_contact = on_ball_contact
         self.obtain_flip_weight = obtain_flip_weight
         self.hit_ball_weight = hit_ball_weight
         self.min_ball_z = min_ball_z
@@ -1024,15 +1029,18 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
 
         for agent in agents:
             car = state.cars[agent]
+            on_ball = self.on_ball_contact and wheels_on_ball(car, ball_pos)
 
             # landing ends the possession: clear all stage state
-            if car.on_ground:
+            if car.on_ground and not on_ball:
                 self._clear_airtime(agent)
                 continue
 
-            touched = (car.ball_touches > 0)
             had_flip_prev = self.prev_state.cars[agent].has_flip
             got_flip_now = (car.has_flip and not had_flip_prev)
+            touched = (car.ball_touches > 0) or on_ball or (
+                self.on_ball_contact and got_flip_now
+                and wheels_on_ball(car, ball_pos, require_ground=False))
 
             car_pos = np.array(car.physics.position, dtype=float)
             car_ball = ball_pos - car_pos
@@ -1101,6 +1109,145 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
 
         self.prev_ball_vel = ball_vel
         self.prev_state = state
+        return rewards
+
+
+GOAL_HALF_WIDTH = 893.0
+
+
+def wheels_on_ball(car, ball_pos, max_dist: float = 220.0, require_ground: bool = True) -> bool:
+    """RocketSim reports wheel contact with the BALL as on_ground=True (that is
+    how the flip reset is granted, often with ball_touches == 0). True when the
+    car is "grounded" far from every arena surface and next to the ball.
+    require_ground=False: with 8 ticks per step the car may already have left
+    the ball by the end of the step in which the flip came back."""
+    if require_ground and not car.on_ground:
+        return False
+    x, y, z = (float(v) for v in car.physics.position)
+    if z < 300.0 or z > 1850.0 or abs(x) > 3850.0 or abs(y) > 4870.0:
+        return False
+    return _safe_norm(np.asarray(ball_pos, dtype=float) - np.array([x, y, z])) <= max_dist
+
+
+class DoubleTapTracker:
+    """Detects double taps: an agent's touch sends the ball into the backboard
+    it attacks (back wall outside the goal mouth), nobody else touches it and
+    it does not reach the floor, then the same agent touches it again while
+    airborne within `window_s`. Shared by DoubleTapReward and eval_match.
+
+    `update(state)` returns a list of (agent, kind, info) events, kind in
+    {"bounce", "second"}; "bounce" only fires for an airborne first touch.
+    """
+
+    def __init__(self, window_s: float = 2.0, wall_zone: float = 4850.0,
+                 floor_z: float = 140.0, min_second_z: float = 200.0,
+                 allow_untouched: bool = False):
+        # allow_untouched: also arm the attacker on a backboard bounce nobody
+        # caused (curriculum balls spawned flying at the wall = backboard read).
+        self.allow_untouched = allow_untouched
+        self.window_ticks = int(window_s * TICKS_PER_SECOND)
+        self.wall_zone = wall_zone
+        self.floor_z = floor_z
+        self.min_second_z = min_second_z
+        self.reset(None)
+
+    def reset(self, state: Optional[GameState]) -> None:
+        self.last_toucher = None
+        self.last_touch_air = False
+        self.armed = None          # (agent, bounce_tick)
+        self.prev_vy = None if state is None else float(state.ball.linear_velocity[1])
+
+    def update(self, state: GameState):
+        events = []
+        ball = state.ball
+        bx, by, bz = (float(v) for v in ball.position)
+        vy = float(ball.linear_velocity[1])
+        touchers = [a for a, c in state.cars.items() if c.ball_touches > 0]
+
+        if self.armed is not None:
+            agent, t0 = self.armed
+            if state.tick_count - t0 > self.window_ticks or bz < self.floor_z:
+                self.armed = None
+            elif touchers:
+                car = state.cars.get(agent)
+                if (touchers == [agent] and car is not None and not car.on_ground
+                        and bz >= self.min_second_z):
+                    events.append((agent, "second", {"tick": state.tick_count}))
+                self.armed = None
+
+        if len(touchers) == 1:
+            self.last_toucher = touchers[0]
+            self.last_touch_air = not state.cars[touchers[0]].on_ground
+        elif len(touchers) > 1:
+            self.last_toucher = None
+
+        if self.prev_vy is not None and abs(by) > self.wall_zone and self.prev_vy * vy < 0 \
+                and np.sign(self.prev_vy) == np.sign(by) \
+                and not (abs(bx) < GOAL_HALF_WIDTH and bz < GOAL_HEIGHT):
+            a = self.last_toucher
+            if a is not None and not touchers and a in state.cars:
+                attack_sign = -1.0 if state.cars[a].is_orange else 1.0
+                if np.sign(by) == attack_sign:
+                    self.armed = (a, state.tick_count)
+                    if self.last_touch_air:
+                        events.append((a, "bounce", {"z": bz}))
+            elif a is None and not touchers and self.allow_untouched:
+                side = [ag for ag, c in state.cars.items()
+                        if np.sign(by) == (-1.0 if c.is_orange else 1.0)]
+                if len(side) == 1:
+                    self.armed = (side[0], state.tick_count)
+            self.last_toucher = None
+        self.prev_vy = vy
+        return events
+
+
+class DoubleTapReward(RewardFunction[AgentID, GameState, float]):
+    """Pays the double tap: small event for an aerial touch into the attacking
+    backboard, main event for the airborne follow-up touch (power-scaled by
+    ball speed toward the goal centre), plus a bonus if that agent's team
+    scores within `goal_window_s` of the follow-up. Positive-only."""
+
+    def __init__(self, bounce_weight: float = 0.2, second_weight: float = 1.0,
+                 goal_bonus: float = 1.5, power_floor: float = 0.3,
+                 power_speed_target: float = 1500.0, goal_window_s: float = 3.0):
+        self.bounce_weight = bounce_weight
+        self.second_weight = second_weight
+        self.goal_bonus = goal_bonus
+        self.power_floor = power_floor
+        self.power_speed_target = power_speed_target
+        self.goal_window_ticks = int(goal_window_s * TICKS_PER_SECOND)
+        self.tracker = DoubleTapTracker(allow_untouched=True)
+        self.pending_goal = {}
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.tracker.reset(initial_state)
+        self.pending_goal = {}
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        ball_pos = np.array(state.ball.position, dtype=float)
+        ball_vel = np.array(state.ball.linear_velocity, dtype=float)
+        for agent, kind, _ in self.tracker.update(state):
+            if agent not in rewards:
+                continue
+            if kind == "bounce":
+                rewards[agent] += self.bounce_weight
+            else:
+                goal_y = -BACK_NET_Y if state.cars[agent].is_orange else BACK_NET_Y
+                to_goal = _unit(np.array([0.0, goal_y, GOAL_HEIGHT * 0.5]) - ball_pos)
+                speed = max(0.0, float(np.dot(ball_vel, to_goal)))
+                scale = min(1.0, speed / self.power_speed_target)
+                rewards[agent] += self.second_weight * (
+                    self.power_floor + (1.0 - self.power_floor) * scale)
+                self.pending_goal[agent] = state.tick_count
+        if self.pending_goal and state.goal_scored:
+            for agent, t in list(self.pending_goal.items()):
+                if (agent in rewards and state.tick_count - t <= self.goal_window_ticks
+                        and state.scoring_team == state.cars[agent].team_num):
+                    rewards[agent] += self.goal_bonus
+            self.pending_goal = {}
         return rewards
 
 
