@@ -140,6 +140,9 @@ Read `state.json` first; recover whatever phase you're in.
 >   `tools/reward_audit.py` on reward changes before launch to verify the effect.
 > - When the queue empties, design new experiments from the results + a fresh
 >   reward audit + `ideas_backlog`; record the evidence for each in the registry.
+> - **User-facing log:** after every panel add the row to the experiment's
+>   table in `EXPERIMENTS.md`; on every decision / push / launch update its
+>   section, the summary table, the pushed list and the queue; commit + push.
 
 > **CAPABILITY MODE** (`state.mode == "airdribble_capability"`): the win-rate
 > hill-climb below is SUSPENDED. We found (300-game evals + `tools/eval_airdribble_spawn.py`)
