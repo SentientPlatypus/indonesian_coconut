@@ -103,6 +103,11 @@ each <= 0.4% of the signal.
 | 1 | 0.640 | 0.948 | 0.945 | 0.838 | 0.817 | 0.943 | 0.947 | 0.90 | 0.835 |
 | 2 | 0.642 | 0.933 | 0.915 | 0.850 | 0.828 | 0.943 | 0.940 | 0.85 | 0.875 |
 | 3 | 0.640 | 0.948 | 0.928 | 0.850 | 0.827 | 0.950 | 0.923 | 0.93 | 0.87 |
+| 4 | 0.631 | 0.931 | 0.922 | 0.837 | 0.805 | 0.930 | 0.913 | 0.91 | 0.855 |
+
+Mechanic baseline (check 4, 4800 games): real flip resets 0.0023/game,
+double taps 0.023/game, double-tap goals 0.0075/game. These are the
+"before" numbers for E6 / E7.
 
 ## Queue (in run order)
 
