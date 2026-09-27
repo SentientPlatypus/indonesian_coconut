@@ -140,6 +140,11 @@ Read `state.json` first; recover whatever phase you're in.
 >   `tools/reward_audit.py` on reward changes before launch to verify the effect.
 > - When the queue empties, design new experiments from the results + a fresh
 >   reward audit + `ideas_backlog`; record the evidence for each in the registry.
+> - Run order is `registry.queue_order`. Experiments with their own
+>   `keep_rule` (E1b, E2, E6, E7) are decided by that rule, not the generic one;
+>   E6/E7 gate on the pooled `mech` rates (`dt_pg`, `br_pg`) vs the last
+>   pre-experiment panel. Rebase each queued config onto `base_for_next.config`
+>   at launch (they were written on top of E2's config).
 > - **User-facing log:** after every panel add the row to the experiment's
 >   table in `EXPERIMENTS.md`; on every decision / push / launch update its
 >   section, the summary table, the pushed list and the queue; commit + push.
