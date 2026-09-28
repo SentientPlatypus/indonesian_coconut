@@ -140,6 +140,8 @@ Read `state.json` first; recover whatever phase you're in.
 >   `tools/reward_audit.py` on reward changes before launch to verify the effect.
 > - When the queue empties, design new experiments from the results + a fresh
 >   reward audit + `ideas_backlog`; record the evidence for each in the registry.
+> - Every wake: do any `state.pending_actions` (one-off user requests), then
+>   remove them.
 > - Run order is `registry.queue_order`. Experiments with their own
 >   `keep_rule` (E1b, E2, E6, E7) are decided by that rule, not the generic one;
 >   E6/E7 gate on the pooled `mech` rates (`dt_pg`, `br_pg`) vs the last
