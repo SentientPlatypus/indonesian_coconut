@@ -87,7 +87,7 @@ each <= 0.4% of the signal.
 | 4 | 0.514 | 0.868 | 0.880 | 0.707 | 0.727 | 0.897 | 0.903 | 0.87 |
 | 5 | 0.517 | 0.887 | 0.870 | 0.740 | 0.737 | 0.897 | 0.900 | 0.79 |
 
-## E2 — longer horizon, gamma 0.99 -> 0.995 — RUNNING
+## E2 — longer horizon, gamma 0.99 -> 0.995 — KEPT
 
 - **Change:** `ppo.gae_gamma` 0.995 (config `E2_gamma0995.json`), resumed from
   `expE1b_53146341650`. Only safe after E1: with the old non-zero-sum shaping
@@ -104,17 +104,35 @@ each <= 0.4% of the signal.
 | 2 | 0.642 | 0.933 | 0.915 | 0.850 | 0.828 | 0.943 | 0.940 | 0.85 | 0.875 |
 | 3 | 0.640 | 0.948 | 0.928 | 0.850 | 0.827 | 0.950 | 0.923 | 0.93 | 0.87 |
 | 4 | 0.631 | 0.931 | 0.922 | 0.837 | 0.805 | 0.930 | 0.913 | 0.91 | 0.855 |
+| 5 | 0.623 | 0.931 | 0.923 | 0.843 | 0.820 | 0.940 | 0.920 | 1.01 | 0.835 |
+
+- **Decision (2026-09-28): KEEP.** Pooled checks 4-5: base 0.627, V10 0.931,
+  style 0.96. The next base is check 1 (**E2G1**, `expE2_53240356340`): best
+  headless and user-confirmed 26-6 vs Nexto; later checks were flat to
+  slightly lower. Tag `exp-E2-keep`.
 
 Mechanic baseline (check 4, 4800 games): real flip resets 0.0023/game,
 double taps 0.023/game, double-tap goals 0.0075/game. These are the
 "before" numbers for E6 / E7.
 
-## Queue (in run order)
+## E3 — frozen-opponent pool — RUNNING (started 2026-09-28 02:25Z)
 
-- **E3** — 25% of games vs a frozen pool of older bots (V13NG65, V13NG19,
-  V12FB, V11HB, V10FR2, V10BS10, V9STRONG, V8STRONG, BUMPSHADOW112,
-  FLIPRESET3; disjoint from the panel). Counters self-play overfitting.
-  Code: `opponent_pool.py`, config key `opponent_pool`.
+- **Change:** 25% of training games put the learner against one of 12 frozen
+  bots instead of itself: V13NG65, V13NG19, V12FB, V11HB, V10FR2, V10BS10,
+  V9STRONG, V8STRONG, BUMPSHADOW112, FLIPRESET3, plus the strong recent
+  E1ZS1 and E1BSTYLE (none are panel opponents). Code `opponent_pool.py`,
+  config `E3_opp_pool.json` (E2 config + `opponent_pool`), resumed from E2G1.
+- **Why:** pure self-play can overfit to its own habits; varied opponents
+  should make it more robust against styles like Nexto's.
+- **Cost:** the frozen bots run on CPU, so collection is slower
+  (~14k -> ~6k steps/s at launch).
+- **Keep rule:** pooled base >= 0.53, V10 >= 0.92, Element >= 0.91,
+  style >= 0.8.
+
+| check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | cap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+
+## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
   existed; only the goal paid. Probe on the double-tap training spawns with
   E2G1: 21 aerial touches into the attacking backboard but only 2 follow-ups.
