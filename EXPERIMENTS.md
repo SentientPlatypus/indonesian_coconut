@@ -115,7 +115,7 @@ Mechanic baseline (check 4, 4800 games): real flip resets 0.0023/game,
 double taps 0.023/game, double-tap goals 0.0075/game. These are the
 "before" numbers for E6 / E7.
 
-## E3 — frozen-opponent pool — RUNNING (started 2026-09-28 02:25Z)
+## E3 — frozen-opponent pool — REVERTED (early, at check 1)
 
 - **Change:** 25% of training games put the learner against one of 12 frozen
   bots instead of itself: V13NG65, V13NG19, V12FB, V11HB, V10FR2, V10BS10,
@@ -131,6 +131,29 @@ double taps 0.023/game, double-tap goals 0.0075/game. These are the
 
 | check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | cap |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | **0.376** | 0.882 | 0.878 | 0.750 | 0.705 | 0.917 | 0.900 | 1.16 | 0.905 |
+
+- **Decision (2026-09-28): early REVERT.** E2G1 beats it 62% (about 9
+  standard errors), and it lost ground to every panel opponent
+  (V10 0.948 -> 0.882, NG54 0.838 -> 0.750), while style went UP.
+  Reading: the frozen bots are much weaker, so riskier play gets rewarded
+  that then fails against strong opponents. With the 40% throughput cost,
+  two more 6-hour checks toward a near-certain revert were not worth it
+  (the protocol normally waits until check 3). Tag `exp-E3-revert`.
+  Possible retry later: a pool of only strong, recent snapshots.
+
+## E6 — double taps — RUNNING (started 2026-09-28 09:15Z)
+
+- **Change:** new `DoubleTapReward` at weight 80 + double-tap curriculum
+  0.05 -> 0.10, on the E2 config, resumed from E2G1. (Details in the queue
+  entry below.)
+- **Before (E2 checks 4-5, 9600 games):** 0.020 double taps/game,
+  0.006 double-tap goals/game.
+- **Keep rule:** double taps/game >= 1.5x before, V10 >= 0.90,
+  base >= 0.47, style >= 0.75.
+
+| check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | dtaps/g | dt goals/g |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
