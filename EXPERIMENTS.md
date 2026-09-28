@@ -142,7 +142,7 @@ double taps 0.023/game, double-tap goals 0.0075/game. These are the
   (the protocol normally waits until check 3). Tag `exp-E3-revert`.
   Possible retry later: a pool of only strong, recent snapshots.
 
-## E6 — double taps — RUNNING (started 2026-09-28 09:15Z)
+## E6 — double taps — REVERTED (no effect, at check 3)
 
 - **Change:** new `DoubleTapReward` at weight 80 + double-tap curriculum
   0.05 -> 0.10, on the E2 config, resumed from E2G1. (Details in the queue
@@ -157,9 +157,32 @@ double taps 0.023/game, double-tap goals 0.0075/game. These are the
 | 1 | 0.483 | 0.933 | 0.905 | 0.852 | 0.808 | 0.957 | 0.917 | 0.96 | 0.023 | 0.006 |
 | 2 | 0.516 | 0.926 | 0.928 | 0.847 | 0.833 | 0.953 | 0.957 | 0.94 | 0.024 | 0.006 |
 
+| 3 | 0.514 | 0.922 | 0.922 | 0.870 | 0.817 | 0.933 | 0.960 | 0.93 | 0.019 | 0.005 |
+
 On its own double-tap training spawns (160 episodes), E6 check 2 lands 6
 true double taps vs E2G1's 4: the follow-up touch is still too rare for
 the reward to have much to learn from.
+
+- **Decision (2026-09-28): REVERT, no effect.** Double taps stayed at the
+  baseline (0.023 / 0.024 / 0.019 vs 0.020, target 0.030) for ~280M steps.
+  Strength was neutral (even with E2G1). The reward cannot bootstrap a
+  follow-up that happens ~4% of the time. Moved to E7 (a real bug fix)
+  rather than spend 7 more hours. Tag `exp-E6-revert`.
+- **Idea E6b (backlog):** easier double-tap spawns with the car already
+  airborne at the rebound point so the follow-up is reachable, plus a
+  bigger curriculum share (0.20) and payout.
+
+## E7 — flip-reset fix — RUNNING (started 2026-09-28 20:37Z)
+
+- **Change:** `fr_on_ball_contact=true` (the reset's obtain / hold / use
+  payouts can finally fire), flip-reset curriculum 0.10 -> 0.15, easy-stage
+  share 0.25 -> 0.40; on the E2 config, resumed from E2G1.
+- **Before (E2 checks 4-5, 9600 games):** 0.0021 real flip resets/game.
+- **Keep rule:** resets/game >= 2x before and >= 0.05, V10 >= 0.90,
+  base >= 0.47, style >= 0.75.
+
+| check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | resets/g |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
