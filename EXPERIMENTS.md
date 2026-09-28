@@ -155,6 +155,11 @@ double taps 0.023/game, double-tap goals 0.0075/game. These are the
 | check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | dtaps/g | dt goals/g |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 0.483 | 0.933 | 0.905 | 0.852 | 0.808 | 0.957 | 0.917 | 0.96 | 0.023 | 0.006 |
+| 2 | 0.516 | 0.926 | 0.928 | 0.847 | 0.833 | 0.953 | 0.957 | 0.94 | 0.024 | 0.006 |
+
+On its own double-tap training spawns (160 episodes), E6 check 2 lands 6
+true double taps vs E2G1's 4: the follow-up touch is still too rare for
+the reward to have much to learn from.
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
