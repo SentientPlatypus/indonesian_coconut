@@ -154,6 +154,7 @@ double taps 0.023/game, double-tap goals 0.0075/game. These are the
 
 | check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | dtaps/g | dt goals/g |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.483 | 0.933 | 0.905 | 0.852 | 0.808 | 0.957 | 0.917 | 0.96 | 0.023 | 0.006 |
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
