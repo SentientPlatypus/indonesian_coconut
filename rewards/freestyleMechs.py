@@ -126,6 +126,27 @@ def nose_into_not_wheels(car, target_pos, car_pos=None) -> float:
     return nose_at - max(0.0, wheels_at)
 
 
+def bump_contact_part(car, target_pos, car_pos=None) -> str:
+    """Which part of `car` faces `target_pos`: the dominant local axis of the
+    direction to the target's centre. One of nose/back/roof/wheels/side."""
+    if car_pos is None:
+        car_pos = np.array(car.physics.position, dtype=float)
+    d = np.array(target_pos, dtype=float) - car_pos
+    n = float(np.linalg.norm(d))
+    if n < 1e-6:
+        return "side"
+    d /= n
+    fwd = float(np.dot(np.array(car.physics.forward, dtype=float), d))
+    up = float(np.dot(np.array(car.physics.up, dtype=float), d))
+    right = float(np.dot(np.array(car.physics.right, dtype=float), d))
+    axis = max((abs(fwd), "f"), (abs(up), "u"), (abs(right), "r"))[1]
+    if axis == "f":
+        return "nose" if fwd > 0 else "back"
+    if axis == "u":
+        return "roof" if up > 0 else "wheels"
+    return "side"
+
+
 def spent_boost(car, prev_car, min_spent: float = 0.4) -> bool:
     """Boosting now, or spent boost since the last step."""
     if bool(getattr(car, "is_boosting", False)):
@@ -1248,6 +1269,100 @@ class DoubleTapReward(RewardFunction[AgentID, GameState, float]):
                         and state.scoring_team == state.cars[agent].team_num):
                     rewards[agent] += self.goal_bonus
             self.pending_goal = {}
+        return rewards
+
+
+class ContactTracker:
+    """Car-vs-car contact episodes by proximity (RocketSim only flags hard
+    contacts as bumps; soft wheel landings/pushes never set bump_victim_id).
+    A contact starts when centres come within `start_dist` and ends when they
+    separate past `end_dist`. The contact is scored one step after it starts
+    so the victim's velocity change covers the whole impact.
+
+    `update(state)` returns (agent, victim, part, dv) for contacts that
+    finished resolving this step; `part` is the agent's car part facing the
+    victim at first contact (see bump_contact_part)."""
+
+    def __init__(self, start_dist: float = 175.0, end_dist: float = 220.0):
+        self.start_dist = start_dist
+        self.end_dist = end_dist
+        self.reset(None)
+
+    def reset(self, state: Optional[GameState]) -> None:
+        self.touching = set()
+        self.pending = {}      # (agent, victim) -> (part, victim_vel_before)
+        self.prev_vel = {} if state is None else {
+            a: np.array(c.physics.linear_velocity, dtype=float) for a, c in state.cars.items()}
+
+    def update(self, state: GameState):
+        out = []
+        vel = {a: np.array(c.physics.linear_velocity, dtype=float) for a, c in state.cars.items()}
+        for key, (part, v0) in list(self.pending.items()):
+            agent, victim = key
+            if victim in vel:
+                out.append((agent, victim, part, float(np.linalg.norm(vel[victim] - v0))))
+            del self.pending[key]
+        ids = list(state.cars)
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                ca, cb = state.cars[a], state.cars[b]
+                if ca.team_num == cb.team_num:
+                    continue
+                pa = np.array(ca.physics.position, dtype=float)
+                pb = np.array(cb.physics.position, dtype=float)
+                d = float(np.linalg.norm(pb - pa))
+                pair = (a, b) if a < b else (b, a)
+                if pair not in self.touching and d < self.start_dist:
+                    self.touching.add(pair)
+                    for x, y, px, py in ((a, b, pa, pb), (b, a, pb, pa)):
+                        self.pending[(x, y)] = (
+                            bump_contact_part(state.cars[x], py, px),
+                            self.prev_vel.get(y, vel[y]))
+                elif pair in self.touching and d >= self.end_dist:
+                    self.touching.discard(pair)
+        self.prev_vel = vel
+        return out
+
+
+class ContactQualityReward(RewardFunction[AgentID, GameState, float]):
+    """Pay for hitting the opponent with the SHELL, not the wheels.
+
+    Every car-car contact is scored once, from the attacker's side: shell
+    parts pay `part_scale[part] * hardness`, wheels pay `-wheel_penalty *
+    hardness`, where hardness = min(1, victim dv / hard_target) ** power (a
+    nudge is worth ~0, a real hit the full amount). Only near the play
+    (ball within `ball_max_dist` of the contact) so it cannot be farmed off
+    the ball."""
+
+    def __init__(self, hard_target: float = 900.0, hard_power: float = 1.5,
+                 wheel_penalty: float = 0.3, ball_max_dist: float = 2500.0,
+                 part_scale: Optional[Dict[str, float]] = None):
+        self.hard_target = hard_target
+        self.hard_power = hard_power
+        self.wheel_penalty = wheel_penalty
+        self.ball_max_dist = ball_max_dist
+        self.part_scale = part_scale or {"nose": 1.0, "roof": 0.6, "side": 0.6, "back": 0.3}
+        self.tracker = ContactTracker()
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.tracker.reset(initial_state)
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        ball = np.array(state.ball.position, dtype=float)
+        for agent, victim, part, dv in self.tracker.update(state):
+            if agent not in rewards:
+                continue
+            car_pos = np.array(state.cars[agent].physics.position, dtype=float)
+            if _safe_norm(ball - car_pos) > self.ball_max_dist:
+                continue
+            hardness = min(1.0, dv / max(1.0, self.hard_target)) ** self.hard_power
+            if part == "wheels":
+                rewards[agent] -= self.wheel_penalty * hardness
+            else:
+                rewards[agent] += self.part_scale.get(part, 0.0) * hardness
         return rewards
 
 

@@ -89,7 +89,9 @@ def main():
         row = " ".join(f"{k}={o[k]['score']:.3f}" for k in
                        ["base", "v10strong", "element", "ng54", "ng119", "gd6", "bs34"] if k in o)
         m = s.get("mech", {})
-        mech = f" resets/g={m.get('br_pg')} dtaps/g={m.get('dt_pg')} dt_goals/g={m.get('dtg_pg')}" if m else ""
+        mech = (f" resets/g={m.get('br_pg')} dtaps/g={m.get('dt_pg')}"
+                f" contacts/g={m.get('contacts_pg')} wheel_frac={m.get('wheel_frac')}"
+                f" hard_shell/g={m.get('hard_shell_pg')} bump_goals/g={m.get('bump_goals_pg')}") if m else ""
         print(f"  it{i} {it['panel']}: {row} style={s.get('style')} cap={s.get('cap')}{mech}")
     if m:
         print("  pooled last2: " + " ".join(f"{k}={v:.3f}" for k, v in m.items() if v is not None))

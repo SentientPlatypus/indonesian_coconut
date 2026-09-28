@@ -48,7 +48,7 @@ def _reward_fn(cfg: Dict[str, Any]):
     )
     from rewards.freestyleMechs import (
         AirdribbleReward, AirDribbleSequenceReward, WallPopSetupReward, FlipResetReward,
-        DoubleTapReward,
+        DoubleTapReward, ContactQualityReward,
     )
     from rewards.zero_sum import ZeroSumReward
     w = cfg["reward_weights"]
@@ -192,7 +192,12 @@ def _reward_fn(cfg: Dict[str, Any]):
             ground_attack_extra=cfg.get("ground_bump_extra", 0.0),
             ground_ball_max_dist=cfg.get("ground_bump_ball_max_dist", 2200.0),
             ground_carry_min_dist=cfg.get("ground_bump_carry_min_dist", 180.0),
+            wheel_scale=cfg.get("bump_wheel_scale", 1.0),
         ), w["demo"]),
+        (ContactQualityReward(
+            hard_target=cfg.get("contact_hard_target", 900.0),
+            wheel_penalty=cfg.get("contact_wheel_penalty", 0.3),
+        ), w.get("contact_quality", 0.0)),
         (AerialFrontBumpSetupReward(), w.get("front_bump_setup", 0.0)),
         # v5 (user): punish overextending grounded + deep + low boost. REVERTED in
         # v6 (user: made the bot too passive/slow) — disabled via weight 0 in config.

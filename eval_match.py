@@ -100,12 +100,20 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
     cfg = load_config(os.environ.get("V4_LOOP_CONFIG"))
     env = build_env(cfg, for_training=False)
 
-    from rewards.freestyleMechs import DoubleTapTracker, wheels_on_ball
+    from rewards.freestyleMechs import (
+        DoubleTapTracker, ContactTracker, wheels_on_ball, bump_contact_part)
 
     cand_goals = opp_goals = truncs = 0
     air_touch_steps = air_dribbles = flip_resets = 0
     ball_resets = double_taps = dt_goals = 0
     dt_tracker = DoubleTapTracker()
+    bump_parts = {p: 0 for p in ("nose", "back", "roof", "wheels", "side")}
+    hard_bumps = hard_shell_bumps = bump_goals = 0
+    bump_dv_sum = 0.0
+    contact_tracker = ContactTracker()
+    contact_parts = {p: 0 for p in ("nose", "back", "roof", "wheels", "side")}
+    hard_shell_contacts = hard_wheel_contacts = 0
+    shell_dv_sum = wheel_dv_sum = 0.0
     for g in range(games):
         obs = env.reset()
         state = env.state
@@ -128,6 +136,10 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
         prev_has_flip = state.cars[cand_agent].has_flip
         dt_tracker.reset(state)
         last_dt_tick = None
+        last_bump_tick = None
+        prev_victim = None
+        contact_tracker.reset(state)
+        prev_opp_vel = np.array(state.cars[opp_agent].physics.linear_velocity, dtype=float)
 
         terminated = False
         while True:
@@ -151,6 +163,32 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
                 if agent == cand_agent and kind == "second":
                     double_taps += 1
                     last_dt_tick = s.tick_count
+            opp_car = s.cars[opp_agent]
+            opp_vel = np.array(opp_car.physics.linear_velocity, dtype=float)
+            victim = car.bump_victim_id
+            if victim == opp_agent and prev_victim != opp_agent:
+                part = bump_contact_part(car, opp_car.physics.position)
+                bump_parts[part] += 1
+                dv = float(np.linalg.norm(opp_vel - prev_opp_vel))
+                bump_dv_sum += dv
+                if dv >= 700.0 or opp_car.is_demoed:
+                    hard_bumps += 1
+                    if part != "wheels":
+                        hard_shell_bumps += 1
+            prev_victim = victim
+            prev_opp_vel = opp_vel
+            for agent, _, part, cdv in contact_tracker.update(s):
+                if agent != cand_agent:
+                    continue
+                contact_parts[part] += 1
+                if part == "wheels":
+                    wheel_dv_sum += cdv
+                    hard_wheel_contacts += cdv >= 500.0
+                else:
+                    shell_dv_sum += cdv
+                    if cdv >= 500.0:
+                        hard_shell_contacts += 1
+                        last_bump_tick = s.tick_count
             if airborne and car.ball_touches > 0 and s.ball.position[2] > 300.0:
                 air_touch_steps += 1
                 if s.tick_count - last_air_touch_tick > 180:   # >1.5s gap: new chain
@@ -175,6 +213,8 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
                 cand_goals += 1
                 if last_dt_tick is not None and env.state.tick_count - last_dt_tick <= 360:
                     dt_goals += 1
+                if last_bump_tick is not None and env.state.tick_count - last_bump_tick <= 360:
+                    bump_goals += 1
             else:
                 opp_goals += 1
         else:
@@ -198,6 +238,20 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
         "cand_ball_resets": ball_resets,
         "cand_double_taps": double_taps,
         "cand_double_tap_goals": dt_goals,
+        "cand_bump_parts": bump_parts,
+        "cand_bumps": sum(bump_parts.values()),
+        "cand_hard_bumps": hard_bumps,
+        "cand_hard_shell_bumps": hard_shell_bumps,
+        "cand_bump_dv_mean": round(bump_dv_sum / max(1, sum(bump_parts.values())), 1),
+        "cand_contact_parts": contact_parts,
+        "cand_contacts": sum(contact_parts.values()),
+        "cand_hard_shell_contacts": hard_shell_contacts,
+        "cand_hard_wheel_contacts": hard_wheel_contacts,
+        "cand_shell_contact_dv_mean": round(
+            shell_dv_sum / max(1, sum(contact_parts.values()) - contact_parts["wheels"]), 1),
+        "cand_wheel_contact_dv_mean": round(wheel_dv_sum / max(1, contact_parts["wheels"]), 1),
+        # goals within 3 s after a hard (>=500 uu/s) shell contact on the opponent
+        "cand_shell_bump_goals": bump_goals,
         "style": round(air_dribbles / games, 4),   # air dribbles per game
         "deterministic": deterministic,
     }

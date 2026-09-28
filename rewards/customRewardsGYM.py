@@ -8,6 +8,7 @@ import math
 
 from rewards.freestyleMechs import (
     advantage_clear_lane,
+    bump_contact_part,
     car_in_front_of_ball,
     dist_to_opp_goal_y,
     nose_goalward,
@@ -416,7 +417,11 @@ class DemoReward(RewardFunction[AgentID, GameState, float]):
                  # near the play, not glued to the ball.
                  ground_attack_extra: float = 0.0,
                  ground_ball_max_dist: float = 2200.0,
-                 ground_carry_min_dist: float = 180.0):
+                 ground_carry_min_dist: float = 180.0,
+                 # Scale on the whole bump payout when our WHEELS face the
+                 # victim (1.0 = pre-E8 behaviour).
+                 wheel_scale: float = 1.0):
+        self.wheel_scale = wheel_scale
         self.attacker_reward = attacker_reward
         self.victim_punishment = victim_punishment
         self.bump_acceleration_reward = bump_acceleration_reward
@@ -517,6 +522,8 @@ class DemoReward(RewardFunction[AgentID, GameState, float]):
                             * nose_g
                         )
                     reward = bump_scale * acceleration / CAR_MAX_SPEED
+                    if self.wheel_scale != 1.0 and bump_contact_part(car, victim_pos, car_pos) == "wheels":
+                        reward *= self.wheel_scale
                     rewards[agent] += reward if not is_teammate else -reward
 
         self.prev_state = state

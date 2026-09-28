@@ -168,9 +168,7 @@ the reward to have much to learn from.
   Strength was neutral (even with E2G1). The reward cannot bootstrap a
   follow-up that happens ~4% of the time. Moved to E7 (a real bug fix)
   rather than spend 7 more hours. Tag `exp-E6-revert`.
-- **Idea E6b (backlog):** easier double-tap spawns with the car already
-  airborne at the rebound point so the follow-up is reachable, plus a
-  bigger curriculum share (0.20) and payout.
+- User (2026-09-28) dropped double-tap work; no follow-up planned.
 
 ## E7 — flip-reset fix — RUNNING (started 2026-09-28 20:37Z)
 
@@ -183,6 +181,30 @@ the reward to have much to learn from.
 
 | check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | resets/g |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+
+## E8 — shell contact, not wheels — QUEUED (next after E7)
+
+User (2026-09-28): contact with the opponent should be with the shell of
+the car, not the wheels — "that would turn E2G1 from good to VERY good; we
+do it sometimes, but should be more consistent."
+
+- **Measured on E2G1** (300 games vs V10STRONG + Element): ~1.4-1.9
+  car-to-car contacts per game, but only ~1 in 6 registers as a game "bump",
+  so the existing bump reward never sees most contacts. Contact part:
+  wheels 20-22%, side 33-43%, nose 20-31%. Nose contacts knock the opponent
+  ~2x harder than wheel contacts. 62-74% of contacts are in the air. The
+  base bump payout paid wheel bumps the same as shell bumps.
+- **Change:** new `ContactQualityReward` scores every contact (by
+  proximity, one step after it starts so the full impact counts): nose 1.0,
+  roof/side 0.6, back 0.3, times hardness (opponent's velocity change / 900,
+  ^1.5); wheels -0.3 x hardness; only near the ball. Weight 80 (a hard nose
+  hit ~80, a goal 1200). Plus `bump_wheel_scale 0`: wheel-first registered
+  bumps no longer pay. Config `E8_shell_contact.json`.
+- **New panel metrics:** contacts/game, wheel fraction of contacts, hard
+  shell contacts/game, goals within 3 s of a hard shell contact.
+- **Keep rule:** wheel fraction <= 0.7x before, hard shell contacts >= 1.2x
+  before, V10 >= 0.90, base >= 0.47, style >= 0.75. The in-game test vs
+  Nexto is the real judge, so the best snapshot gets pushed.
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward

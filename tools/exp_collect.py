@@ -24,7 +24,12 @@ def main(tag):
         cand = r["candidate"]
         b = by.setdefault(name, {"goals": 0, "decided": 0, "games": 0, "air_dribbles": 0,
                                  "flip_resets": 0, "ball_resets": 0, "double_taps": 0,
-                                 "dt_goals": 0, "packs": []})
+                                 "dt_goals": 0, "contacts": 0, "wheel_contacts": 0,
+                                 "hard_shell": 0, "bump_goals": 0, "packs": []})
+        b["contacts"] += r.get("cand_contacts", 0)
+        b["wheel_contacts"] += r.get("cand_contact_parts", {}).get("wheels", 0)
+        b["hard_shell"] += r.get("cand_hard_shell_contacts", 0)
+        b["bump_goals"] += r.get("cand_shell_bump_goals", 0)
         b["goals"] += r["candidate_goals"]
         b["decided"] += r["decided"]
         b["games"] += r["games"]
@@ -52,7 +57,11 @@ def main(tag):
     g = sum(b["games"] for b in by.values())
     out["mech"] = {k: round(sum(b[src] for b in by.values()) / max(1, g), 4)
                    for k, src in (("fr_pg", "flip_resets"), ("br_pg", "ball_resets"),
-                                  ("dt_pg", "double_taps"), ("dtg_pg", "dt_goals"))}
+                                  ("dt_pg", "double_taps"), ("dtg_pg", "dt_goals"),
+                                  ("contacts_pg", "contacts"), ("hard_shell_pg", "hard_shell"),
+                                  ("bump_goals_pg", "bump_goals"))}
+    nc = sum(b["contacts"] for b in by.values())
+    out["mech"]["wheel_frac"] = round(sum(b["wheel_contacts"] for b in by.values()) / max(1, nc), 4)
     out["mech"]["games"] = g
     cap = os.path.join(d, "cap.json")
     if os.path.isfile(cap):
