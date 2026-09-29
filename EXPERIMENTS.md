@@ -230,7 +230,7 @@ Contact baseline for E8 (E7 check 1 panel, 4800 games): 2.05 contacts/game, 14.8
 on the wheels, 0.45 hard shell contacts/game, 0.042 goals/game within 3 s of
 a hard shell contact.
 
-## E8 — shell contact, not wheels — RUNNING (started 2026-09-29 12:21Z)
+## E8 — shell contact, not wheels — SUPERSEDED by E8b 2026-09-29 (at check 2)
 
 User (2026-09-28): contact with the opponent should be with the shell of
 the car, not the wheels — "that would turn E2G1 from good to VERY good; we
@@ -269,6 +269,24 @@ kickoff games): ContactQualityReward is only 1.0% of |reward| (~42/episode,
 wheel penalties ~1.4/episode), so the signal is weak. If check 2 is still
 short of the targets, E8b = contact_quality 80 -> 250 and wheel penalty
 0.3 -> 0.6.
+| 2 (53.43B) | 0.458 | 0.921 | 0.895 | 0.835 | 0.815 | 0.95 | 2.06 | 0.147 | 0.464 | 0.052 |
+
+Check 2: contact flat (wheel 0.147, hard shell 0.464/g) while strength fell
+under the 0.47 floor vs E2G1. Goals after a hard shell contact ticked up
+(0.044 -> 0.052/g) but that is within noise. **Superseded by E8b.**
+
+## E8b — shell contact, stronger signal — RUNNING (started 2026-09-29 20:15Z)
+
+- **Change:** E8 config with `contact_quality` 80 -> 250 (a hard nose hit
+  ~250, still a fifth of a goal) and `contact_wheel_penalty` 0.3 -> 0.6.
+  Config `E8b_shell_contact_strong.json`, restarted from **E2G1** (not E8,
+  which had drifted weaker). Benchmark base E2G1.
+- **Keep rule:** same as E8 (wheel <= 0.105, hard shell >= 0.54/g, V10 >=
+  0.90, base >= 0.47, style >= 0.75); early revert if base < 0.45 at any
+  check.
+
+| check | base (E2G1) | V10 | EL | NG54 | NG119 | style | contacts/g | wheel frac | hard shell/g | bump goals/g |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
