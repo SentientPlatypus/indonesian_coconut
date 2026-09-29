@@ -181,6 +181,19 @@ the reward to have much to learn from.
 
 | check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | resets/g |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.483 | 0.933 | 0.938 | 0.852 | 0.848 | 0.937 | 0.943 | 0.93 | 0.0029 |
+
+Check 1: strength held (even with E2G1, NG119 0.848 is the best yet). Resets
+in games are still at baseline, but on its own flip-reset training spawns
+(160 episodes) E7 gets 3 real resets and uses all 3, vs 0 for E2G1: the
+fixed reward is being learned, slowly. If check 2 is still near baseline,
+the next step (E7b) is a near-guaranteed reset spawn stage (ball just above
+an upside-down car, closing) so the obtain/use payouts fire in most
+episodes instead of ~2%.
+
+Contact baseline for E8 (this panel, 4800 games): 2.05 contacts/game, 14.8%
+on the wheels, 0.45 hard shell contacts/game, 0.042 goals/game within 3 s of
+a hard shell contact.
 
 ## E8 — shell contact, not wheels — QUEUED (next after E7)
 
