@@ -269,6 +269,7 @@ def _state_mutator(cfg: Dict[str, Any], for_training: bool):
             # v10: shift FR mass toward the NATURAL stage as the mechanic lands.
             fr_easy_frac=c.get("fr_easy_frac", 0.25),
             fr_mid_frac=c.get("fr_mid_frac", 0.35),
+            fr_assist_frac=c.get("fr_assist_frac", 0.0),
         )
     else:
         reset_mutator = KickoffMutator()   # eval = standard kickoff games

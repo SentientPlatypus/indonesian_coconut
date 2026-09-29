@@ -90,7 +90,10 @@ class CurriculumStateMutator(StateMutator[GameState]):
                  #          bot must create the reset itself. Shift mass toward
                  #          `natural` as the mechanic lands.
                  fr_easy_frac: float = 0.25,
-                 fr_mid_frac: float = 0.35):
+                 fr_mid_frac: float = 0.35,
+                 # E7b: share of FR mass given to the ASSISTED stage (the reset
+                 # happens with near-zero input), taken before easy/mid/natural.
+                 fr_assist_frac: float = 0.0):
         total = (kickoff_w + air_dribble_w + flip_reset_w + wall_pop_w
                  + ground_dribble_w + ground_to_air_w + aerial_front_bump_w
                  + double_tap_w + wall_leak_w + awkward_ball_w)
@@ -107,6 +110,7 @@ class CurriculumStateMutator(StateMutator[GameState]):
         self.awkward_ball_w = awkward_ball_w / total
         self.fr_easy_frac = max(0.0, min(1.0, fr_easy_frac))
         self.fr_mid_frac = max(0.0, min(1.0 - self.fr_easy_frac, fr_mid_frac))
+        self.fr_assist_frac = max(0.0, min(1.0, fr_assist_frac))
         self._kickoff = KickoffMutator()
 
     # -- helpers --------------------------------------------------------------
@@ -252,6 +256,43 @@ class CurriculumStateMutator(StateMutator[GameState]):
 
         for d in defenders:
             self._park_defender(d)
+
+    def _assisted_flip_reset_setup(self, state: GameState) -> None:
+        """E7b: the reset is nearly free. Upside-down car rising into a ball
+        just above its wheels (a no-input rollout resets ~every time), ball
+        drifting toward their net, live defender goal-side. The lesson is
+        what comes after: keep the flip, then USE it on the ball goalward."""
+        attacker, defenders = self._split_cars(state)
+        attack = self._attack_dir(attacker.team_num)
+
+        bx = random.uniform(-1500, 1500)
+        by = attack * random.uniform(-2200, 1600)
+        bz = random.uniform(900, 1500)
+        fwd_v = attack * random.uniform(150, 550)
+        state.ball.position = _f32(bx, by, bz)
+        state.ball.linear_velocity = _f32(random.uniform(-80, 80), fwd_v, random.uniform(-150, 50))
+        state.ball.angular_velocity = _f32(0, 0, 0)
+
+        cz = bz - random.uniform(230, 400)
+        attacker.physics.position = _f32(
+            bx + random.uniform(-40, 40), by + random.uniform(-40, 40), cz)
+        attacker.physics.linear_velocity = _f32(
+            random.uniform(-50, 50), fwd_v, random.uniform(450, 750))
+        attacker.physics.angular_velocity = _f32(0, 0, 0)
+        attacker.physics.euler_angles = _f32(
+            random.uniform(-0.2, 0.2),
+            attack * np.pi / 2.0 + random.uniform(-0.4, 0.4),
+            np.pi + random.uniform(-0.2, 0.2),
+        )
+        attacker.boost_amount = random.uniform(50, 100)
+        attacker.on_ground = False
+        attacker.has_jumped = True
+        attacker.has_flipped = False
+        attacker.has_double_jumped = True
+        attacker.air_time_since_jump = DOUBLEJUMP_MAX_DELAY + 0.25
+
+        for d in defenders:
+            self._active_defender(d, bx, by, attack)
 
     def _air_dribble_flip_reset_setup(self, state: GameState) -> None:
         """Mid-carry flip-reset drill: air-dribble geometry (ball drifting
@@ -834,6 +875,9 @@ class CurriculumStateMutator(StateMutator[GameState]):
                 fn()
                 return
         # Remainder is flip-reset: easy -> mid -> natural (see __init__).
+        if random.random() < self.fr_assist_frac:
+            self._assisted_flip_reset_setup(state)
+            return
         q = random.random()
         if q < self.fr_easy_frac:
             self._flip_reset_setup(state)

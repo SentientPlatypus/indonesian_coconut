@@ -170,7 +170,7 @@ the reward to have much to learn from.
   rather than spend 7 more hours. Tag `exp-E6-revert`.
 - User (2026-09-28) dropped double-tap work; no follow-up planned.
 
-## E7 — flip-reset fix — RUNNING (started 2026-09-28 20:37Z)
+## E7 — flip-reset fix — SUPERSEDED by E7b (at check 2)
 
 - **Change:** `fr_on_ball_contact=true` (the reset's obtain / hold / use
   payouts can finally fire), flip-reset curriculum 0.10 -> 0.15, easy-stage
@@ -191,7 +191,29 @@ the next step (E7b) is a near-guaranteed reset spawn stage (ball just above
 an upside-down car, closing) so the obtain/use payouts fire in most
 episodes instead of ~2%.
 
-Contact baseline for E8 (this panel, 4800 games): 2.05 contacts/game, 14.8%
+| 2 | 0.486 | 0.922 | 0.917 | 0.865 | 0.798 | 0.910 | 0.900 | 0.97 | 0.0017 |
+
+Check 2: resets still at baseline, strength even with E2G1 but slipping a
+little. Test of a new **assisted** spawn (upside-down car rising into a ball
+just above its wheels): a car with no input resets in 59/100 episodes, E7
+check 2 in 25/100 and uses the flip every time, vs 3/160 on the normal
+flip-reset spawns. So training was starved of successes, not broken.
+
+## E7b — assisted flip-reset spawns — RUNNING (started 2026-09-29 04:30Z)
+
+- **Change:** E7 config + `fr_assist_frac 0.5`: half of the flip-reset
+  training spawns are the assisted stage, so the reset happens in a large
+  share of them and the reward can teach keeping and using the flip.
+  Config `E7b_fr_assist.json`, resumed from E7 check 2
+  (`expE7_53427385724`). Benchmark base stays **E2G1**, so any drift from
+  the champion shows up directly.
+- **Keep rule:** resets/game >= 0.005 (2x+ baseline), vs E2G1 >= 0.47,
+  V10 >= 0.90, style >= 0.75; else back to E2G1 + E2 config.
+
+| check | base (E2G1) | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | resets/g |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+
+Contact baseline for E8 (E7 check 1 panel, 4800 games): 2.05 contacts/game, 14.8%
 on the wheels, 0.45 hard shell contacts/game, 0.042 goals/game within 3 s of
 a hard shell contact.
 
