@@ -199,7 +199,7 @@ just above its wheels): a car with no input resets in 59/100 episodes, E7
 check 2 in 25/100 and uses the flip every time, vs 3/160 on the normal
 flip-reset spawns. So training was starved of successes, not broken.
 
-## E7b — assisted flip-reset spawns — RUNNING (started 2026-09-29 04:30Z)
+## E7b — assisted flip-reset spawns — REVERTED 2026-09-29 (early, at check 2)
 
 - **Change:** E7 config + `fr_assist_frac 0.5`: half of the flip-reset
   training spawns are the assisted stage, so the reset happens in a large
@@ -217,12 +217,20 @@ flip-reset spawns. So training was starved of successes, not broken.
 Check 1 FR probes: assisted spawn 9/100 resets (E7 check 2: 25/100, no-op
 car: 59/100), normal FR spawns 3 resets — the policy steers away from the
 reset rather than into it. Strength has recovered to parity with E2G1.
+| 2 (53.62B) | 0.511 | 0.934 | 0.920 | 0.848 | 0.823 | 0.933 | 0.927 | 0.95 | 0.0029 |
+
+Check 2 FR probes: assisted 9/100, normal 2. **Decision: early revert.**
+Resets stuck at 0.0029/game (target 0.005) over 4 checks of E7+E7b, and on
+the assisted spawn the policy resets less often than a car with no input.
+Strength is even with E2G1, so no gain to keep. Training goes back to E2G1
+with the E2 config. Flip-reset idea for later: reward only keeping the flip
+alive (no stage chain), or an imitation start from scripted resets.
 
 Contact baseline for E8 (E7 check 1 panel, 4800 games): 2.05 contacts/game, 14.8%
 on the wheels, 0.45 hard shell contacts/game, 0.042 goals/game within 3 s of
 a hard shell contact.
 
-## E8 — shell contact, not wheels — QUEUED (next after E7)
+## E8 — shell contact, not wheels — RUNNING (started 2026-09-29 12:21Z)
 
 User (2026-09-28): contact with the opponent should be with the shell of
 the car, not the wheels — "that would turn E2G1 from good to VERY good; we
@@ -245,6 +253,14 @@ do it sometimes, but should be more consistent."
 - **Keep rule:** wheel fraction <= 0.7x before, hard shell contacts >= 1.2x
   before, V10 >= 0.90, base >= 0.47, style >= 0.75. The in-game test vs
   Nexto is the real judge, so the best snapshot gets pushed.
+- **Run:** resumed from E2G1 on the E2 config + the contact keys (no
+  E7/E7b flip-reset keys). Benchmark base E2G1. Before (E7b checks 1-2,
+  9600 games): 2.04 contacts/game, wheel fraction 0.150, 0.453 hard shell
+  contacts/game, 0.044 goals/game after a hard shell contact. Targets:
+  wheel fraction <= 0.105, hard shell >= 0.54/game.
+
+| check | base (E2G1) | V10 | EL | NG54 | NG119 | style | contacts/g | wheel frac | hard shell/g | bump goals/g |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
