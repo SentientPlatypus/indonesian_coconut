@@ -212,6 +212,11 @@ flip-reset spawns. So training was starved of successes, not broken.
 
 | check | base (E2G1) | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | resets/g |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 (53.52B) | 0.500 | 0.941 | 0.930 | 0.862 | 0.798 | 0.963 | 0.937 | 0.95 | 0.0029 |
+
+Check 1 FR probes: assisted spawn 9/100 resets (E7 check 2: 25/100, no-op
+car: 59/100), normal FR spawns 3 resets — the policy steers away from the
+reset rather than into it. Strength has recovered to parity with E2G1.
 
 Contact baseline for E8 (E7 check 1 panel, 4800 games): 2.05 contacts/game, 14.8%
 on the wheels, 0.45 hard shell contacts/game, 0.042 goals/game within 3 s of
