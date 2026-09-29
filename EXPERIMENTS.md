@@ -261,6 +261,14 @@ do it sometimes, but should be more consistent."
 
 | check | base (E2G1) | V10 | EL | NG54 | NG119 | style | contacts/g | wheel frac | hard shell/g | bump goals/g |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 (53.33B) | 0.477 | 0.910 | 0.915 | 0.828 | 0.798 | 0.96 | 1.99 | 0.140 | 0.469 | 0.041 |
+
+Check 1: contact moved the right way but only a little (wheel 0.150 -> 0.140,
+hard shell 0.453 -> 0.469/g); strength slightly below E2G1. Reward audit (60
+kickoff games): ContactQualityReward is only 1.0% of |reward| (~42/episode,
+wheel penalties ~1.4/episode), so the signal is weak. If check 2 is still
+short of the targets, E8b = contact_quality 80 -> 250 and wheel penalty
+0.3 -> 0.6.
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
