@@ -6,6 +6,18 @@ from rlgym.rocket_league.common_values import *
 import numpy as np
 import math
 
+from rewards.freestyleMechs import (
+    advantage_clear_lane,
+    bump_contact_part,
+    car_in_front_of_ball,
+    dist_to_opp_goal_y,
+    nose_goalward,
+    nose_into_not_wheels,
+    spent_boost,
+    takeoff_have_speed,
+    takeoff_need_speed,
+)
+
 def _safe_norm(v):
     n = float(np.linalg.norm(v))
     return n if n > 1e-6 else 1e-6
@@ -369,10 +381,65 @@ class BoostKeepReward(RewardFunction[AgentID, GameState, float]):
     
 class DemoReward(RewardFunction[AgentID, GameState, float]):
     def __init__(self, attacker_reward: float = 1.0, victim_punishment: float = 1.0,
-                 bump_acceleration_reward: float = 0.0):
+                 bump_acceleration_reward: float = 0.0,
+                 # Offensive aerial bump bonus (user / v8 notes): do NOT raise the
+                 # global bump rate (v6.2 0.65 regressed). Extra payout only when
+                 # airborne + attacking half + enough boost — i.e. air-dribble bumps
+                 # into a challenger near their net.
+                 aerial_attack_extra: float = 0.0,
+                 aerial_attack_min_boost: float = 20.0,
+                 # v11 (user on V10FR2): "we do bump Nexto, but not in a way that
+                 # gets goals anymore — we need to hit him HARDER during an air
+                 # dribble". The payout was linear in impact, so a light nudge
+                 # earned nearly the same per-unit as a smash and the cheap nudge
+                 # won on frequency. These make the aerial bonus SUPERLINEAR in
+                 # impact and require it to be a real air-dribble bump (ball up
+                 # and nearby) that knocks the defender AWAY from the play.
+                 aerial_hard_target: float = 900.0,
+                 aerial_hard_power: float = 2.0,
+                 aerial_ball_min_z: float = 300.0,
+                 aerial_ball_max_dist: float = 1800.0,
+                 aerial_away_weight: float = 0.5,
+                 # v12 (user on V11HB): carry-bumps dump momentum into the ball
+                 # and send it off course. The aerial bonus now requires leaving
+                 # the ball, boosting in FRONT of it (goal-side), and knocking
+                 # the defender away — not hitting them while still carrying.
+                 aerial_carry_min_dist: float = 300.0,
+                 aerial_front_margin: float = 80.0,
+                 aerial_require_boost: bool = True,
+                 # v13 (user on V12FB): wheel bumps are soft. The extra only
+                 # pays when the nose points at their net AND the bumper (not
+                 # the wheels) is what faces the victim.
+                 aerial_nose_goal_min: float = 0.40,
+                 aerial_nose_hit_min: float = 0.10,
+                 # v13: also pay GROUND bumps (same nose/bumper gates). Do NOT
+                 # raise the global base (v6.2). Extra only when on the ground,
+                 # near the play, not glued to the ball.
+                 ground_attack_extra: float = 0.0,
+                 ground_ball_max_dist: float = 2200.0,
+                 ground_carry_min_dist: float = 180.0,
+                 # Scale on the whole bump payout when our WHEELS face the
+                 # victim (1.0 = pre-E8 behaviour).
+                 wheel_scale: float = 1.0):
+        self.wheel_scale = wheel_scale
         self.attacker_reward = attacker_reward
         self.victim_punishment = victim_punishment
         self.bump_acceleration_reward = bump_acceleration_reward
+        self.aerial_attack_extra = aerial_attack_extra
+        self.aerial_attack_min_boost = aerial_attack_min_boost
+        self.aerial_hard_target = aerial_hard_target
+        self.aerial_hard_power = aerial_hard_power
+        self.aerial_ball_min_z = aerial_ball_min_z
+        self.aerial_ball_max_dist = aerial_ball_max_dist
+        self.aerial_away_weight = aerial_away_weight
+        self.aerial_carry_min_dist = aerial_carry_min_dist
+        self.aerial_front_margin = aerial_front_margin
+        self.aerial_require_boost = aerial_require_boost
+        self.aerial_nose_goal_min = aerial_nose_goal_min
+        self.aerial_nose_hit_min = aerial_nose_hit_min
+        self.ground_attack_extra = ground_attack_extra
+        self.ground_ball_max_dist = ground_ball_max_dist
+        self.ground_carry_min_dist = ground_carry_min_dist
 
         self.prev_state = None
 
@@ -392,19 +459,771 @@ class DemoReward(RewardFunction[AgentID, GameState, float]):
                         rewards[agent] += self.attacker_reward
                         rewards[victim] -= self.victim_punishment
                 else:
-                    acceleration = np.linalg.norm(state.cars[victim].physics.linear_velocity
-                                                  - self.prev_state.cars[victim].physics.linear_velocity)
+                    dv = (np.array(state.cars[victim].physics.linear_velocity, dtype=float)
+                          - np.array(self.prev_state.cars[victim].physics.linear_velocity, dtype=float))
+                    acceleration = float(np.linalg.norm(dv))
                     is_teammate = car.team_num == victim_car.team_num
-                    reward = self.bump_acceleration_reward * acceleration / CAR_MAX_SPEED
+                    bump_scale = self.bump_acceleration_reward
+                    ball = np.array(state.ball.position, dtype=float)
+                    car_pos = np.array(car.physics.position, dtype=float)
+                    victim_pos = np.array(victim_car.physics.position, dtype=float)
+                    car_ball = float(np.linalg.norm(ball - car_pos))
+                    nose_g = nose_goalward(car)
+                    nose_hit = nose_into_not_wheels(car, victim_pos, car_pos)
+                    nose_ok = (
+                        nose_g >= self.aerial_nose_goal_min
+                        and nose_hit >= self.aerial_nose_hit_min
+                    )
+                    extra = 0.0
+                    if (self.aerial_attack_extra > 0.0
+                            and (not car.on_ground)
+                            and car.boost_amount >= self.aerial_attack_min_boost):
+                        attack = -1.0 if car.is_orange else 1.0
+                        if attack * float(car.physics.position[1]) > 0.0:  # attacking half
+                            # Same aerial play, but NOT still carrying — a bump
+                            # while glued to the ball dumps our momentum into it.
+                            left_the_ball = car_ball >= self.aerial_carry_min_dist
+                            in_air_play = (
+                                float(ball[2]) >= self.aerial_ball_min_z
+                                and car_ball <= self.aerial_ball_max_dist
+                                and left_the_ball
+                                and car_in_front_of_ball(
+                                    car, car_pos, ball, self.aerial_front_margin)
+                            )
+                            prev_car = None
+                            if self.prev_state is not None:
+                                prev_car = self.prev_state.cars.get(agent)
+                            boosted = (not self.aerial_require_boost) or spent_boost(
+                                car, prev_car)
+                            if in_air_play and boosted and nose_ok:
+                                extra = self.aerial_attack_extra
+                    elif (self.ground_attack_extra > 0.0
+                            and car.on_ground
+                            and nose_ok
+                            and car_ball >= self.ground_carry_min_dist
+                            and car_ball <= self.ground_ball_max_dist):
+                        extra = self.ground_attack_extra
+                    if extra > 0.0:
+                        # SUPERLINEAR in impact: a nudge is worth almost
+                        # nothing, a smash is worth the full bonus.
+                        hardness = min(1.0, acceleration / max(self.aerial_hard_target, 1.0))
+                        hardness = hardness ** self.aerial_hard_power
+                        # Knock them AWAY from the ball, not into it.
+                        away = 0.0
+                        if acceleration > 1e-6:
+                            to_ball = ball - victim_pos
+                            n = float(np.linalg.norm(to_ball))
+                            if n > 1e-6:
+                                away = max(0.0, -float(np.dot(dv / acceleration, to_ball / n)))
+                        bump_scale = self.bump_acceleration_reward + (
+                            extra
+                            * hardness
+                            * (1.0 - self.aerial_away_weight + self.aerial_away_weight * away)
+                            * nose_g
+                        )
+                    reward = bump_scale * acceleration / CAR_MAX_SPEED
+                    if self.wheel_scale != 1.0 and bump_contact_part(car, victim_pos, car_pos) == "wheels":
+                        reward *= self.wheel_scale
                     rewards[agent] += reward if not is_teammate else -reward
 
         self.prev_state = state
 
         return rewards
+
+
+class AerialFrontBumpSetupReward(RewardFunction[AgentID, GameState, float]):
+    """Leave the ball, boost in front, then bump the challenger away.
+
+    v12 (user on V11HB): carry-bumps send the ball off course because the
+    contact happens while we are still on the ball. The correct play is to
+    boost PAST the ball (goal-side) and knock Nexto away so the ball keeps
+    its line. v13: also point the nose at their net — wheel hits are soft.
+    This is the dense setup signal; DemoReward pays the contact.
+    Positive-only, gated on a real aerial contest.
+    """
+
+    def __init__(
+        self,
+        ball_min_z: float = 280.0,
+        carry_clear: float = 280.0,
+        play_max_dist: float = 1600.0,
+        opp_ball_max: float = 1400.0,
+        front_margin: float = 40.0,
+        per_second: float = 1.0,
+    ):
+        self.ball_min_z = ball_min_z
+        self.carry_clear = carry_clear
+        self.play_max_dist = play_max_dist
+        self.opp_ball_max = opp_ball_max
+        self.front_margin = front_margin
+        self.per_tick = per_second / TICKS_PER_SECOND
+
+    def reset(self, agents, initial_state, shared_info):
+        pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball = np.array(state.ball.position, dtype=float)
+        if float(ball[2]) < self.ball_min_z:
+            return rewards
+
+        for a in agents:
+            car = state.cars[a]
+            if car.is_demoed or car.on_ground:
+                continue
+            car_pos = np.array(car.physics.position, dtype=float)
+            car_vel = np.array(car.physics.linear_velocity, dtype=float)
+            car_ball = float(np.linalg.norm(ball - car_pos))
+            if car_ball < self.carry_clear or car_ball > self.play_max_dist:
+                continue
+
+            opp = None
+            for oid, ocar in state.cars.items():
+                if oid != a and ocar.team_num != car.team_num and not ocar.is_demoed:
+                    opp = ocar
+                    break
+            if opp is None:
+                continue
+            opp_pos = np.array(opp.physics.position, dtype=float)
+            if float(np.linalg.norm(ball - opp_pos)) > self.opp_ball_max:
+                continue
+
+            attack = -1.0 if car.is_orange else 1.0
+            # Goal-side of the ball (already in front) or boosting toward it.
+            front = attack * (float(car_pos[1]) - float(ball[1]))
+            front_frac = min(1.0, max(0.0, front / max(self.front_margin + 120.0, 1.0)))
+            boosting = bool(getattr(car, "is_boosting", False))
+            # Closing on the goal-side of the ball, not back onto it.
+            to_front = np.array(
+                [ball[0] - car_pos[0],
+                 (ball[1] + attack * 220.0) - car_pos[1],
+                 ball[2] - car_pos[2]],
+                dtype=float,
+            )
+            n = float(np.linalg.norm(to_front))
+            approach = 0.0
+            if n > 1e-6:
+                approach = max(0.0, float(np.dot(car_vel, to_front / n))) / CAR_MAX_SPEED
+            approach = min(1.0, approach)
+
+            if front < self.front_margin and not boosting and approach < 0.12:
+                continue
+
+            # Point the nose at their net (and at the challenger) before contact.
+            # Wheel-first setups get almost none of this term.
+            nose_g = nose_goalward(car)
+            nose_hit = max(0.0, min(1.0, nose_into_not_wheels(car, opp_pos, car_pos)))
+            setup = 0.40 * approach + 0.30 * front_frac + 0.20 * nose_g + 0.10 * nose_hit
+            if boosting:
+                setup += 0.35
+            if front >= self.front_margin:
+                setup += 0.25
+            if nose_g >= 0.40:
+                setup += 0.20
+            rewards[a] = float(self.per_tick * min(1.6, setup))
+        return rewards
     
 
 from rl_math.ball import GOAL_THRESHOLD
 from rl_math.solid_angle import view_goal_ratio
+
+
+class NoBoostOverextendReward(RewardFunction[AgentID, GameState, float]):
+    """v5 (user): penalize the 'overextend on empty' mistake — being GROUNDED,
+    deep in the opponent's half, with LOW BOOST — where a well-placed clear/shot
+    by the defender beats you to a fast break. NOTE boost_amount is 0-100.
+
+    Penalty = weight * boost_deficit * opp_half_depth, only when on the ground and
+    below min_boost and past the deadzone into the attacking half. Zero elsewhere,
+    so it never discourages a committed play or normal attacking with boost."""
+    def __init__(self, min_boost: float = 25.0, deadzone_frac: float = 0.10,
+                 weight: float = 1.0):
+        self.min_boost = min_boost           # 0-100 scale
+        self.deadzone = deadzone_frac        # fraction of half past midfield before it bites
+        self.weight = weight
+
+    def reset(self, agents, initial_state, shared_info):
+        pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        for a in agents:
+            car = state.cars[a]
+            if not car.on_ground or car.boost_amount >= self.min_boost:
+                continue
+            attack = -1.0 if car.is_orange else 1.0
+            depth = attack * float(car.physics.position[1]) / BACK_NET_Y   # -1..1, + into opp half
+            if depth <= self.deadzone:
+                continue
+            deficit = (self.min_boost - car.boost_amount) / self.min_boost   # 0..1
+            depth_frac = min(1.0, (depth - self.deadzone) / (1.0 - self.deadzone))
+            rewards[a] = -self.weight * deficit * depth_frac
+        return rewards
+
+
+class OpponentPossessionSpaceReward(RewardFunction[AgentID, GameState, float]):
+    """When the opponent has ground control, don't crowd into flick range.
+
+    In-game (user vs Nexto on V10STRONG): we sit too close while they dribble,
+    they flick, and they score. This pays for shadowing at a challengeable gap
+    (goal-side) and lightly penalizes being inside flick range. Positive-first:
+    the band reward is the main signal; the crowd penalty is a soft floor.
+    """
+
+    def __init__(
+        self,
+        opp_control_radius: float = 380.0,
+        ball_max_z: float = 280.0,
+        crowd_dist: float = 700.0,
+        ideal_min: float = 950.0,
+        ideal_max: float = 1700.0,
+        far_dist: float = 2400.0,
+        per_second: float = 1.0,
+        crowd_penalty_per_second: float = 1.2,
+    ):
+        self.opp_control_radius = opp_control_radius
+        self.ball_max_z = ball_max_z
+        self.crowd_dist = crowd_dist
+        self.ideal_min = ideal_min
+        self.ideal_max = ideal_max
+        self.far_dist = far_dist
+        self.per_tick = per_second / TICKS_PER_SECOND
+        self.crowd_per_tick = crowd_penalty_per_second / TICKS_PER_SECOND
+
+    def reset(self, agents, initial_state, shared_info):
+        pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball = state.ball.position
+        ball_z = float(ball[2])
+        if ball_z > self.ball_max_z:
+            return rewards
+
+        for a in agents:
+            me = state.cars[a]
+            # Find the (single) opponent in 1v1.
+            opp = None
+            for oid, ocar in state.cars.items():
+                if oid != a and ocar.team_num != me.team_num:
+                    opp = ocar
+                    break
+            if opp is None or opp.is_demoed:
+                continue
+
+            me_pos = np.array(me.physics.position, dtype=float)
+            opp_pos = np.array(opp.physics.position, dtype=float)
+            ball_pos = np.array(ball, dtype=float)
+            d_me = float(np.linalg.norm(me_pos - ball_pos))
+            d_opp = float(np.linalg.norm(opp_pos - ball_pos))
+
+            # Opponent has ground-ish control: closer than us and cradling the ball.
+            if d_opp > self.opp_control_radius or d_opp >= d_me:
+                continue
+
+            attack = -1.0 if me.is_orange else 1.0
+            # Goal-side of the ball (between ball and our net) — shadow, don't dive past.
+            goal_side = (attack * float(me_pos[1])) < (attack * float(ball_pos[1]))
+            if not goal_side:
+                # Mild nudge to get back goal-side rather than sitting past the ball.
+                rewards[a] -= 0.35 * self.per_tick
+                continue
+
+            if d_me < self.crowd_dist:
+                # Inside flick range — the failure mode vs Nexto.
+                scale = 1.0 - (d_me / max(self.crowd_dist, 1.0))
+                rewards[a] -= self.crowd_per_tick * scale
+            elif d_me <= self.ideal_max:
+                # Ideal shadow band: peak at midpoint of [ideal_min, ideal_max].
+                mid = 0.5 * (self.ideal_min + self.ideal_max)
+                half = 0.5 * (self.ideal_max - self.ideal_min)
+                band = max(0.0, 1.0 - abs(d_me - mid) / max(half, 1.0))
+                rewards[a] += self.per_tick * band
+            elif d_me < self.far_dist:
+                # Still goal-side but a bit soft — small retain so we don't camp forever.
+                fade = 1.0 - (d_me - self.ideal_max) / max(self.far_dist - self.ideal_max, 1.0)
+                rewards[a] += 0.25 * self.per_tick * max(0.0, fade)
+        return rewards
+
+
+class PressureFlickToGoalReward(RewardFunction[AgentID, GameState, float]):
+    """When WE cradle the ball and the opponent is near (open field, not on a wall),
+    flick it away toward their net.
+
+    Complements OpponentPossessionSpaceReward (defense) and the generic FlickReward.
+    FlickReward often zeros under real challenge because of its ETA-advantage gate —
+    exactly when we want a pressure flick. This channel pays for that play:
+    possession + opp close + floor (not wall) + goalward Δv.
+    """
+
+    def __init__(
+        self,
+        velocity_threshold: float = 450.0,
+        dribble_radius: float = 200.0,
+        min_ball_height: float = 100.0,
+        max_ball_height: float = 320.0,
+        opp_near_dist: float = 1400.0,
+        wall_x_thresh: float = 3200.0,
+        wall_z_thresh: float = 280.0,
+        min_goalward: float = 350.0,
+    ):
+        self.velocity_threshold = velocity_threshold
+        self.dribble_radius = dribble_radius
+        self.min_ball_height = min_ball_height
+        self.max_ball_height = max_ball_height
+        self.opp_near_dist = opp_near_dist
+        self.wall_x_thresh = wall_x_thresh
+        self.wall_z_thresh = wall_z_thresh
+        self.min_goalward = min_goalward
+        self.last_ball_velocity = None
+        self.last_touch_agent = None
+
+    def reset(self, agents, initial_state, shared_info):
+        self.last_ball_velocity = np.array(initial_state.ball.linear_velocity, dtype=float)
+        self.last_touch_agent = None
+
+    def _on_wall(self, car) -> bool:
+        pos = car.physics.position
+        # Side-wall / elevated wall surface — skip; those plays are wall-pop / air-dribble.
+        return abs(float(pos[0])) >= self.wall_x_thresh or float(pos[2]) >= self.wall_z_thresh
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball_vel = np.array(state.ball.linear_velocity, dtype=float)
+        ball_pos = np.array(state.ball.position, dtype=float)
+        delta_v = float(np.linalg.norm(ball_vel - self.last_ball_velocity))
+
+        if (
+            delta_v > self.velocity_threshold
+            and self.last_touch_agent is not None
+            and self.last_touch_agent in state.cars
+        ):
+            agent = self.last_touch_agent
+            car = state.cars[agent]
+            car_pos = np.array(car.physics.position, dtype=float)
+            dist = float(np.linalg.norm(ball_pos - car_pos))
+            ball_z = float(ball_pos[2])
+
+            cradling = (
+                dist < self.dribble_radius
+                and self.min_ball_height <= ball_z <= self.max_ball_height
+            )
+            if cradling and not self._on_wall(car):
+                # Opponent near enough to threaten the 50/50 / steal.
+                opp_near = False
+                for oid, opp in state.cars.items():
+                    if oid == agent or opp.team_num == car.team_num or opp.is_demoed:
+                        continue
+                    if float(np.linalg.norm(
+                        np.array(opp.physics.position, dtype=float) - ball_pos
+                    )) < self.opp_near_dist:
+                        opp_near = True
+                        break
+
+                if opp_near:
+                    attack = -1.0 if car.is_orange else 1.0
+                    goalward = float(ball_vel[1]) * attack
+                    if goalward >= self.min_goalward:
+                        # Magnitude × how goalward (positive-first; no ETA gate).
+                        power = min(delta_v / BALL_MAX_SPEED, 1.0)
+                        aim = min(goalward / BALL_MAX_SPEED, 1.0)
+                        reward = power * (0.45 + 0.55 * aim)
+                        if car.is_flipping:
+                            reward *= 1.35
+                        rewards[agent] = float(reward)
+
+        self.last_ball_velocity = ball_vel
+        for a in agents:
+            if state.cars[a].ball_touches > 0:
+                self.last_touch_agent = a
+                break
+        return rewards
+
+
+class ContestHighBallReward(RewardFunction[AgentID, GameState, float]):
+    """Go up for high balls instead of waiting underneath.
+
+    User vs Nexto: opponent jumps/aerials a high ball while we sit on the floor
+    under it. AerialBoostTowardBallReward only pays once already airborne +
+    boosting — it never pulls us OFF the ground. This is the missing positive
+    signal: when the ball is elevated and we're below it in range, reward
+    climbing and closing the 3D gap.
+    """
+
+    def __init__(
+        self,
+        ball_z_min: float = 420.0,
+        max_horiz_dist: float = 1600.0,
+        under_margin: float = 60.0,
+        per_second: float = 1.0,
+        climb_w: float = 1.0,
+        close_w: float = 1.2,
+        air_bonus: float = 0.35,
+    ):
+        self.ball_z_min = ball_z_min
+        self.max_horiz_dist = max_horiz_dist
+        self.under_margin = under_margin
+        self.per_tick = per_second / TICKS_PER_SECOND
+        self.climb_w = climb_w
+        self.close_w = close_w
+        self.air_bonus = air_bonus
+        self.prev_dist: Dict[Any, float] = {}
+
+    def reset(self, agents, initial_state, shared_info):
+        ball = np.array(initial_state.ball.position, dtype=float)
+        self.prev_dist = {}
+        for a in agents:
+            car = np.array(initial_state.cars[a].physics.position, dtype=float)
+            self.prev_dist[a] = float(np.linalg.norm(ball - car))
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball = np.array(state.ball.position, dtype=float)
+        ball_z = float(ball[2])
+        if ball_z < self.ball_z_min:
+            for a in agents:
+                car = np.array(state.cars[a].physics.position, dtype=float)
+                self.prev_dist[a] = float(np.linalg.norm(ball - car))
+            return rewards
+
+        # Higher balls matter more (up to ~ceiling).
+        height_scale = min(1.0, (ball_z - self.ball_z_min) / max(CEILING_Z - self.ball_z_min, 1.0))
+        height_scale = 0.45 + 0.55 * height_scale
+
+        for a in agents:
+            car = state.cars[a]
+            if car.is_demoed:
+                continue
+            pos = np.array(car.physics.position, dtype=float)
+            vel = np.array(car.physics.linear_velocity, dtype=float)
+            to_ball = ball - pos
+            dist = float(np.linalg.norm(to_ball))
+            horiz = float(np.linalg.norm(to_ball[:2]))
+            prev = self.prev_dist.get(a, dist)
+            self.prev_dist[a] = dist
+
+            # Only when under the ball and in horizontal reach (the "waiting below" case).
+            if float(pos[2]) > ball_z - self.under_margin:
+                continue
+            if horiz > self.max_horiz_dist:
+                continue
+
+            # Climb toward it (upward speed).
+            climb = max(0.0, float(vel[2])) / CAR_MAX_SPEED
+            # Close 3D gap this tick.
+            closed = max(0.0, prev - dist) / max(CAR_MAX_SPEED / TICKS_PER_SECOND, 1e-6)
+            closed = min(closed, 1.0)
+            # Alignment of velocity with direction to ball.
+            align = 0.0
+            speed = float(np.linalg.norm(vel))
+            if speed > 50.0 and dist > 1e-3:
+                align = max(0.0, float(np.dot(vel, to_ball)) / (speed * dist))
+
+            r = (self.climb_w * climb + self.close_w * closed) * (0.5 + 0.5 * align)
+            if not car.on_ground:
+                r *= (1.0 + self.air_bonus)
+            rewards[a] = float(self.per_tick * height_scale * r)
+        return rewards
+
+
+class PossessionRangeCarryReward(RewardFunction[AgentID, GameState, float]):
+    """Advance upfield; start an air dribble only when takeoff speed matches range.
+
+    v9.5 (user): far-away air dribbles are GOOD if we already have momentum
+    (wall carry, fast ground carry). Slow ground-dribble pops from far away
+    burn boost just to reach the net — those stay on the ground / flick path.
+    Under pressure (opp in flick range, not a committed aerial) do not pay
+    the aerial start; PressureFlickToGoalReward / FlickReward cover that.
+    Positive-only.
+    """
+
+    def __init__(
+        self,
+        half_field: float = 2800.0,
+        control_radius: float = 550.0,
+        play_min_opp: float = 700.0,
+        per_second: float = 1.0,
+        takeoff_speed_near: float = 350.0,
+        takeoff_speed_far: float = 1700.0,
+        takeoff_dist_ref: float = 9000.0,
+        takeoff_ok_frac: float = 0.75,
+        pressure_dist: float = 1200.0,
+    ):
+        self.half_field = half_field
+        self.control_radius = control_radius
+        self.play_min_opp = play_min_opp
+        self.per_tick = per_second / TICKS_PER_SECOND
+        self.takeoff_speed_near = float(takeoff_speed_near)
+        self.takeoff_speed_far = float(takeoff_speed_far)
+        self.takeoff_dist_ref = float(takeoff_dist_ref)
+        self.takeoff_ok_frac = float(takeoff_ok_frac)
+        self.pressure_dist = float(pressure_dist)
+        self.prev_ball_y: Dict[Any, float] = {}
+        self.last_touch_agent = None
+
+    def reset(self, agents, initial_state, shared_info):
+        y = float(initial_state.ball.position[1])
+        self.prev_ball_y = {a: y for a in agents}
+        self.last_touch_agent = None
+
+    def _opp_dist(self, agent, state) -> float:
+        me = state.cars[agent]
+        me_pos = np.array(me.physics.position, dtype=float)
+        best = None
+        for oid, opp in state.cars.items():
+            if oid == agent or opp.team_num == me.team_num or opp.is_demoed:
+                continue
+            d = float(np.linalg.norm(np.array(opp.physics.position, dtype=float) - me_pos))
+            best = d if best is None else min(best, d)
+        return best if best is not None else 1e9
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball = np.array(state.ball.position, dtype=float)
+        bvel = np.array(state.ball.linear_velocity, dtype=float)
+        ball_y = float(ball[1])
+        ball_z = float(ball[2])
+
+        for a in agents:
+            if state.cars[a].ball_touches > 0:
+                self.last_touch_agent = a
+
+        for a in agents:
+            car = state.cars[a]
+            if car.is_demoed:
+                continue
+            car_pos = np.array(car.physics.position, dtype=float)
+            dist = float(np.linalg.norm(ball - car_pos))
+            # "Our ball": recent touch or still near it.
+            ours = (self.last_touch_agent == a) or (dist < self.control_radius)
+            prev_y = self.prev_ball_y.get(a, ball_y)
+            self.prev_ball_y[a] = ball_y
+            if not ours:
+                continue
+
+            opp_d = self._opp_dist(a, state)
+            attack = -1.0 if car.is_orange else 1.0
+            goalward_v = max(0.0, float(bvel[1]) * attack) / CAR_MAX_SPEED
+            goalward_v = min(goalward_v, 1.0)
+            # Ball actually moved toward their net this tick.
+            y_progress = max(0.0, (ball_y - prev_y) * attack)
+            y_progress = min(y_progress / max(CAR_MAX_SPEED / TICKS_PER_SECOND, 1e-6), 1.0)
+
+            cradle = (
+                dist < 220.0
+                and 90.0 <= ball_z <= 280.0
+                and car.on_ground
+            )
+            advance = 0.85 * goalward_v + 0.65 * y_progress
+            if cradle:
+                advance += 0.25
+
+            under = (not car.on_ground) and ball_z > 220.0 and dist < 520.0
+            popping = float(bvel[2]) > 250.0 and ball_z > 180.0 and dist < 600.0
+            aerial_start = under or popping
+
+            car_vel = np.array(car.physics.linear_velocity, dtype=float)
+            have = takeoff_have_speed(car, car_pos, car_vel, bvel)
+            need = takeoff_need_speed(
+                dist_to_opp_goal_y(car, ball),
+                self.takeoff_speed_near,
+                self.takeoff_speed_far,
+                self.takeoff_dist_ref,
+            )
+            speed_ok = have >= self.takeoff_ok_frac * need
+            # Opp in flick range and we are not already a committed aerial.
+            under_pressure = opp_d < self.pressure_dist and not (
+                (not car.on_ground) and ball_z >= 380.0 and have >= 700.0
+            )
+
+            # v10: if the defender is already beaten with an open lane, the aerial
+            # setup is the wrong play — fall through to the fast advance path.
+            beaten, _ = advantage_clear_lane(a, car, state, ball)
+
+            if aerial_start and speed_ok and not under_pressure and not beaten:
+                lift = min(1.0, max(0.0, float(bvel[2])) / 1200.0)
+                air = 0.0 if car.on_ground else 0.45
+                # Stronger when we exceed the distance-scaled need (fast wall / carry).
+                extra = min(1.0, have / max(need, 1.0))
+                rewards[a] = float(
+                    self.per_tick * extra * (0.55 + 0.7 * lift + air + 0.35 * goalward_v)
+                )
+            else:
+                # Slow takeoff, or pressure: stay on the ground-advance / flick path.
+                rewards[a] = float(self.per_tick * advance)
+        return rewards
+
+
+class ClearPathFinishReward(RewardFunction[AgentID, GameState, float]):
+    """Defender already beaten + open lane → convert, don't start another aerial.
+
+    v10 (user, on V10BS10 vs Nexto): "sometimes we have already beaten the
+    opponent ... and the bot will still slow the play down and try to set up an
+    air dribble", which hands the defender time to recover. This pays for putting
+    real goalward VELOCITY on the ball in exactly that situation — boom, flick,
+    shot, dodge-in, the mechanic doesn't matter. The matching AD-start fade lives
+    in AirdribbleReward / AirDribbleSequenceReward via `advantage_ad_mult`.
+
+    Positive-only, and it only activates once the advantage already exists, so it
+    never discourages air dribbles that are being used to CREATE an advantage.
+    """
+
+    def __init__(
+        self,
+        speed_target: float = 2000.0,
+        min_goalward: float = 600.0,
+        on_target_halfwidth: float = 1400.0,
+        dodge_bonus: float = 1.25,
+        touch_radius: float = 320.0,
+        lane_radius: float = 1100.0,
+        min_lead: float = 900.0,
+    ):
+        self.speed_target = speed_target
+        self.min_goalward = min_goalward
+        self.on_target_halfwidth = on_target_halfwidth
+        self.dodge_bonus = dodge_bonus
+        self.touch_radius = touch_radius
+        self.lane_radius = lane_radius
+        self.min_lead = min_lead
+        self.prev_touches: Dict[Any, int] = {}
+
+    def reset(self, agents, initial_state, shared_info):
+        self.prev_touches = {a: initial_state.cars[a].ball_touches for a in agents}
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        ball_pos = np.array(state.ball.position, dtype=float)
+        ball_vel = np.array(state.ball.linear_velocity, dtype=float)
+
+        for a in agents:
+            car = state.cars[a]
+            touches = car.ball_touches
+            just_touched = touches > self.prev_touches.get(a, 0)
+            self.prev_touches[a] = touches
+            if car.is_demoed or not just_touched:
+                continue
+
+            car_pos = np.array(car.physics.position, dtype=float)
+            if float(np.linalg.norm(ball_pos - car_pos)) > self.touch_radius:
+                continue
+
+            is_clear, lead = advantage_clear_lane(
+                a, car, state, ball_pos,
+                lane_radius=self.lane_radius, min_lead=self.min_lead,
+            )
+            if not is_clear:
+                continue
+
+            attack = -1.0 if car.is_orange else 1.0
+            goalward = float(ball_vel[1]) * attack
+            if goalward < self.min_goalward:
+                continue
+
+            power = min(1.0, goalward / self.speed_target)
+            # Prefer it actually heading at the mouth, not into the corner.
+            aim = max(0.0, 1.0 - abs(float(ball_pos[0])) / self.on_target_halfwidth)
+            r = power * (0.55 + 0.45 * aim)
+            if car.is_flipping:
+                r *= self.dodge_bonus
+            rewards[a] = float(r)
+        return rewards
+
+
+class SafeBoostCollectReward(RewardFunction[AgentID, GameState, float]):
+    """v6 (user): 'go for more boost when we're in a safe position' — the POSITIVE
+    counterpart to the removed NoBoostOverextendReward. Instead of punishing being
+    caught empty, reward topping up boost (pad pickups) when we're LOW and the
+    position is SAFE, so the bot proactively grabs boost and is rarely empty in the
+    first place. boost_amount is 0-100.
+
+    SAFE = we are goal-side of the ball (between the ball and our own net) AND the
+    ball is FAR from us (min_ball_dist) — i.e. we're genuinely off-ball, not in a
+    contestable play. This is the v6.1 fix: the earlier version peeled off for boost
+    even when the ball was close/contestable near kickoff and GAVE UP POSSESSION
+    (user). Only pays while boost < target (no hoarding), scaled by how far below.
+    Kept deliberately small so it never outweighs pressing a play.
+
+    v13 (user vs Nexto): last man peels to the corner pad while they have the
+    ball on the wall and flicks in from the outside. Goal-side-on-Y + distance
+    is not enough — do not pay for a pad when they have possession AND the
+    ball is threatening our net AND we are off the goal-ball line (or already
+    in our corner-pad pocket)."""
+    def __init__(self, target_boost: float = 45.0, weight: float = 1.0,
+                 min_ball_dist: float = 2500.0):
+        self.target_boost = target_boost      # 0-100 scale; only top up when below this
+        self.weight = weight
+        self.min_ball_dist = min_ball_dist    # ball must be at least this far to count as off-ball
+        self.prev_boost: Dict[AgentID, float] = {}
+
+    def reset(self, agents, initial_state, shared_info):
+        self.prev_boost = {a: initial_state.cars[a].boost_amount for a in agents}
+
+    def _corner_peel_unsafe(self, car, state, bp, cp) -> bool:
+        """True if grabbing boost now is the last-man corner-pad leak."""
+        opp = None
+        for ocar in state.cars.values():
+            if ocar.team_num != car.team_num:
+                opp = ocar
+                break
+        if opp is None or opp.is_demoed:
+            return False
+        me_pos = np.array(cp, dtype=float)
+        opp_pos = np.array(opp.physics.position, dtype=float)
+        ball = np.array(bp, dtype=float)
+        d_me = float(np.linalg.norm(me_pos - ball))
+        d_opp = float(np.linalg.norm(opp_pos - ball))
+        # They have the ball (clearly closer). If we are as close, pad is fine.
+        if d_opp > d_me - 150.0:
+            return False
+        attack = -1.0 if car.is_orange else 1.0
+        own_goal = np.array([0.0, -attack * BACK_NET_Y, 0.0], dtype=float)
+        ball_depth = attack * float(ball[1])  # >0 = attacking half
+        ball_vel = np.array(state.ball.linear_velocity, dtype=float)
+        to_goal = own_goal - ball
+        goal_dist = float(np.linalg.norm(to_goal))
+        toward_net = 0.0
+        if goal_dist > 1e-6:
+            toward_net = float(np.dot(ball_vel, to_goal / goal_dist))
+        threatening = (ball_depth < 800.0) or (toward_net > 200.0)
+        if not threatening:
+            return False
+        gb = ball[:2] - own_goal[:2]
+        gg = float(np.linalg.norm(gb))
+        if gg < 1.0:
+            return True
+        u = gb / gg
+        gm = me_pos[:2] - own_goal[:2]
+        t = max(0.0, min(gg, float(np.dot(gm, u))))
+        lateral = float(np.linalg.norm(me_pos[:2] - (own_goal[:2] + u * t)))
+        in_our_corner = (attack * float(me_pos[1]) < -1800.0) and (abs(me_pos[0]) > 2200.0)
+        wide_ball = abs(float(ball[0])) > 1800.0
+        return (lateral > 900.0) or (in_our_corner and wide_ball)
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        for a in agents:
+            car = state.cars[a]
+            gained = max(0.0, car.boost_amount - self.prev_boost.get(a, car.boost_amount))
+            self.prev_boost[a] = car.boost_amount
+            if gained <= 0.0 or car.boost_amount > self.target_boost:
+                continue
+            # off-ball guard: don't reward peeling off for boost near a contestable ball
+            bp = state.ball.position
+            cp = car.physics.position
+            ball_dist = ((bp[0] - cp[0]) ** 2 + (bp[1] - cp[1]) ** 2 + (bp[2] - cp[2]) ** 2) ** 0.5
+            if ball_dist < self.min_ball_dist:
+                continue
+            attack = -1.0 if car.is_orange else 1.0
+            ball_depth = attack * float(bp[1])       # >0 = ball on opp (attacking) half
+            car_depth = attack * float(cp[1])
+            safe = (car_depth < ball_depth)          # goal-side of the ball
+            if not safe:
+                continue
+            if self._corner_peel_unsafe(car, state, bp, cp):
+                continue
+            need = (self.target_boost - car.boost_amount) / self.target_boost   # 0..1
+            rewards[a] = self.weight * (gained / 100.0) * need
+        return rewards
 
 
 class GoalProbReward(RewardFunction[AgentID, GameState, float]):
@@ -628,21 +1447,18 @@ class AirBoostReward(RewardFunction[AgentID, GameState, float]):
 
 class PossessionReward(RewardFunction[AgentID, GameState, float]):
     """
-    1v1 possession reward designed to stop "both cradling" behavior.
-
-    Possession is EXCLUSIVE control by one agent:
+    Zero-sum 1v1 possession. Exclusive control by one agent:
       - close to ball (possess_radius)
       - facing ball enough (face_cos_min)
       - relative ball-car speed small (rel_speed_max)
-      - AND (optionally) last touched recently (touch_window) to make possession "sticky"
+      - AND (optionally) last touched recently (touch_window)
 
-    If both satisfy control -> contested -> no retain reward (and optional stalemate penalty when ball is slow).
+    If both satisfy control, or neither does -> 0 / 0 (contested or loose).
+    If one has it: +r to them, -r to the other. Steal is the same swap.
 
-    Rewards:
-      - capture: when possessor switches from opponent -> you
-      - retain: per tick while you have exclusive possession
-      - giveaway: penalty when you lose possession to opponent
-      - stalemate: penalty when contested and ball speed low for a while
+    Previously this was only *partly* adversarial (retain +1 / -0.6, steal
+    +1 / -1.2, and a both-lose stalemate). That is not zero-sum: you could
+    dump the ball and not fully pay the opponent. Now every term sums to 0.
     """
 
     def __init__(
@@ -655,11 +1471,13 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
         # Make possession "sticky" only if you recently touched OR you're very clearly controlling
         require_recent_touch_for_possession: bool = False,
 
-        # Anti-cradle
+        # kept for call-site / old-config compatibility; unused (contested = 0/0)
         loose_ball_speed: float = 450.0,
         contested_ticks_needed: int = 12,
 
-        # Rewards (tuned to be modest; scale in CombinedReward)
+        # Rewards (tuned to be modest; scale in CombinedReward). giveaway /
+        # contested penalty args are ignored — steal uses capture_reward on
+        # both sides so the swap is zero-sum.
         capture_reward: float = 1.0,
         retain_per_second: float = 0.6,
         giveaway_penalty: float = 1.2,
@@ -737,8 +1555,7 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
                 self.last_touch_tick[a] = self.tick
             self.prev_touches[a] = touches
 
-        # detect contested control (both meet geometric control ignoring touch requirement)
-        # this is only for stalemate penalty
+        # detect contested control (debug / shared_info only; contested pays 0/0)
         def geom_control(a: AgentID) -> bool:
             car = state.cars[a]
             bpos = np.array(state.ball.position, dtype=float)
@@ -757,26 +1574,25 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
 
         possessor = self._choose_possessor(agents, state)
 
-        # capture / giveaway
+        def _credit(winner: AgentID, amount: float) -> None:
+            rewards[winner] += amount
+            for o in agents:
+                if o != winner:
+                    rewards[o] -= amount
+
+        # steal / first claim — same magnitude both sides
         if possessor is not None and self.prev_possessor is not None and possessor != self.prev_possessor:
-            rewards[possessor] += self.capture_reward
-            rewards[self.prev_possessor] -= self.giveaway_penalty
+            _credit(possessor, self.capture_reward)
         elif possessor is not None and self.prev_possessor is None:
-            rewards[possessor] += 0.5 * self.capture_reward  # mild first claim
+            _credit(possessor, 0.5 * self.capture_reward)
 
-        # retain
+        # retain — +r / -r
         if possessor is not None:
-            rewards[possessor] += self.retain_per_tick
-            other = [a for a in agents if a != possessor][0]
-            rewards[other] -= 0.6 * self.retain_per_tick
+            _credit(possessor, self.retain_per_tick)
 
-        # anti-cradle stalemate
-        ball_speed = _safe_norm(np.array(state.ball.linear_velocity, dtype=float))
-        if contested_geom and ball_speed <= self.loose_ball_speed:
+        # contested or loose: already 0/0. Track ticks for debug only.
+        if contested_geom:
             self.contested_ticks += 1
-            if self.contested_ticks >= self.contested_ticks_needed:
-                for a in agents:
-                    rewards[a] -= self.contested_penalty_per_tick
         else:
             self.contested_ticks = 0
 
@@ -1037,13 +1853,14 @@ class GoalDistReward(RewardFunction[AgentID, GameState, float]):
         rewards = {}
         for agent in agents:
             car = state.cars[agent]
-            ball_pos = car.physics.position if car.is_orange else state.inverted_ball.position  # wait, no
-            ball_pos = state.ball.position if not car.is_orange else state.inverted_ball.position
-            goal_y = BACK_NET_Y if car.is_orange else -BACK_NET_Y
-            dist = abs(ball_pos[1] - goal_y)
+            # Reward the ball being close to the goal we ATTACK (real frame for both teams,
+            # matching VelocityBallToGoalReward): blue (team 0) attacks +BACK_NET_Y,
+            # orange attacks -BACK_NET_Y.
+            ball_y = state.ball.position[1]
+            goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+            dist = abs(ball_y - goal_y)
             max_dist = BACK_NET_Y * 2
-            reward = (max_dist - dist) / max_dist
-            rewards[agent] = reward
+            rewards[agent] = (max_dist - dist) / max_dist
         return rewards
     
 class AerialBoostTowardBallReward(RewardFunction[AgentID, GameState, float]):

@@ -17,6 +17,214 @@ def _unit(v):
 BACK_WALL_Y = 5120
 TICKS_PER_SECOND = 120
 
+# Reward functions are called once per env STEP, not per physics tick.
+# With RepeatAction(repeats=8) that is 120/8 = 15 calls per second. Rewards
+# that scale "per second" from a per-call counter must divide by THIS, not by
+# TICKS_PER_SECOND — using 120 silently diluted AirdribbleReward 8x (the
+# designed 9.0/sec dense carry signal actually paid 1.125/sec, one reason 2B
+# timesteps produced zero air dribbles in game). Rewards that difference
+# state.tick_count (physics ticks) are unaffected and still use TICKS_PER_SECOND.
+ACTION_REPEAT = 8
+STEPS_PER_SECOND = TICKS_PER_SECOND / ACTION_REPEAT  # 15.0
+
+# v9.5: takeoff speed should scale with remaining distance to their net.
+# A fast wall carry from own half is good; a slow ground-dribble pop from
+# the same spot burns boost just to get there. 0 disables a gate.
+_WALL_X = 3500.0
+_WALL_Z = 250.0
+
+
+def goal_y_for_car(car) -> float:
+    return -BACK_NET_Y if car.is_orange else BACK_NET_Y
+
+
+def dist_to_opp_goal_y(car, pos) -> float:
+    return abs(goal_y_for_car(car) - float(pos[1]))
+
+
+def goalward_y_speed(car, vel) -> float:
+    attack = -1.0 if car.is_orange else 1.0
+    return max(0.0, float(vel[1]) * attack)
+
+
+def on_wallish(pos, wall_x: float = _WALL_X, wall_z: float = _WALL_Z) -> bool:
+    return abs(float(pos[0])) >= wall_x or float(pos[2]) >= wall_z
+
+
+def min_opp_car_dist(agent, car, state) -> float:
+    me = np.array(car.physics.position, dtype=float)
+    best = None
+    for oid, opp in state.cars.items():
+        if oid == agent or opp.team_num == car.team_num or opp.is_demoed:
+            continue
+        d = float(np.linalg.norm(np.array(opp.physics.position, dtype=float) - me))
+        best = d if best is None else min(best, d)
+    return best if best is not None else 1e9
+
+
+def takeoff_need_speed(
+    dist_to_goal: float,
+    speed_near: float = 350.0,
+    speed_far: float = 1700.0,
+    dist_ref: float = 9000.0,
+) -> float:
+    """Required goalward (or wall) speed before committing an air dribble."""
+    t = min(1.0, max(0.0, float(dist_to_goal) / max(dist_ref, 1.0)))
+    return float(speed_near + t * (speed_far - speed_near))
+
+
+def takeoff_have_speed(car, car_pos, car_vel, ball_vel) -> float:
+    """Launch momentum: goalward car/ball speed; wall rides count total speed.
+
+    Sideways speed does not count on the ground — only the component toward
+    their net. A fast wall ride still counts most of its total speed.
+    """
+    have = max(goalward_y_speed(car, car_vel), goalward_y_speed(car, ball_vel))
+    if on_wallish(car_pos):
+        have = max(have, 0.80 * float(np.linalg.norm(car_vel)))
+    return float(have)
+
+
+def car_in_front_of_ball(car, car_pos, ball_pos, margin: float = 80.0) -> bool:
+    """True when the car is goal-side of the ball (between ball and their net)."""
+    attack = -1.0 if car.is_orange else 1.0
+    return attack * (float(car_pos[1]) - float(ball_pos[1])) >= margin
+
+
+def nose_goalward(car) -> float:
+    """How much the nose points at the opponent net. 1.0 = dead-on, 0 = sideways/back."""
+    attack = -1.0 if car.is_orange else 1.0
+    fwd = np.array(car.physics.forward, dtype=float)
+    n = float(np.linalg.norm(fwd))
+    if n < 1e-6:
+        return 0.0
+    return max(0.0, attack * float(fwd[1]) / n)
+
+
+def nose_into_not_wheels(car, target_pos, car_pos=None) -> float:
+    """Nose-vs-wheels contact: >0 bumper into target, <0 wheels/undercarriage.
+
+    Wheels are -up. A 'land on them' bump has wheels facing the victim even
+    when the nose is vaguely goalward; those hits are soft. Positive means
+    the bumper is more aligned with the victim than the wheels are.
+    """
+    if car_pos is None:
+        car_pos = np.array(car.physics.position, dtype=float)
+    to_t = np.array(target_pos, dtype=float) - car_pos
+    n = float(np.linalg.norm(to_t))
+    if n < 1e-6:
+        return 0.0
+    d = to_t / n
+    fwd = np.array(car.physics.forward, dtype=float)
+    up = np.array(car.physics.up, dtype=float)
+    fn = float(np.linalg.norm(fwd))
+    un = float(np.linalg.norm(up))
+    if fn < 1e-6 or un < 1e-6:
+        return 0.0
+    nose_at = float(np.dot(fwd / fn, d))
+    wheels_at = float(np.dot(-(up / un), d))
+    return nose_at - max(0.0, wheels_at)
+
+
+def bump_contact_part(car, target_pos, car_pos=None) -> str:
+    """Which part of `car` faces `target_pos`: the dominant local axis of the
+    direction to the target's centre. One of nose/back/roof/wheels/side."""
+    if car_pos is None:
+        car_pos = np.array(car.physics.position, dtype=float)
+    d = np.array(target_pos, dtype=float) - car_pos
+    n = float(np.linalg.norm(d))
+    if n < 1e-6:
+        return "side"
+    d /= n
+    fwd = float(np.dot(np.array(car.physics.forward, dtype=float), d))
+    up = float(np.dot(np.array(car.physics.up, dtype=float), d))
+    right = float(np.dot(np.array(car.physics.right, dtype=float), d))
+    axis = max((abs(fwd), "f"), (abs(up), "u"), (abs(right), "r"))[1]
+    if axis == "f":
+        return "nose" if fwd > 0 else "back"
+    if axis == "u":
+        return "roof" if up > 0 else "wheels"
+    return "side"
+
+
+def spent_boost(car, prev_car, min_spent: float = 0.4) -> bool:
+    """Boosting now, or spent boost since the last step."""
+    if bool(getattr(car, "is_boosting", False)):
+        return True
+    if prev_car is None:
+        return False
+    prev = float(getattr(prev_car, "boost_amount", 0.0))
+    now = float(getattr(car, "boost_amount", 0.0))
+    return (prev - now) >= min_spent
+
+
+def takeoff_speed_mult(have: float, need: float, floor: float = 0.08) -> float:
+    if need <= 1.0:
+        return 1.0
+    ratio = min(1.0, max(0.0, float(have) / need))
+    return float(floor + (1.0 - floor) * ratio)
+
+
+def advantage_clear_lane(agent, car, state, ball_pos, lane_radius: float = 1100.0,
+                         min_lead: float = 900.0):
+    """Have we already beaten the defender with an open path to their net?
+
+    True when we are meaningfully closer to their goal than the nearest opponent
+    AND that opponent is not sitting in the ball->goal lane. Returns (bool, lead)
+    so callers can scale by how decisive the advantage is.
+    """
+    goal_y = goal_y_for_car(car)
+    my_d = abs(goal_y - float(car.physics.position[1]))
+    ball_d = abs(goal_y - float(ball_pos[1]))
+    best = None
+    blocker = False
+    for oid, opp in state.cars.items():
+        if oid == agent or opp.team_num == car.team_num or opp.is_demoed:
+            continue
+        opp_pos = np.array(opp.physics.position, dtype=float)
+        opp_d = abs(goal_y - float(opp_pos[1]))
+        best = opp_d if best is None else max(best, opp_d)
+        # In the lane: between the ball and the net, and laterally near the line.
+        if opp_d < ball_d and abs(float(opp_pos[0]) - float(ball_pos[0])) < lane_radius:
+            blocker = True
+    if best is None or blocker:
+        return False, 0.0
+    lead = best - my_d
+    return lead >= min_lead, max(0.0, lead)
+
+
+def advantage_ad_mult(is_clear: bool, lead: float, floor: float = 0.25,
+                      full_lead: float = 3000.0) -> float:
+    """Fade an air-dribble START when the defender is already beaten.
+
+    Applied only at carry start so a committed aerial is never cut off mid-play.
+    """
+    if not is_clear:
+        return 1.0
+    frac = min(1.0, lead / max(full_lead, 1.0))
+    return float(max(floor, 1.0 - frac * (1.0 - floor)))
+
+
+def pressure_ad_mult(
+    opp_d: float,
+    ball_z: float,
+    on_ground: bool,
+    have_speed: float,
+    pressure_dist: float = 1200.0,
+    floor: float = 0.10,
+    commit_z: float = 380.0,
+    commit_speed: float = 700.0,
+) -> float:
+    """Fade AD when the opponent is in flick range and we are not already committed."""
+    if pressure_dist <= 1.0 or opp_d >= pressure_dist:
+        return 1.0
+    committed = (not on_ground) and ball_z >= commit_z and have_speed >= commit_speed
+    if committed:
+        return 1.0
+    fade = 1.0 - (opp_d / pressure_dist)
+    return float(max(floor, 1.0 - fade * (1.0 - floor)))
+
+
 class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
     """
     Rewards "good wall pops" that set up air-dribbles.
@@ -28,9 +236,11 @@ class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
           (B) strong *infield* component (away from the wall)
       - optionally: not just a max-speed boom (encourages controllable pops)
 
-    Follow-through bonus (optional):
-      - within a short window after the pop, the same agent gets into a
-        good under-ball geometry (or gets an aerial touch).
+    Follow-through bonus:
+      - within a short window after the pop, the same agent gets an AERIAL
+        BALL TOUCH while in good under-ball geometry. Geometry alone used to
+        be enough, which let the bot farm pops + a hop without ever committing
+        boost to the ball — the observed V4 2B-timestep failure mode.
 
     Notes:
       - This is for 1v1; rewards only the popping agent.
@@ -57,8 +267,10 @@ class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
         clean_pop_bonus: float = 0.20,         # extra if not parallel-skimming & not booming
 
         # --- Follow-through window ---
-        follow_window_ms: int = 700,
-        follow_bonus: float = 0.35,
+        # 1200ms pop -> aerial touch. (The old 700ms was never actually in
+        # effect: the steps-vs-ticks bug ran it at 5.6s.)
+        follow_window_ms: int = 1200,
+        follow_bonus: float = 0.9,          # pays on COMPLETION (aerial touch), so worth more
         require_boost_for_follow: bool = True,
         min_follow_boost: float = 0.18,        # don't reward follow if clearly out of gas
 
@@ -82,7 +294,8 @@ class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
         self.infield_scale = infield_scale
         self.clean_pop_bonus = clean_pop_bonus
 
-        self.follow_ticks = max(1, int(round(follow_window_ms * TICKS_PER_SECOND / 1000.0)))
+        # self.tick increments once per env step (15 Hz) -> window in STEPS
+        self.follow_ticks = max(1, int(round(follow_window_ms * STEPS_PER_SECOND / 1000.0)))
         self.follow_bonus = follow_bonus
         self.require_boost_for_follow = require_boost_for_follow
         self.min_follow_boost = min_follow_boost
@@ -143,14 +356,16 @@ class WallPopSetupReward(RewardFunction[AgentID, GameState, float]):
         ball_vel = np.array(state.ball.linear_velocity, dtype=float)
         ball_speed = float(np.linalg.norm(ball_vel))
 
-        # ----- Follow-through bonus (dense gate) -----
+        # ----- Follow-through bonus (completion-gated) -----
         for a in agents:
             if self.pop_active[a] and self.tick <= self.pop_until[a]:
                 car = state.cars[a]
                 if self.require_boost_for_follow and car.boost_amount < self.min_follow_boost:
                     continue
-                # reward positioning under the ball shortly after the pop
-                if not car.on_ground and self._follow_geometry_good(car, ball_pos):
+                # pay only for CONNECTING: airborne ball touch in good
+                # under-ball geometry shortly after the pop
+                if (not car.on_ground and car.ball_touches > 0
+                        and self._follow_geometry_good(car, ball_pos)):
                     rewards[a] += self.follow_bonus
                     self.pop_active[a] = False  # one-time bonus
             elif self.tick > self.pop_until[a]:
@@ -210,7 +425,18 @@ class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
                  chain_bonus=0.35,
                  carry_scale=1/(2*5120),
                  forward_goal_w=2.0,
-                 forward_car_w=1.0):
+                 forward_car_w=1.0,
+                 # v9.5: takeoff speed vs remaining distance to their net.
+                 # Kept opp_close/far_floor for old configs; unused when takeoff is on.
+                 opp_close_dist: float = 0.0,
+                 far_opp_floor: float = 0.12,
+                 takeoff_speed_near: float = 350.0,
+                 takeoff_speed_far: float = 1700.0,
+                 takeoff_dist_ref: float = 9000.0,
+                 takeoff_floor: float = 0.08,
+                 pressure_dist: float = 1200.0,
+                 pressure_floor: float = 0.10,
+                 advantage_floor: float = 0.25):
         self.min_air_z = min_air_z
         self.rel_speed_max = rel_speed_max
         self.chain_ticks = max(1, int(chain_ms * 120 / 1000))
@@ -221,11 +447,21 @@ class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
         self.carry_scale = carry_scale
         self.forward_goal_w = forward_goal_w
         self.forward_car_w = forward_car_w
+        self.opp_close_dist = float(opp_close_dist)
+        self.far_opp_floor = float(far_opp_floor)
+        self.takeoff_speed_near = float(takeoff_speed_near)
+        self.takeoff_speed_far = float(takeoff_speed_far)
+        self.takeoff_dist_ref = float(takeoff_dist_ref)
+        self.takeoff_floor = float(takeoff_floor)
+        self.pressure_dist = float(pressure_dist)
+        self.pressure_floor = float(pressure_floor)
+        self.advantage_floor = float(advantage_floor)
         self.prev_ball_pos = None
         self.prev_touches = {}
         self.alive_until = {}
         self.chain_touches = {}
         self.carry = {}
+        self.chain_takeoff_mult = {}
 
     def reset(self, agents, initial_state, shared_info):
         self.prev_ball_pos = np.array(initial_state.ball.position, float)
@@ -233,6 +469,7 @@ class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
         self.alive_until = {a: -10**9 for a in agents}
         self.chain_touches = {a: 0 for a in agents}
         self.carry = {a: 0.0 for a in agents}
+        self.chain_takeoff_mult = {a: 1.0 for a in agents}
 
     def _goal_dir(self, car, ball_pos_np):
         goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
@@ -270,6 +507,20 @@ class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
                             continue
                         self.chain_touches[a] = 0
                         self.carry[a] = 0.0
+                        car_pos = np.array(car.physics.position, float)
+                        car_vel = np.array(car.physics.linear_velocity, float)
+                        d_goal = dist_to_opp_goal_y(car, bpos)
+                        need = takeoff_need_speed(
+                            d_goal,
+                            self.takeoff_speed_near,
+                            self.takeoff_speed_far,
+                            self.takeoff_dist_ref,
+                        )
+                        have = takeoff_have_speed(car, car_pos, car_vel, bvel)
+                        m = takeoff_speed_mult(have, need, self.takeoff_floor)
+                        is_clear, lead = advantage_clear_lane(a, car, state, bpos)
+                        m *= advantage_ad_mult(is_clear, lead, self.advantage_floor)
+                        self.chain_takeoff_mult[a] = m
 
                     self.chain_touches[a] += 1
                     self.alive_until[a] = state.tick_count + self.chain_ticks
@@ -281,6 +532,21 @@ class AirDribbleSequenceReward(RewardFunction[AgentID, GameState, float]):
                     payout += self.carry[a] * self.carry_scale
                     if self.chain_touches[a] >= 2:
                         payout += self.chain_bonus
+
+                    # v9.5: lock takeoff-speed vs distance at chain start. Fast
+                    # wall launches from far still pay; slow ground pops do not.
+                    payout *= self.chain_takeoff_mult.get(a, 1.0)
+                    car_pos = np.array(car.physics.position, float)
+                    car_vel = np.array(car.physics.linear_velocity, float)
+                    have_now = takeoff_have_speed(car, car_pos, car_vel, bvel)
+                    payout *= pressure_ad_mult(
+                        min_opp_car_dist(a, car, state),
+                        float(bpos[2]),
+                        bool(car.on_ground),
+                        have_now,
+                        self.pressure_dist,
+                        self.pressure_floor,
+                    )
 
                     rewards[a] += max(0.0, payout)
                     self.carry[a] = 0.0
@@ -312,9 +578,10 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
 
         # roof / under-ball geometry
         roof_min_up: float = 50.0,
-        roof_max_up: float = 260.0,
-        roof_target_up: float = 140.0,   # NEW: "sweet spot" height above car
-        roof_target_halfwidth: float = 90.0,  # NEW: softness around target
+        roof_max_up: float = 340.0,      # widened (was 260): bigger reward basin so
+                                         # imperfect carries still earn a gradient
+        roof_target_up: float = 150.0,   # "sweet spot" height above car
+        roof_target_halfwidth: float = 140.0,  # widened (was 90): softer falloff
 
         lateral_max: float = 200.0,
         forward_min: float = -40.0,
@@ -331,12 +598,88 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         w_rel_speed: float = 1.0,
         w_under: float = 2.5,            # NEW: strong driver of "get under it"
         w_goal_align: float = 0,
+
+        # NEW: sustain-duration escalation — the per-step reward grows the LONGER
+        # a carry is held unbroken, so PPO is pushed from repeated brief touches
+        # (high engagement, capped completion) toward SUSTAINED dribbles.
+        sustain_ramp: float = 0.08,
+        sustain_cap: int = 15,
+
+        # NEW (user feedback): stop rewarding a passive hover that doesn't drive
+        # the ball to net, and stop rewarding no-boost aerial commits.
+        min_carry_boost: float = 0.20,       # v6 REVERT to v4: the v5 value (20 on the 0-100
+                                             # scale) made the low-boost gate fire and the bot
+                                             # refuse/abort aerials without boost -> passive &
+                                             # slow (user). Back to the v4-inert 0.20 so it
+                                             # air-dribbles freely; boost economy is handled
+                                             # positively via SafeBoostCollectReward instead.
+        low_boost_penalty: float = 0.025,    # per-step penalty for a no-boost aerial commit
+        goal_progress_floor: float = 0.15,   # hover w/o goal-ward ball motion pays only this frac
+
+        # v8 (user feedback): "on a ground-to-air dribble we don't push the ball
+        # forward enough". goal_term below is a pure DIRECTION cosine, so a ball
+        # creeping goal-ward at 100uu/s scored the same as one driven at 1500uu/s
+        # — combined with w_rel_speed (which pays for matching the ball's speed)
+        # the optimum was a slow glued carry that barely advances. This pays for
+        # actual goal-ward ball SPEED, with a floor so control carries still earn.
+        goal_speed_target: float = 900.0,
+        push_floor: float = 0.35,
+
+        # v8 (user feedback): "lots of upper crossbar hits when air dribbling".
+        # Nothing in the carry cared about ball height, so it arrived at the net
+        # still climbing and clipped the bar. Near the net only, pay full reward
+        # for having the ball UNDER the crossbar and taper above it. Kept as a
+        # floored multiplier (not a penalty) per the v5 lesson that a negative
+        # near the opponent net suppresses attempts altogether.
+        finish_zone_y: float = 2200.0,
+        finish_max_z: float = GOAL_HEIGHT * 0.78,
+        finish_fade_z: float = GOAL_HEIGHT * 1.5,
+        finish_floor: float = 0.40,
+
+        # v9.3 leftover: unused when takeoff_speed_far > 0 (v9.5).
+        opp_close_dist: float = 0.0,
+        far_opp_floor: float = 0.12,
+        # v9.5 (user): desired takeoff velocity scales with distance to their
+        # net. Far + fast (wall carry) still pays; far + slow ground pop does not.
+        takeoff_speed_near: float = 350.0,
+        takeoff_speed_far: float = 1700.0,
+        takeoff_dist_ref: float = 9000.0,
+        takeoff_floor: float = 0.08,
+        # Under pressure without a committed aerial → prefer flick/shot.
+        pressure_dist: float = 1200.0,
+        pressure_floor: float = 0.10,
+        # v10 (user): defender already beaten + open lane → don't start another
+        # aerial, just convert. Applied at carry START only.
+        advantage_floor: float = 0.25,
     ):
+        self.goal_speed_target = goal_speed_target
+        self.push_floor = push_floor
+        self.finish_zone_y = finish_zone_y
+        self.finish_max_z = finish_max_z
+        self.finish_fade_z = finish_fade_z
+        self.finish_floor = finish_floor
+        self.opp_close_dist = float(opp_close_dist)
+        self.far_opp_floor = float(far_opp_floor)
+        self.takeoff_speed_near = float(takeoff_speed_near)
+        self.takeoff_speed_far = float(takeoff_speed_far)
+        self.takeoff_dist_ref = float(takeoff_dist_ref)
+        self.takeoff_floor = float(takeoff_floor)
+        self.pressure_dist = float(pressure_dist)
+        self.pressure_floor = float(pressure_floor)
+        self.advantage_floor = float(advantage_floor)
+        self.sustain_ramp = sustain_ramp
+        self.sustain_cap = sustain_cap
+        self.sustain_streak = {}
+        self.takeoff_mult = {}
+        self.min_carry_boost = min_carry_boost
+        self.low_boost_penalty = low_boost_penalty
+        self.goal_progress_floor = goal_progress_floor
         super().__init__()
         self.carry_radius = carry_radius
         self.min_height = min_height
         self.max_rel_speed = max_rel_speed
-        self.per_tick = per_second_scale / TICKS_PER_SECOND
+        # paid once per env step (15 Hz), so scale by steps — NOT physics ticks
+        self.per_tick = per_second_scale / STEPS_PER_SECOND
 
         self.roof_min_up = roof_min_up
         self.roof_max_up = roof_max_up
@@ -361,6 +704,8 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
 
     def reset(self, agents, initial_state, shared_info):
         self.last_touch_agent = None
+        self.sustain_streak = {a: 0 for a in agents}
+        self.takeoff_mult = {a: 1.0 for a in agents}
 
     def _goal_dir(self, car, ball_pos_np):
         goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
@@ -394,10 +739,14 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         a = self.last_touch_agent
         car = state.cars[a]
 
-        # basic gates
+        # basic gates (break the carry streak when the state is no longer a carry)
         if car.on_ground:
+            self.sustain_streak[a] = 0
+            self.takeoff_mult[a] = 1.0
             return rewards
         if ball.position[2] < self.min_height:
+            self.sustain_streak[a] = 0
+            self.takeoff_mult[a] = 1.0
             return rewards
 
         car_pos = np.array(car.physics.position, dtype=float)
@@ -408,6 +757,17 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         diff = bpos - car_pos
         dist = float(np.linalg.norm(diff))
         if dist > self.carry_radius:
+            self.sustain_streak[a] = 0
+            self.takeoff_mult[a] = 1.0
+            return rewards
+
+        # BOOST DISCIPLINE (user feedback): don't reward — mildly penalize —
+        # committing to an aerial carry with no boost to finish it. This kills
+        # the "goes for wall aerials with empty boost / risky no-boost catch".
+        if car.boost_amount < self.min_carry_boost:
+            self.sustain_streak[a] = 0
+            self.takeoff_mult[a] = 1.0
+            rewards[a] = -self.low_boost_penalty
             return rewards
 
         up = np.array(car.physics.up, dtype=float)
@@ -451,8 +811,12 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         under_term = (under_cos - self.under_cos_min) / (self.under_cos_soft - self.under_cos_min + 1e-6)
         under_term = float(np.clip(under_term, 0.0, 1.0))
 
-        if under_term < 0.25 or center_term < 0.25:
-            return rewards
+        # NOTE: previously a hard early-out here (`if under_term<0.25 or
+        # center_term<0.25: return 0`) zeroed reward for imperfect carries,
+        # leaving PPO no gradient to climb from mediocre attempts. Removed so
+        # partial carries earn smooth partial reward (the weighted `score` below
+        # still decays to ~0 for bad geometry). This is the air-dribble-capability
+        # fix: reward the CARRY continuously, not only when it's already perfect.
 
         # (F) Goal alignment (small)
         goal_dir = self._goal_dir(car, bpos)
@@ -475,7 +839,75 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
         total_w = (self.w_roof + self.w_center + self.w_forward + self.w_rel_speed + self.w_under + self.w_goal_align)
         score /= (total_w + 1e-6)
 
-        rewards[a] = score * self.per_tick
+        # GOAL-DIRECTION GATE (user feedback): a passive hover that isn't moving
+        # the ball toward the opponent net pays only `goal_progress_floor` of the
+        # carry reward; a carry that drives the ball goal-ward pays full. This is
+        # what turns "hover under the ball" into "carry it at the net".
+        score *= (self.goal_progress_floor + (1.0 - self.goal_progress_floor) * goal_term)
+
+        # PUSH IT FORWARD (v8): pay for goal-ward ball SPEED, not just heading.
+        goal_speed = float(np.dot(bvel, goal_dir))
+        push_term = float(np.clip(goal_speed / (self.goal_speed_target + 1e-6), 0.0, 1.0))
+        score *= (self.push_floor + (1.0 - self.push_floor) * push_term)
+
+        # UNDER THE BAR (v8): approaching the net, prefer the ball below the
+        # crossbar. Ramps in only inside finish_zone_y so mid-field carries,
+        # which legitimately run high, are untouched.
+        goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+        y_to_goal = abs(goal_y - bpos[1])
+        if y_to_goal < self.finish_zone_y:
+            zone = 1.0 - (y_to_goal / (self.finish_zone_y + 1e-6))
+            if bpos[2] <= self.finish_max_z:
+                height_term = 1.0
+            else:
+                span = self.finish_fade_z - self.finish_max_z
+                height_term = max(0.0, 1.0 - (bpos[2] - self.finish_max_z) / (span + 1e-6))
+            finish_mult = 1.0 - zone * (1.0 - self.finish_floor) * (1.0 - height_term)
+            score *= finish_mult
+
+        # NOTE (v5): a backboard penalty was tried here and REMOVED — a negative
+        # penalty near the opponent net risks discouraging air-dribble attempts
+        # altogether. On-target aiming is instead driven POSITIVELY by GoalReward
+        # (1200) + GoalProbReward (goal-view), which reward the goal mouth without
+        # suppressing attempts. Infield behavior comes from those + more training.
+
+        # sustain-duration escalation: reward grows with unbroken carry length
+        prev_streak = self.sustain_streak.get(a, 0)
+        self.sustain_streak[a] = prev_streak + 1
+        sustain_mult = 1.0 + self.sustain_ramp * min(self.sustain_streak[a], self.sustain_cap)
+
+        # TAKEOFF SPEED vs DISTANCE (v9.5): lock at carry start so a fast wall
+        # launch from own half stays paid, and a slow ground pop stays faded.
+        # v10 folds the "already beaten them" fade into the same start-locked
+        # multiplier, so an in-progress carry is never cut off mid-play.
+        if prev_streak <= 0 and self.takeoff_speed_far > 1.0:
+            d_goal = dist_to_opp_goal_y(car, bpos)
+            need = takeoff_need_speed(
+                d_goal,
+                self.takeoff_speed_near,
+                self.takeoff_speed_far,
+                self.takeoff_dist_ref,
+            )
+            have = takeoff_have_speed(car, car_pos, car_vel, bvel)
+            m = takeoff_speed_mult(have, need, self.takeoff_floor)
+            is_clear, lead = advantage_clear_lane(a, car, state, bpos)
+            m *= advantage_ad_mult(is_clear, lead, self.advantage_floor)
+            self.takeoff_mult[a] = m
+        score *= self.takeoff_mult.get(a, 1.0)
+
+        # PRESSURE: if opp is in flick range and this is not a committed aerial,
+        # fade AD so a flick/shot is the better option.
+        have_now = takeoff_have_speed(car, car_pos, car_vel, bvel)
+        score *= pressure_ad_mult(
+            min_opp_car_dist(a, car, state),
+            float(bpos[2]),
+            bool(car.on_ground),
+            have_now,
+            self.pressure_dist,
+            self.pressure_floor,
+        )
+
+        rewards[a] = score * self.per_tick * sustain_mult
 
         # Optional debug
         shared_info["airdribble_dense"] = {
@@ -496,79 +928,444 @@ class AirdribbleReward(RewardFunction[AgentID, GameState, float]):
 
 
 class FlipResetReward(RewardFunction[AgentID, GameState, float]):
+    """Four-stage flip reset: approach-under -> obtain -> hold control -> USE the flip.
+
+    v10 (user: "never seen a flip reset in game"). The v9 version paid only two
+    sparse EVENTS (obtain, post-flip hit), and the obtain event can only fire when
+    `has_flip` is already False — during a normal air dribble the car usually still
+    holds its flip, so the whole channel was silently unreachable outside the
+    artificial curriculum spawns. Nothing paid for *approaching* the reset, so PPO
+    had no gradient to climb toward it.
+
+    The stages, and what each is for:
+      A. APPROACH  (dense, budgeted) — airborne, flip already spent (a reset is
+         actually available), ball high, we're below it with wheels coming around
+         to face it. This is the discovery signal that was missing.
+      B. OBTAIN    (event) — wheels-on-ball contact regrants the flip.
+      C. HOLD      (dense, windowed) — stay with the ball after the reset instead
+         of falling away; pays only for a short window.
+      D. USE       (event) — flip, then strike the ball. Power-scaled by goalward
+         speed + impulse. This is the largest single payout, so the reset is worth
+         taking only if it gets used.
+
+    Anti-farm:
+      - APPROACH has a per-airtime tick budget, so hovering under a ball wheels-up
+        cannot be milked.
+      - Repeat OBTAINs within one airtime decay geometrically.
+      - A reset that is never used EXPIRES after `use_window_ms` and pays nothing
+        further, so "touch the underside and coast" is not a strategy.
+      - Nothing here is negative, so a plain air dribble with no reset is untouched.
+    """
+
     def __init__(
         self,
         obtain_flip_weight: float = 1.0,
-        hit_ball_weight: float = 1.0,
+        hit_ball_weight: float = 2.5,     # USE is the biggest payout (was 1.5)
         min_ball_z: float = GOAL_HEIGHT * 0.55,
-        min_wheels_cos: float = 0.80,      # ~36° cone; wheels must be aimed at ball
-        max_car_ball_dist: float = 260.0,  # keep it local so it’s really a reset contact
-        require_airborne: bool = True
+        # v10: the 0.80 cone (~36 deg) only paid a near-perfect reset pose. Widen so
+        # partial attempts register, and let approach shaping carry the gradient.
+        min_wheels_cos: float = 0.55,
+        max_car_ball_dist: float = 300.0,  # was 260
+        require_airborne: bool = True,
+        # Power-scale the post-reset hit by goalward ball speed (and Δv).
+        # Weak taps still pay power_floor; a hard goalward smash approaches 1x+.
+        power_speed_target: float = 1200.0,
+        power_floor: float = 0.35,
+        power_dv_target: float = 600.0,
+        power_dv_weight: float = 0.35,
+        # A. approach shaping
+        approach_per_second: float = 0.30,
+        approach_radius: float = 700.0,
+        approach_budget_ms: int = 1500,
+        approach_min_cos: float = 0.10,
+        # C. post-reset control
+        hold_per_second: float = 0.25,
+        hold_window_ms: int = 1200,
+        hold_radius: float = 700.0,
+        # D. use-it-or-lose-it
+        use_window_ms: int = 2500,
+        # anti-farm
+        obtain_decay: float = 0.55,
+        # RocketSim grants the reset through wheels-on-ball "ground" contact;
+        # False keeps the pre-2026-09-27 behaviour, where that contact cleared
+        # all stage state so OBTAIN/HOLD/USE could never fire.
+        on_ball_contact: bool = False,
     ):
+        self.on_ball_contact = on_ball_contact
         self.obtain_flip_weight = obtain_flip_weight
         self.hit_ball_weight = hit_ball_weight
         self.min_ball_z = min_ball_z
         self.min_wheels_cos = min_wheels_cos
         self.max_car_ball_dist = max_car_ball_dist
         self.require_airborne = require_airborne
+        self.power_speed_target = power_speed_target
+        self.power_floor = power_floor
+        self.power_dv_target = power_dv_target
+        self.power_dv_weight = power_dv_weight
+
+        self.approach_per_tick = approach_per_second / STEPS_PER_SECOND
+        self.approach_radius = approach_radius
+        self.approach_budget_steps = max(1, int(approach_budget_ms * STEPS_PER_SECOND / 1000))
+        self.approach_min_cos = approach_min_cos
+        self.hold_per_tick = hold_per_second / STEPS_PER_SECOND
+        self.hold_window_steps = max(1, int(hold_window_ms * STEPS_PER_SECOND / 1000))
+        self.hold_radius = hold_radius
+        self.use_window_steps = max(1, int(use_window_ms * STEPS_PER_SECOND / 1000))
+        self.obtain_decay = obtain_decay
 
         self.prev_state = None
         self.has_reset = None
         self.has_flipped = None
+        self.prev_ball_vel = None
+        self.step = 0
+        self.approach_spent = {}
+        self.reset_at = {}
+        self.n_resets_air = {}
 
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         self.prev_state = initial_state
         self.has_reset = set()
         self.has_flipped = set()
+        self.prev_ball_vel = np.array(initial_state.ball.linear_velocity, dtype=float)
+        self.step = 0
+        self.approach_spent = {a: 0 for a in agents}
+        self.reset_at = {}
+        self.n_resets_air = {a: 0 for a in agents}
+
+    def _clear_airtime(self, agent):
+        self.has_reset.discard(agent)
+        self.has_flipped.discard(agent)
+        self.approach_spent[agent] = 0
+        self.n_resets_air[agent] = 0
+        self.reset_at.pop(agent, None)
 
     def get_rewards(self, agents: List[AgentID], state: GameState,
                     is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
                     shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
 
         rewards = {k: 0.0 for k in agents}
+        ball_vel = np.array(state.ball.linear_velocity, dtype=float)
+        ball_pos = np.array(state.ball.position, dtype=float)
+        self.step += 1
 
         for agent in agents:
             car = state.cars[agent]
+            on_ball = self.on_ball_contact and wheels_on_ball(car, ball_pos)
 
-            # reset tracking when grounded
-            if car.on_ground:
-                self.has_reset.discard(agent)
-                self.has_flipped.discard(agent)
+            # landing ends the possession: clear all stage state
+            if car.on_ground and not on_ball:
+                self._clear_airtime(agent)
                 continue
 
-            # detect "obtained flip" event: touched ball and now has_flip became true
-            touched = (car.ball_touches > 0)
             had_flip_prev = self.prev_state.cars[agent].has_flip
             got_flip_now = (car.has_flip and not had_flip_prev)
+            touched = (car.ball_touches > 0) or on_ball or (
+                self.on_ball_contact and got_flip_now
+                and wheels_on_ball(car, ball_pos, require_ground=False))
 
-            if touched and got_flip_now:
-                # gating: ball high enough, car airborne, close enough
-                if state.ball.position[2] >= self.min_ball_z:
-                    car_ball = np.array(state.ball.position - car.physics.position, dtype=float)
-                    dist = _safe_norm(car_ball)
-                    if dist <= self.max_car_ball_dist:
-                        # wheels pointing at ball: down vector aligns with car->ball
-                        down = -np.array(car.physics.up, dtype=float)
-                        wheels_cos = float(np.dot(down, car_ball / dist))
+            car_pos = np.array(car.physics.position, dtype=float)
+            car_ball = ball_pos - car_pos
+            dist = _safe_norm(car_ball)
+            down = -np.array(car.physics.up, dtype=float)
+            wheels_cos = float(np.dot(down, car_ball / dist))
+            ball_high = float(ball_pos[2]) >= self.min_ball_z
 
-                        if wheels_cos >= self.min_wheels_cos:
-                            self.has_reset.add(agent)
-                            rewards[agent] += self.obtain_flip_weight
-                            # optional: expose for other rewards to avoid double-pay
-                            shared_info[f"agent_{agent}_had_reset"] = True
+            # ---- A. APPROACH: only meaningful when a reset is actually available
+            # (flip already spent) and we are under a high ball turning wheels to it.
+            if (
+                not car.has_flip
+                and ball_high
+                and dist <= self.approach_radius
+                and wheels_cos >= self.approach_min_cos
+                and self.approach_spent.get(agent, 0) < self.approach_budget_steps
+                and agent not in self.has_reset
+            ):
+                self.approach_spent[agent] = self.approach_spent.get(agent, 0) + 1
+                # closer + better wheel alignment pays more; both are needed.
+                close_term = 1.0 - min(1.0, dist / self.approach_radius)
+                aim_term = min(1.0, max(0.0, wheels_cos))
+                rewards[agent] += self.approach_per_tick * close_term * aim_term
 
-            # detect the flip after reset, then reward the next hit
+            # ---- B. OBTAIN
+            if touched and got_flip_now and ball_high and dist <= self.max_car_ball_dist:
+                if wheels_cos >= self.min_wheels_cos:
+                    self.has_reset.add(agent)
+                    self.reset_at[agent] = self.step
+                    n = self.n_resets_air.get(agent, 0)
+                    self.n_resets_air[agent] = n + 1
+                    rewards[agent] += self.obtain_flip_weight * (self.obtain_decay ** n)
+                    shared_info[f"agent_{agent}_had_reset"] = True
+
+            # ---- C. HOLD: stay with the ball after the reset, briefly.
+            if agent in self.has_reset:
+                age = self.step - self.reset_at.get(agent, self.step)
+                if age > self.use_window_steps:
+                    # never used it — expire silently, no further pay
+                    self.has_reset.discard(agent)
+                    self.reset_at.pop(agent, None)
+                elif age <= self.hold_window_steps and dist <= self.hold_radius:
+                    decay = 1.0 - (age / self.hold_window_steps)
+                    rewards[agent] += self.hold_per_tick * decay
+
+            # ---- D. USE: flip after the reset, then strike the ball.
             if car.is_flipping and agent in self.has_reset:
                 self.has_reset.remove(agent)
                 self.has_flipped.add(agent)
 
             if touched and agent in self.has_flipped:
                 self.has_flipped.remove(agent)
-                rewards[agent] += self.hit_ball_weight
+                # Power: goalward ball speed + impulse on the ball after the reset-flip.
+                goal_y = -BACK_NET_Y if car.is_orange else BACK_NET_Y
+                to_goal = np.array([0.0, goal_y - ball_pos[1], 0.0], dtype=float)
+                to_goal_u = to_goal / _safe_norm(to_goal)
+                goalward_speed = max(0.0, float(np.dot(ball_vel, to_goal_u)))
+                speed_scale = min(1.25, goalward_speed / max(1.0, self.power_speed_target))
+                dv = _safe_norm(ball_vel - self.prev_ball_vel)
+                dv_scale = min(1.0, dv / max(1.0, self.power_dv_target))
+                power = self.power_floor + (1.0 - self.power_floor) * (
+                    (1.0 - self.power_dv_weight) * speed_scale
+                    + self.power_dv_weight * dv_scale
+                )
+                rewards[agent] += self.hit_ball_weight * power
 
+        self.prev_ball_vel = ball_vel
         self.prev_state = state
         return rewards
-    
+
+
+GOAL_HALF_WIDTH = 893.0
+
+
+def wheels_on_ball(car, ball_pos, max_dist: float = 220.0, require_ground: bool = True) -> bool:
+    """RocketSim reports wheel contact with the BALL as on_ground=True (that is
+    how the flip reset is granted, often with ball_touches == 0). True when the
+    car is "grounded" far from every arena surface and next to the ball.
+    require_ground=False: with 8 ticks per step the car may already have left
+    the ball by the end of the step in which the flip came back."""
+    if require_ground and not car.on_ground:
+        return False
+    x, y, z = (float(v) for v in car.physics.position)
+    if z < 300.0 or z > 1850.0 or abs(x) > 3850.0 or abs(y) > 4870.0:
+        return False
+    return _safe_norm(np.asarray(ball_pos, dtype=float) - np.array([x, y, z])) <= max_dist
+
+
+class DoubleTapTracker:
+    """Detects double taps: an agent's touch sends the ball into the backboard
+    it attacks (back wall outside the goal mouth), nobody else touches it and
+    it does not reach the floor, then the same agent touches it again while
+    airborne within `window_s`. Shared by DoubleTapReward and eval_match.
+
+    `update(state)` returns a list of (agent, kind, info) events, kind in
+    {"bounce", "second"}; "bounce" only fires for an airborne first touch.
+    """
+
+    def __init__(self, window_s: float = 2.0, wall_zone: float = 4850.0,
+                 floor_z: float = 140.0, min_second_z: float = 200.0,
+                 allow_untouched: bool = False):
+        # allow_untouched: also arm the attacker on a backboard bounce nobody
+        # caused (curriculum balls spawned flying at the wall = backboard read).
+        self.allow_untouched = allow_untouched
+        self.window_ticks = int(window_s * TICKS_PER_SECOND)
+        self.wall_zone = wall_zone
+        self.floor_z = floor_z
+        self.min_second_z = min_second_z
+        self.reset(None)
+
+    def reset(self, state: Optional[GameState]) -> None:
+        self.last_toucher = None
+        self.last_touch_air = False
+        self.armed = None          # (agent, bounce_tick)
+        self.prev_vy = None if state is None else float(state.ball.linear_velocity[1])
+
+    def update(self, state: GameState):
+        events = []
+        ball = state.ball
+        bx, by, bz = (float(v) for v in ball.position)
+        vy = float(ball.linear_velocity[1])
+        touchers = [a for a, c in state.cars.items() if c.ball_touches > 0]
+
+        if self.armed is not None:
+            agent, t0 = self.armed
+            if state.tick_count - t0 > self.window_ticks or bz < self.floor_z:
+                self.armed = None
+            elif touchers:
+                car = state.cars.get(agent)
+                if (touchers == [agent] and car is not None and not car.on_ground
+                        and bz >= self.min_second_z):
+                    events.append((agent, "second", {"tick": state.tick_count}))
+                self.armed = None
+
+        if len(touchers) == 1:
+            self.last_toucher = touchers[0]
+            self.last_touch_air = not state.cars[touchers[0]].on_ground
+        elif len(touchers) > 1:
+            self.last_toucher = None
+
+        if self.prev_vy is not None and abs(by) > self.wall_zone and self.prev_vy * vy < 0 \
+                and np.sign(self.prev_vy) == np.sign(by) \
+                and not (abs(bx) < GOAL_HALF_WIDTH and bz < GOAL_HEIGHT):
+            a = self.last_toucher
+            if a is not None and not touchers and a in state.cars:
+                attack_sign = -1.0 if state.cars[a].is_orange else 1.0
+                if np.sign(by) == attack_sign:
+                    self.armed = (a, state.tick_count)
+                    if self.last_touch_air:
+                        events.append((a, "bounce", {"z": bz}))
+            elif a is None and not touchers and self.allow_untouched:
+                side = [ag for ag, c in state.cars.items()
+                        if np.sign(by) == (-1.0 if c.is_orange else 1.0)]
+                if len(side) == 1:
+                    self.armed = (side[0], state.tick_count)
+            self.last_toucher = None
+        self.prev_vy = vy
+        return events
+
+
+class DoubleTapReward(RewardFunction[AgentID, GameState, float]):
+    """Pays the double tap: small event for an aerial touch into the attacking
+    backboard, main event for the airborne follow-up touch (power-scaled by
+    ball speed toward the goal centre), plus a bonus if that agent's team
+    scores within `goal_window_s` of the follow-up. Positive-only."""
+
+    def __init__(self, bounce_weight: float = 0.2, second_weight: float = 1.0,
+                 goal_bonus: float = 1.5, power_floor: float = 0.3,
+                 power_speed_target: float = 1500.0, goal_window_s: float = 3.0):
+        self.bounce_weight = bounce_weight
+        self.second_weight = second_weight
+        self.goal_bonus = goal_bonus
+        self.power_floor = power_floor
+        self.power_speed_target = power_speed_target
+        self.goal_window_ticks = int(goal_window_s * TICKS_PER_SECOND)
+        self.tracker = DoubleTapTracker(allow_untouched=True)
+        self.pending_goal = {}
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.tracker.reset(initial_state)
+        self.pending_goal = {}
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        ball_pos = np.array(state.ball.position, dtype=float)
+        ball_vel = np.array(state.ball.linear_velocity, dtype=float)
+        for agent, kind, _ in self.tracker.update(state):
+            if agent not in rewards:
+                continue
+            if kind == "bounce":
+                rewards[agent] += self.bounce_weight
+            else:
+                goal_y = -BACK_NET_Y if state.cars[agent].is_orange else BACK_NET_Y
+                to_goal = _unit(np.array([0.0, goal_y, GOAL_HEIGHT * 0.5]) - ball_pos)
+                speed = max(0.0, float(np.dot(ball_vel, to_goal)))
+                scale = min(1.0, speed / self.power_speed_target)
+                rewards[agent] += self.second_weight * (
+                    self.power_floor + (1.0 - self.power_floor) * scale)
+                self.pending_goal[agent] = state.tick_count
+        if self.pending_goal and state.goal_scored:
+            for agent, t in list(self.pending_goal.items()):
+                if (agent in rewards and state.tick_count - t <= self.goal_window_ticks
+                        and state.scoring_team == state.cars[agent].team_num):
+                    rewards[agent] += self.goal_bonus
+            self.pending_goal = {}
+        return rewards
+
+
+class ContactTracker:
+    """Car-vs-car contact episodes by proximity (RocketSim only flags hard
+    contacts as bumps; soft wheel landings/pushes never set bump_victim_id).
+    A contact starts when centres come within `start_dist` and ends when they
+    separate past `end_dist`. The contact is scored one step after it starts
+    so the victim's velocity change covers the whole impact.
+
+    `update(state)` returns (agent, victim, part, dv) for contacts that
+    finished resolving this step; `part` is the agent's car part facing the
+    victim at first contact (see bump_contact_part)."""
+
+    def __init__(self, start_dist: float = 175.0, end_dist: float = 220.0):
+        self.start_dist = start_dist
+        self.end_dist = end_dist
+        self.reset(None)
+
+    def reset(self, state: Optional[GameState]) -> None:
+        self.touching = set()
+        self.pending = {}      # (agent, victim) -> (part, victim_vel_before)
+        self.prev_vel = {} if state is None else {
+            a: np.array(c.physics.linear_velocity, dtype=float) for a, c in state.cars.items()}
+
+    def update(self, state: GameState):
+        out = []
+        vel = {a: np.array(c.physics.linear_velocity, dtype=float) for a, c in state.cars.items()}
+        for key, (part, v0) in list(self.pending.items()):
+            agent, victim = key
+            if victim in vel:
+                out.append((agent, victim, part, float(np.linalg.norm(vel[victim] - v0))))
+            del self.pending[key]
+        ids = list(state.cars)
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                ca, cb = state.cars[a], state.cars[b]
+                if ca.team_num == cb.team_num:
+                    continue
+                pa = np.array(ca.physics.position, dtype=float)
+                pb = np.array(cb.physics.position, dtype=float)
+                d = float(np.linalg.norm(pb - pa))
+                pair = (a, b) if a < b else (b, a)
+                if pair not in self.touching and d < self.start_dist:
+                    self.touching.add(pair)
+                    for x, y, px, py in ((a, b, pa, pb), (b, a, pb, pa)):
+                        self.pending[(x, y)] = (
+                            bump_contact_part(state.cars[x], py, px),
+                            self.prev_vel.get(y, vel[y]))
+                elif pair in self.touching and d >= self.end_dist:
+                    self.touching.discard(pair)
+        self.prev_vel = vel
+        return out
+
+
+class ContactQualityReward(RewardFunction[AgentID, GameState, float]):
+    """Pay for hitting the opponent with the SHELL, not the wheels.
+
+    Every car-car contact is scored once, from the attacker's side: shell
+    parts pay `part_scale[part] * hardness`, wheels pay `-wheel_penalty *
+    hardness`, where hardness = min(1, victim dv / hard_target) ** power (a
+    nudge is worth ~0, a real hit the full amount). Only near the play
+    (ball within `ball_max_dist` of the contact) so it cannot be farmed off
+    the ball."""
+
+    def __init__(self, hard_target: float = 900.0, hard_power: float = 1.5,
+                 wheel_penalty: float = 0.3, ball_max_dist: float = 2500.0,
+                 part_scale: Optional[Dict[str, float]] = None):
+        self.hard_target = hard_target
+        self.hard_power = hard_power
+        self.wheel_penalty = wheel_penalty
+        self.ball_max_dist = ball_max_dist
+        self.part_scale = part_scale or {"nose": 1.0, "roof": 0.6, "side": 0.6, "back": 0.3}
+        self.tracker = ContactTracker()
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.tracker.reset(initial_state)
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        ball = np.array(state.ball.position, dtype=float)
+        for agent, victim, part, dv in self.tracker.update(state):
+            if agent not in rewards:
+                continue
+            car_pos = np.array(state.cars[agent].physics.position, dtype=float)
+            if _safe_norm(ball - car_pos) > self.ball_max_dist:
+                continue
+            hardness = min(1.0, dv / max(1.0, self.hard_target)) ** self.hard_power
+            if part == "wheels":
+                rewards[agent] -= self.wheel_penalty * hardness
+            else:
+                rewards[agent] += self.part_scale.get(part, 0.0) * hardness
+        return rewards
+
+
 class MustyFlickReward(RewardFunction[AgentID, GameState, float]):
     """
     Musty = nose-down setup + BACKFLIP impulse that still launches ball forward.
