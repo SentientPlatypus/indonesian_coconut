@@ -27,7 +27,7 @@ class PlayerData(object):
     @staticmethod
     def create_base(player_info: PlayerInfo):
         player = PlayerData()
-        player.spawn_id = player_info.spawn_id
+        player.spawn_id = player_info.player_id
         player.match_goals = player_info.score_info.goals
         player.match_saves = player_info.score_info.saves
         player.match_shots = player_info.score_info.shots

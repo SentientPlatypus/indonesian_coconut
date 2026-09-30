@@ -99,7 +99,7 @@ class IndonesianCoconut(Bot):
         n = self._team_size(packet)
         policy = self._policy(n)
         obs = self.obs_builders[n].build_obs(list(self.game_state.cars.keys()), self.game_state, {})
-        obs = np.asarray(obs.get(self.spawn_id), dtype=np.float32).flatten()
+        obs = np.asarray(obs.get(self.player_id), dtype=np.float32).flatten()
         with torch.no_grad():
             action_idx, _ = policy.get_action(torch.as_tensor(obs, device=self.device),
                                               deterministic=self.deterministic)
@@ -107,7 +107,7 @@ class IndonesianCoconut(Bot):
                 action_idx = torch.tensor([action_idx], device=self.device)
 
         parsed = self.action_parser.parse_actions(
-            actions={self.spawn_id: action_idx}, state=self.game_state, shared_info={}).get(self.spawn_id)
+            actions={self.player_id: action_idx}, state=self.game_state, shared_info={}).get(self.player_id)
         if len(parsed.shape) == 2 and parsed.shape[0] == 1:
             parsed = parsed[0]
         try:

@@ -80,18 +80,18 @@ class V1GameState:
             else latest_touch_player_idx
         )
         old_boost_amounts = {
-            **{p.spawn_id: p.boost / 100 for p in packet.players},
+            **{p.player_id: p.boost / 100 for p in packet.players},
             **{k: v.boost_amount for (k, v) in self._game_state.cars.items()},
         }
         self._game_state.update(packet, extra_info)
         self.players: List[V1PlayerData] = []
         for player_info in packet.players:
-            if player_info.spawn_id not in self._boost_pickups:
-                self._boost_pickups[player_info.spawn_id] = 0
+            if player_info.player_id not in self._boost_pickups:
+                self._boost_pickups[player_info.player_id] = 0
             if (
                 packet.match_info.match_phase in (MatchPhase.Active, MatchPhase.Kickoff)
-                and old_boost_amounts[player_info.spawn_id] < player_info.boost / 100
+                and old_boost_amounts[player_info.player_id] < player_info.boost / 100
             ):  # This isn't perfect but with decent fps it'll work
-                self._boost_pickups[player_info.spawn_id] += 1
+                self._boost_pickups[player_info.player_id] += 1
             self.players.append(V1PlayerData.create_base(player_info))
         self._recalculate_fields()
