@@ -1,0 +1,20 @@
+#:schema https://rlbot.org/schemas/agent.json
+[settings]
+name = "Indonesian Coconut"
+loadout_file = "loadout.toml"
+root_dir = ""
+run_command = "python bot.py"
+run_command_linux = "python bot.py"
+agent_id = "indonesian_coconut/indonesian_coconut"
+
+[details]
+description = """
+PPO bot trained with RLGym v2 + RocketSim on a discrete lookup-table action space.
+Separate policies for 1v1, 2v2 and 3v3 (the team-play policies are transferred from
+the 1v1 one and trained with team-spacing and passing rewards).
+"""
+fun_fact = "Beat Nexto 42-11 in 1v1."
+source_link = ""
+developer = "SentientPlatypus"
+language = "Python"
+tags = ["1v1", "teamplay"]

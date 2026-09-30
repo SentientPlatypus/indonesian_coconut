@@ -59,7 +59,8 @@ def _reward_fn(cfg: Dict[str, Any]):
         s = float(zs.get(key, 0.0))
         return ZeroSumReward(fn, s) if s > 0 else fn
 
-    return CombinedReward(
+    from rewards.team_rewards import TeamSpacingReward, PassReward, TeamSpiritReward
+    combined = CombinedReward(
         (GoalReward(), w["goal"]),
         # v13 (user on V13NG65 vs Nexto): good air dribbles, finishes hit the
         # crossbar or the post. GoalProb is goal-view solid angle from the ball
@@ -197,6 +198,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         (ContactQualityReward(
             hard_target=cfg.get("contact_hard_target", 900.0),
             wheel_penalty=cfg.get("contact_wheel_penalty", 0.3),
+            kickoff_grace_s=cfg.get("contact_kickoff_grace_s", 0.0),
         ), w.get("contact_quality", 0.0)),
         (AerialFrontBumpSetupReward(), w.get("front_bump_setup", 0.0)),
         # v5 (user): punish overextending grounded + deep + low boost. REVERTED in
@@ -245,15 +247,23 @@ def _reward_fn(cfg: Dict[str, Any]):
             lane_radius=cfg.get("clear_path_lane_radius", 1100.0),
         ), w.get("clear_path", 0.0)),
         (AngVelReward(), w["ang_vel"]),
+        # 2v2 / 3v3 team play (0 in 1v1)
+        (TeamSpacingReward(min_dist=cfg.get("team_spacing_dist", 1500.0),
+                           ball_dist=cfg.get("team_ball_crowd_dist", 900.0),
+                           ball_crowd=cfg.get("team_ball_crowd", 1.0)),
+         w.get("team_spacing", 0.0)),
+        (PassReward(), w.get("pass", 0.0)),
     )
+    tau = float(cfg.get("team_spirit", 0.0))
+    return TeamSpiritReward(combined, tau) if tau > 0 else combined
 
 
 def _state_mutator(cfg: Dict[str, Any], for_training: bool):
     from rlgym.rocket_league.state_mutators import (
         MutatorSequence, FixedTeamSizeMutator, KickoffMutator,
     )
-    blue = TEAM_SIZE
-    orange = TEAM_SIZE if SPAWN_OPPONENTS else 0
+    blue = int(cfg.get("team_size", TEAM_SIZE))
+    orange = blue if SPAWN_OPPONENTS else 0
     if for_training:
         from curriculum_mutators import CurriculumStateMutator
         c = cfg["curriculum"]

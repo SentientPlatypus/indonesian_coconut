@@ -92,7 +92,9 @@ def main():
         mech = (f" resets/g={m.get('br_pg')} dtaps/g={m.get('dt_pg')}"
                 f" contacts/g={m.get('contacts_pg')} wheel_frac={m.get('wheel_frac')}"
                 f" hard_shell/g={m.get('hard_shell_pg')} bump_goals/g={m.get('bump_goals_pg')}") if m else ""
-        print(f"  it{i} {it['panel']}: {row} style={s.get('style')} cap={s.get('cap')}{mech}")
+        ko = o.get("base", {}).get("ko_score")
+        ko = f" ko_vs_base={ko}" if ko is not None else ""
+        print(f"  it{i} {it['panel']}: {row} style={s.get('style')} cap={s.get('cap')}{ko}{mech}")
     if m:
         print("  pooled last2: " + " ".join(f"{k}={v:.3f}" for k, v in m.items() if v is not None))
     print(f"RECOMMENDATION: {rec}")

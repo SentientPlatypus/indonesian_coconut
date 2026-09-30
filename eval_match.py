@@ -87,6 +87,9 @@ def load_policy(path, device):
     return pol, inputs
 
 
+KICKOFF_GOAL_TICKS = 10 * 120
+
+
 def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", out=None):
     from rlgym.rocket_league.common_values import BLUE_TEAM, ORANGE_TEAM
     from loop_config import load_config
@@ -104,6 +107,7 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
         DoubleTapTracker, ContactTracker, wheels_on_ball, bump_contact_part)
 
     cand_goals = opp_goals = truncs = 0
+    cand_ko_goals = opp_ko_goals = 0
     air_touch_steps = air_dribbles = flip_resets = 0
     ball_resets = double_taps = dt_goals = 0
     dt_tracker = DoubleTapTracker()
@@ -117,6 +121,7 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
     for g in range(games):
         obs = env.reset()
         state = env.state
+        start_tick = state.tick_count
         cand_is_blue = (g % 2 == 0)             # alternate sides each game
         cand_team = BLUE_TEAM if cand_is_blue else ORANGE_TEAM
         cand_agent = next(a for a in obs if state.cars[a].team_num == cand_team)
@@ -209,14 +214,17 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
                 break
 
         if terminated and env.state.goal_scored:
+            kickoff_goal = env.state.tick_count - start_tick <= KICKOFF_GOAL_TICKS
             if env.state.scoring_team == cand_team:
                 cand_goals += 1
+                cand_ko_goals += kickoff_goal
                 if last_dt_tick is not None and env.state.tick_count - last_dt_tick <= 360:
                     dt_goals += 1
                 if last_bump_tick is not None and env.state.tick_count - last_bump_tick <= 360:
                     bump_goals += 1
             else:
                 opp_goals += 1
+                opp_ko_goals += kickoff_goal
         else:
             truncs += 1
 
@@ -252,6 +260,9 @@ def run_eval(candidate, opponent, games=60, deterministic=False, device="cpu", o
         "cand_wheel_contact_dv_mean": round(wheel_dv_sum / max(1, contact_parts["wheels"]), 1),
         # goals within 3 s after a hard (>=500 uu/s) shell contact on the opponent
         "cand_shell_bump_goals": bump_goals,
+        # goals within 10 s of the kickoff, by side
+        "cand_kickoff_goals": cand_ko_goals,
+        "opp_kickoff_goals": opp_ko_goals,
         "style": round(air_dribbles / games, 4),   # air dribbles per game
         "deterministic": deterministic,
     }

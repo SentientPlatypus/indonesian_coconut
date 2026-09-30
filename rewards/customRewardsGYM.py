@@ -1576,12 +1576,20 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
 
         def _credit(winner: AgentID, amount: float) -> None:
             rewards[winner] += amount
+            team = state.cars[winner].team_num
             for o in agents:
-                if o != winner:
+                if state.cars[o].team_num != team:
                     rewards[o] -= amount
 
-        # steal / first claim — same magnitude both sides
-        if possessor is not None and self.prev_possessor is not None and possessor != self.prev_possessor:
+        def _team(a):
+            car = state.cars.get(a)
+            return None if car is None else car.team_num
+
+        # steal / first claim — same magnitude both sides (a teammate taking
+        # over is a pass, not a steal)
+        if (possessor is not None and self.prev_possessor is not None
+                and possessor != self.prev_possessor
+                and _team(possessor) != _team(self.prev_possessor)):
             _credit(possessor, self.capture_reward)
         elif possessor is not None and self.prev_possessor is None:
             _credit(possessor, 0.5 * self.capture_reward)

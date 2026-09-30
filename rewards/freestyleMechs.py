@@ -1332,27 +1332,46 @@ class ContactQualityReward(RewardFunction[AgentID, GameState, float]):
     hardness`, where hardness = min(1, victim dv / hard_target) ** power (a
     nudge is worth ~0, a real hit the full amount). Only near the play
     (ball within `ball_max_dist` of the contact) so it cannot be farmed off
-    the ball."""
+    the ball.
+
+    `kickoff_grace_s` > 0 pays nothing on kickoff episodes until that long
+    after the first ball touch, so the reward cannot pull the kickoff itself
+    toward bumping the opponent."""
 
     def __init__(self, hard_target: float = 900.0, hard_power: float = 1.5,
                  wheel_penalty: float = 0.3, ball_max_dist: float = 2500.0,
-                 part_scale: Optional[Dict[str, float]] = None):
+                 part_scale: Optional[Dict[str, float]] = None,
+                 kickoff_grace_s: float = 0.0):
         self.hard_target = hard_target
         self.hard_power = hard_power
         self.wheel_penalty = wheel_penalty
         self.ball_max_dist = ball_max_dist
         self.part_scale = part_scale or {"nose": 1.0, "roof": 0.6, "side": 0.6, "back": 0.3}
+        self.kickoff_grace_ticks = int(kickoff_grace_s * 120)
         self.tracker = ContactTracker()
+        self._kickoff = False
+        self._open_tick = 0
 
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         self.tracker.reset(initial_state)
+        ball = initial_state.ball
+        self._kickoff = (self.kickoff_grace_ticks > 0
+                         and abs(ball.position[0]) < 1.0 and abs(ball.position[1]) < 1.0
+                         and float(np.linalg.norm(ball.linear_velocity)) < 1.0)
+        self._open_tick = None
 
     def get_rewards(self, agents: List[AgentID], state: GameState,
                     is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
                     shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
         rewards = {a: 0.0 for a in agents}
         ball = np.array(state.ball.position, dtype=float)
-        for agent, victim, part, dv in self.tracker.update(state):
+        contacts = self.tracker.update(state)
+        if self._kickoff:
+            if self._open_tick is None and any(c.ball_touches > 0 for c in state.cars.values()):
+                self._open_tick = state.tick_count + self.kickoff_grace_ticks
+            if self._open_tick is None or state.tick_count < self._open_tick:
+                return rewards
+        for agent, victim, part, dv in contacts:
             if agent not in rewards:
                 continue
             car_pos = np.array(state.cars[agent].physics.position, dtype=float)
