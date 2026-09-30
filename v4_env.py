@@ -250,7 +250,8 @@ def _reward_fn(cfg: Dict[str, Any]):
         # 2v2 / 3v3 team play (0 in 1v1)
         (TeamSpacingReward(min_dist=cfg.get("team_spacing_dist", 1500.0),
                            ball_dist=cfg.get("team_ball_crowd_dist", 900.0),
-                           ball_crowd=cfg.get("team_ball_crowd", 1.0)),
+                           ball_crowd=cfg.get("team_ball_crowd", 1.0),
+                           closest_exempt=cfg.get("team_crowd_closest_exempt", False)),
          w.get("team_spacing", 0.0)),
         (PassReward(), w.get("pass", 0.0)),
     )

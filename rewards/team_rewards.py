@@ -15,13 +15,16 @@ class TeamSpacingReward(RewardFunction[AgentID, GameState, float]):
 
     Per teammate closer than `min_dist`: -(1 - d / min_dist). Extra
     -`ball_crowd` when this car AND a teammate are both within `ball_dist`
-    of the ball (double commit / both chasing)."""
+    of the ball (double commit / both chasing). With `closest_exempt`, the
+    car nearest the ball is never charged the ball-crowd term (it should
+    challenge; the ones behind it should back off)."""
 
     def __init__(self, min_dist: float = 1500.0, ball_dist: float = 900.0,
-                 ball_crowd: float = 1.0):
+                 ball_crowd: float = 1.0, closest_exempt: bool = False):
         self.min_dist = min_dist
         self.ball_dist = ball_dist
         self.ball_crowd = ball_crowd
+        self.closest_exempt = closest_exempt
 
     def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
         pass
@@ -33,6 +36,7 @@ class TeamSpacingReward(RewardFunction[AgentID, GameState, float]):
         pos = {a: _pos(c) for a, c in state.cars.items()}
         near_ball = {a: np.linalg.norm(pos[a] - ball) < self.ball_dist
                      for a, c in state.cars.items() if not c.is_demoed}
+        ball_d = {a: float(np.linalg.norm(pos[a] - ball)) for a in state.cars}
         rewards = {}
         for a in agents:
             car = state.cars[a]
@@ -45,7 +49,8 @@ class TeamSpacingReward(RewardFunction[AgentID, GameState, float]):
                     if d < self.min_dist:
                         r -= 1.0 - d / self.min_dist
                     if near_ball.get(a) and near_ball.get(b):
-                        r -= self.ball_crowd
+                        if not (self.closest_exempt and ball_d[a] <= ball_d[b]):
+                            r -= self.ball_crowd
             rewards[a] = r
         return rewards
 

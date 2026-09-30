@@ -262,6 +262,16 @@ PAUSED (E8c stopped at 53.617B, checkpoint in data/checkpoints/V4).
 
 | check | mode | steps | score vs init | crowd | passes/g | nearest mate |
 |---|---|---:|---:|---:|---:|---:|
+| 1 | 2v2 | 31M | **0.545** | 0.021 | 0.135 | 3945 |
+| 1 | 3v3 (T3a) | 32M | 0.185 | 0.026 | 0.115 | 2299 |
+
+Check 1: 2v2 works (beats its start, crowding 19% -> 2%); promoted to
+`rlbot_submission/policies/2v2.pt`. 3v3 over-corrected: spacing (two mates
+x weight 12) plus the ball-crowd term charging even the challenger made the
+cars avoid the ball (37-163). **T3b:** restarted from the E2G1 transfer with
+spacing weight 12 -> 4, distance 1300 -> 1100, and the ball-crowd term no
+longer charging the car nearest the ball (`team_crowd_closest_exempt`).
+Passes fell in both modes (0.4 -> ~0.13/g); revisit once spacing settles.
 
 ## E8 — shell contact, not wheels — SUPERSEDED by E8b 2026-09-29 (at check 2)
 
