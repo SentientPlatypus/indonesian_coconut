@@ -294,6 +294,12 @@ more contacts overall (2.04 -> 2.13/g), but the wheel share barely moved
 (0.150 -> 0.145). Strength just under the 0.47 floor vs E2G1, V10 fine.
 Audit: contact reward now 3.8% of |reward| (E8: 1.0%), wheel penalties
 ~15/episode.
+| 2 (53.43B) | 0.474 | 0.927 | 0.913 | 0.838 | 0.797 | 0.93 | 2.13 | 0.137 | 0.534 | 0.048 |
+
+Check 2: both contact numbers still improving (hard shell 0.534/g = +18%,
+wheel share 0.137) and strength back above the floor. Pushed as
+`checkpoints_to_test/PPO_POLICY_V4_E8B2.pt` (`AB_E8B2.md`) for the in-game
+test vs Nexto.
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
