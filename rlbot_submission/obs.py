@@ -19,7 +19,7 @@ class DefaultObs(ObsBuilder[AgentID, np.ndarray, GameState, Tuple[str, int]]):
     The default observation builder.
     """
 
-    def __init__(self, zero_padding=3, pos_coef=1/2300, ang_coef=1/math.pi, lin_vel_coef=1/2300, ang_vel_coef=1/math.pi,
+    def __init__(self, zero_padding=1, pos_coef=1/2300, ang_coef=1/math.pi, lin_vel_coef=1/2300, ang_vel_coef=1/math.pi,
                  pad_timer_coef=1/10, boost_coef=1/100):
         """
         :param zero_padding: Number of max cars per team, if not None the obs will be zero padded

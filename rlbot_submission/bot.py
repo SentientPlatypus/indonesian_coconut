@@ -8,7 +8,7 @@ from rlbot.managers import Bot
 from rlgym_compat import GameState, common_values
 
 from act import LookupTableAction
-from custom_discrete import DiscreteFF
+from discrete import DiscreteFF
 from obs import DefaultObs
 from rlgym_compat.sim_extra_info import SimExtraInfo
 
