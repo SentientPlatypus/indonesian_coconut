@@ -301,6 +301,30 @@ at all — if it also loses to the start, the drop is self-play dynamics or
 eval bias, not the team rewards. Submission keeps 2v2 = T2 66M, 3v3 = the
 E2G1 transfer.
 
+**2026-09-30, stopped before check 4 (T2b 38M, T3e 8M, T3d 7M).** Every team
+run, the no-team-reward control included, had its policy entropy climb from
+3.95 right after the transfer to ~4.2 (max for 90 actions is 4.50; the 1v1
+run sits at 3.86). The 0.01 entropy bonus pushes the transferred policy
+towards random actions, which fits the user's report from RLBot ("right
+idea, but wrong mechanics") and the scores falling below the start. User
+asked for 3v3 first, then carry the result over to 2v2. New runs from the
+E2G1 transfer, 14 procs each, both with the T3e_mild rewards:
+**T3f_lowent** (ent_coef 0.002) and **T3g_lowent_lowlr** (ent_coef 0.002,
+policy_lr 5e-5). By 11M entropy is falling (3.78 / 3.86). Plan: the best
+3v3 goes to `policies/3v3.pt`, then gets shrunk to 2v2
+(`tools/expand_obs.py --team-size 2` now remaps any size to any size,
+dropping the extra ally and enemy slots) and trained as its own 2v2 policy.
+
+Submission bot fixes the same day (the user compared it with the
+`indonesiancoco` bot that beat Nexto 42-11): it sampled actions
+(`deterministic=False`) and bundled an old `rlgym_compat` whose boost
+feature was 100x too small and whose flip flags differed from training.
+It now uses the same obs/act/discrete/loadout/requirements and pip
+`rlgym_compat` as `indonesiancoco`, deterministic actions, and a
+byte-identical E2G1; the two gave the same controls on all 1200 ticks of a
+fake 1v1. So the team policies' in-game weakness was partly the bot, not
+just the training. `indonesiancoco/` is the user's own bot: never edit it.
+
 ## E8 — shell contact, not wheels — SUPERSEDED by E8b 2026-09-29 (at check 2)
 
 User (2026-09-28): contact with the opponent should be with the shell of
