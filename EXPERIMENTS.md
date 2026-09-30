@@ -287,6 +287,13 @@ under the 0.47 floor vs E2G1. Goals after a hard shell contact ticked up
 
 | check | base (E2G1) | V10 | EL | NG54 | NG119 | style | contacts/g | wheel frac | hard shell/g | bump goals/g |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 (53.33B) | 0.468 | 0.924 | 0.918 | 0.832 | 0.770 | 1.00 | 2.13 | 0.145 | 0.519 | 0.039 |
+
+Check 1: hard shell contacts up 15% (0.453 -> 0.519/g, target 0.54) and
+more contacts overall (2.04 -> 2.13/g), but the wheel share barely moved
+(0.150 -> 0.145). Strength just under the 0.47 floor vs E2G1, V10 fine.
+Audit: contact reward now 3.8% of |reward| (E8: 1.0%), wheel penalties
+~15/episode.
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
