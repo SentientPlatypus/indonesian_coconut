@@ -45,7 +45,7 @@ def make_obs(team_size):
 class IndonesianCoconut(Bot):
 
     def initialize(self):
-        self.deterministic = False
+        self.deterministic = True
         self.ticks = self.tick_skip = TICK_SKIP
         self.device = torch.device("cpu")
         torch.set_num_threads(1)
