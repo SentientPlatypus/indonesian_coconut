@@ -285,6 +285,22 @@ at the kickoff). **T3c control:** 3v3 from the transfer with spacing
 weight 0 (pass + team spirit kept), 8 procs, to test whether spacing is
 what costs the goals.
 
+| 3 | 2v2 | 92M | 0.395 | 0.011 | 0.11 | 4570 |
+| 3 | 3v3 (T3b) | 62M | 0.28 | 0.044 | 0.21 | 2063 |
+| 3 | 3v3 (T3c, no spacing) | 20M | 0.32 | 0.070 | 0.245 | 1740 |
+
+Check 3: the no-spacing control also loses to the start, and 2v2 is now
+sliding (0.545 -> 0.525 -> 0.395) while its cars drift ever further apart.
+So spacing is not the main cause. Remaining shared suspects: team_spirit
+0.3 (dilutes each car's own credit) and the big pass reward (150, up to
+~450 per pass pair). All three runs stopped. New runs (10/10/8 procs):
+**T2b_mild** (from T2 31M, the best 2v2) and **T3e_mild** (from the
+transfer): team_spirit 0, pass 50, spacing 4 with the closest car exempt
+from the crowd term. **T3d_control** (from the transfer): no team rewards
+at all — if it also loses to the start, the drop is self-play dynamics or
+eval bias, not the team rewards. Submission keeps 2v2 = T2 66M, 3v3 = the
+E2G1 transfer.
+
 ## E8 — shell contact, not wheels — SUPERSEDED by E8b 2026-09-29 (at check 2)
 
 User (2026-09-28): contact with the opponent should be with the shell of
