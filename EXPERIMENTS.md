@@ -308,6 +308,12 @@ line; V10/Element unchanged. Continue to check 4; revert if base < 0.45.
 Documentation clips (RocketSimVis, vs Element, 40 sim games each) recorded
 to `docs/highlights/sim/E8b_it3/` and `docs/highlights/sim/E2G1/` with
 `tools/clip_match.py` + `tools/record_clips.sh`.
+| 4 (53.61B) | 0.483 | 0.927 | 0.918 | 0.852 | 0.807 | 0.92 | 2.23 | 0.134 | 0.570 | 0.040 |
+
+Check 4: best E8b snapshot. Hard shell contacts 0.570/g (+26%, past the
+0.54 target), more contacts overall (2.23/g), wheel share 0.134, and
+strength recovered to 0.483 vs E2G1. Pushed as
+`checkpoints_to_test/PPO_POLICY_V4_E8B4.pt` (`AB_E8B4.md`), supersedes E8B2.
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
