@@ -230,6 +230,39 @@ Contact baseline for E8 (E7 check 1 panel, 4800 games): 2.05 contacts/game, 14.8
 on the wheels, 0.45 hard shell contacts/game, 0.042 goals/game within 3 s of
 a hard shell contact.
 
+## TEAM MODES (RLBot Championship 2026) — started 2026-09-30 15:40Z
+
+User (2026-09-30): championship needs 1v1 + 2v2 + 3v3 (series go 3v3,
+1v1, 2v2), submission due Oct 1 AoE (~Oct 2 12:00 UTC). ML policies may be
+updated until 12 h before each stream (first ML stream Oct 24). 1v1 loop
+PAUSED (E8c stopped at 53.617B, checkpoint in data/checkpoints/V4).
+
+- **Transfer:** `tools/expand_obs.py` widens E2G1's first layer 92 -> 132
+  (2v2) / 172 (3v3) inputs (DefaultObs = [52 shared][self][allies][enemies]);
+  old columns copied, new ally / extra-enemy columns 0, Adam moments padded.
+  Verified: identical action probabilities to E2G1 at step 0.
+- **Rewards (config `T2_team.json`, `T3_team.json`, both = E2 config +):**
+  `team_size` 2/3; `TeamSpacingReward` weight 12 (-(1 - d/1500) per
+  teammate closer than 1500 uu (1300 in 3v3), plus -1 when two teammates are
+  both within 900 of the ball); `PassReward` weight 150 (touch then a
+  teammate's touch within 4 s after >= 800 uu of ball travel; receiver half;
+  x2 if the ball is moving at their net); `team_spirit` 0.3 (blend each
+  car's reward with its team mean); PossessionReward now team-aware (a
+  teammate taking over is not a steal and does not penalise the passer);
+  kickoff share 0.5.
+- **Runs:** both at once, 14 collector procs each, ~5.6k steps/s each.
+  Logs `train_T2.log` / `train_T3.log`, checkpoints `data/checkpoints/T2|T3`.
+- **Eval:** `tools/team_check.sh <n>` = 200 NvN kickoff games vs the
+  E2G1-transfer start. Start baseline (init vs itself, 20 games): 2v2 crowd
+  (2+ teammates within 900 of ball) 18.7% of the time, 0.4 passes/game,
+  nearest mate 1763 uu; 3v3 crowd 22.2%, 0.5 passes/game, nearest mate 910 uu.
+- **Submission bot:** `rlbot_submission/` (RLBot v5, Python): counts players
+  per team each tick and uses `policies/1v1.pt` (E2G1), `2v2.pt`, `3v3.pt`
+  with DefaultObs(zero_padding=team size).
+
+| check | mode | steps | score vs init | crowd | passes/g | nearest mate |
+|---|---|---:|---:|---:|---:|---:|
+
 ## E8 — shell contact, not wheels — SUPERSEDED by E8b 2026-09-29 (at check 2)
 
 User (2026-09-28): contact with the opponent should be with the shell of
