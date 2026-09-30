@@ -315,6 +315,16 @@ policy_lr 5e-5). By 11M entropy is falling (3.78 / 3.86). Plan: the best
 (`tools/expand_obs.py --team-size 2` now remaps any size to any size,
 dropping the extra ally and enemy slots) and trained as its own 2v2 policy.
 
+| 4 | 3v3 (T3f, ent 0.002) | 20M | **0.80** | 0.140 | 0.975 | 1367 |
+| 4 | 3v3 (T3g, ent 0.002, lr 5e-5) | 20M | **0.825** | 0.159 | 0.81 | 1245 |
+
+Check 4: the entropy fix works — both low-entropy runs crush the start
+(165-35), with 4-8x the passes of any earlier team run; crowding is below
+the start's 22%. **T3g 20M promoted to `policies/3v3.pt`**; T3g keeps
+training, T3f stopped. 2v2 restarted with the same settings (spacing dist
+1500), 9 procs each: **T2c_from3g** = T3g 20M shrunk to 2v2 (user's idea),
+**T2d_lowent** = E2G1 widened to 2v2, as the comparison.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
