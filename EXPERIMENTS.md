@@ -300,6 +300,14 @@ Check 2: both contact numbers still improving (hard shell 0.534/g = +18%,
 wheel share 0.137) and strength back above the floor. Pushed as
 `checkpoints_to_test/PPO_POLICY_V4_E8B2.pt` (`AB_E8B2.md`) for the in-game
 test vs Nexto.
+| 3 (53.52B) | 0.451 | 0.918 | 0.920 | 0.818 | 0.817 | 0.95 | 2.08 | 0.128 | 0.522 | 0.045 |
+
+Check 3: wheel share keeps falling (0.150 -> 0.128) and hard shell holds
+(+15%), but strength vs E2G1 slid to 0.451 — right on the 0.45 early-revert
+line; V10/Element unchanged. Continue to check 4; revert if base < 0.45.
+Documentation clips (RocketSimVis, vs Element, 40 sim games each) recorded
+to `docs/highlights/sim/E8b_it3/` and `docs/highlights/sim/E2G1/` with
+`tools/clip_match.py` + `tools/record_clips.sh`.
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward

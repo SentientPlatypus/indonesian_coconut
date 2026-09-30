@@ -11,11 +11,17 @@ mkdir -p "$OUT"
 Xvfb "$DISP" -screen 0 1440x960x24 -nolisten tcp >/dev/null 2>&1 &
 XPID=$!
 sleep 2
-(cd "$ROOT/RocketSimVis/src" && DISPLAY=$DISP LIBGL_ALWAYS_SOFTWARE=1 QT_QPA_PLATFORM=xcb \
-  "$RSV_PY" main.py >/tmp/rsv.log 2>&1) &
-RPID=$!
-trap 'kill $RPID $XPID 2>/dev/null; pkill -f "RocketSimVis/src" 2>/dev/null || true' EXIT
-sleep 6
+trap 'kill ${RPID:-} $XPID 2>/dev/null || true' EXIT
+# llvmpipe start-up segfaults intermittently under heavy CPU load: retry
+for try in 1 2 3 4 5; do
+  (cd "$ROOT/RocketSimVis/src" && exec env DISPLAY=$DISP LIBGL_ALWAYS_SOFTWARE=1 \
+    MESA_SHADER_CACHE_DISABLE=true QT_QPA_PLATFORM=xcb "$RSV_PY" main.py >/tmp/rsv.log 2>&1) &
+  RPID=$!
+  sleep 8
+  kill -0 $RPID 2>/dev/null && break
+  echo "RocketSimVis died on start (try $try), retrying" >&2
+done
+kill -0 $RPID 2>/dev/null || { echo "RocketSimVis failed to start" >&2; exit 1; }
 
 for f in "$CLIPS"/*.json; do
   name=$(basename "$f" .json)
