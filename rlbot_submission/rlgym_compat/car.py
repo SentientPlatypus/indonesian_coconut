@@ -1,6 +1,6 @@
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 from rlbot.flat import AirState, BoxShape, GamePacket, PlayerInfo, Vector3
@@ -31,50 +31,57 @@ from .utils import compare_hitbox_shape, create_default_init
 
 @dataclass(init=False)
 class Car:
-
     # Misc Data
-    team_num: int
-    hitbox_type: int
+    team_num: int  # the team of this car, constants in common_values.py
+    hitbox_type: int  # the hitbox of this car, constants in common_values.py
     ball_touches: int  # number of ball touches since last state was sent
-    bump_victim_id: Optional[int]
+    bump_victim_id: Optional[
+        int
+    ]  # The agent ID of the car you had car contact with if any
 
     # Actual State
-    demo_respawn_timer: float  # 0 if alive
-    # TODO add num_wheels_contact when it's available in rsim
-    # num_wheels_contact: int  # Needed for stuff like AutoRoll and some steering shenanigans
-    on_ground: bool  # this is just numWheelsContact >=3 TODO make property when num_w_cts is available
-    supersonic_time: float  # greater than 0 when supersonic, needed for state set since ssonic threshold changes with time
-    boost_amount: float
-    boost_active_time: float  # you're forced to boost for at least 12 ticks
-    handbrake: float
+    demo_respawn_timer: float  # time, in seconds, until respawn, or 0 if alive (in [0,3] unless changed in mutator config)
+    wheels_with_contact: Tuple[
+        bool, bool, bool, bool
+    ]  # front_left, front_right, back_left, back_right
+    supersonic_time: float  # time, in seconds, since car entered supersonic state (reset to 0 when exited supersonic state) (in [0, infinity) but only relevant values are in [0,1] (1 comes from SUPERSONIC_MAINTAIN_MAX_TIME in RLConst.h))
+    boost_amount: float  # (in [0,100])
+    boost_active_time: float  # time, in seconds, since car started pressing boost (reset to 0 when boosting stops) (in [0, infinity) but only relevant values are in [0,0.1] (0.1 comes from BOOST_MIN_TIME in RLConst.h))
+    handbrake: float  # indicates the magnitude of the handbrake, which ramps up and down when handbrake is pressed/released (in [0,1])
 
     # Jump Stuff
-    has_jumped: bool
+    is_jumping: bool  # whether the car is currently jumping (you gain a little extra velocity while holding jump)
+    has_jumped: bool  # whether the car has jumped since last time it was on ground
     is_holding_jump: bool  # whether you pressed jump last tick or not
-    is_jumping: bool  # changes to false after max jump time
-    jump_time: float  # need jump time for state set, doesn't reset to 0 because of psyonix's landing jump cooldown
+    jump_time: float  # time, in seconds, since jump was pressed while car was on ground, clamped to 0.2 (reset to 0 when car presses jump while on ground) (in [0,0.2] (0.2 comes from JUMP_MAX_TIME in RLConst.h))
 
     # Flip Stuff
-    has_flipped: bool
-    has_double_jumped: bool
-    air_time_since_jump: float
-    flip_time: float
-    flip_torque: np.ndarray
+    has_flipped: bool  # whether the car has flipped since last time it was on ground
+    has_double_jumped: (
+        bool  # whether the car has double jumped since last time it was on ground
+    )
+    air_time_since_jump: float  # time, in seconds, since a jump off ground ended (reset to 0 when car is on ground or has not jumped or is jumping) (in [0, infinity) but only relevant values are in [0,1.25] (1.25 comes from DOUBLEJUMP_MAX_DELAY in RLConst.h))
+    flip_time: float  # time, in seconds, since flip (or stall) was initiated (reset to 0 when car is on ground) (in [0, infinity) but only relevant values are in [0, 0.95] (0.95 comes from FLIP_TORQUE_TIME + FLIP_PITCHLOCK_EXTRA_TIME in RLConst.h))
+    flip_torque: (
+        np.ndarray
+    )  # torque applied to the car for the duration of the flip (in [0,1])
 
     # AutoFlip Stuff - What helps you recover from turtling
-    is_autoflipping: bool
-    autoflip_timer: float
+    is_autoflipping: bool  # changes to false after max autoflip time
+    autoflip_timer: float  # time, in seconds, until autoflip force ends (in [0,0.4] (0.4 comes from CAR_AUTOFLIP_TIME in RLConst.h))
     autoflip_direction: float  # 1 or -1, determines roll direction
 
+    # Physics
     physics: PhysicsObject
-    _inverted_physics: PhysicsObject
+    _inverted_physics: PhysicsObject  # Cache for inverted physics
 
     # RLBot Compat specific fields
-    _tick_skip: int
+    _next_action_tick_duration: int
     _ball_touch_ticks: deque[bool]  # history for past _tick_skip ticks
     _prev_air_state: int
-    _game_seconds: int
+    _game_seconds: float
     _cur_tick: int
+    _last_reset_ball_touches_tick: int
 
     __slots__ = tuple(__annotations__)
 
@@ -101,14 +108,24 @@ class Car:
         return self.supersonic_time > 0
 
     @property
-    # Updated because Eastvillage found it was wrong
-    def can_flip(self) -> bool:
+    def on_ground(self) -> bool:
+        return sum(self.wheels_with_contact) >= 3
+
+    @on_ground.setter
+    def on_ground(self, value: bool):
+        self.wheels_with_contact = (value, value, value, value)
+
+    @property
+    def has_flip(self) -> bool:
         return (
             not self.has_double_jumped
             and not self.has_flipped
             and self.air_time_since_jump < DOUBLEJUMP_MAX_DELAY
-            and not self.on_ground
         )
+
+    @property
+    def can_flip(self) -> bool:
+        return not self.on_ground and not self.is_holding_jump and self.has_flip
 
     @property
     def is_flipping(self) -> bool:
@@ -157,7 +174,9 @@ class Car:
         return OCTANE
 
     @staticmethod
-    def create_compat_car(packet: GamePacket, player_index: int, tick_skip: int):
+    def create_compat_car(
+        packet: GamePacket, player_index: int, action_tick_duration: int
+    ):
         player_info = packet.players[player_index]
         car = Car()
         car.team_num = BLUE_TEAM if player_info.team == 0 else ORANGE_TEAM
@@ -169,7 +188,7 @@ class Car:
         car.demo_respawn_timer = 0
         car.on_ground = player_info.air_state == AirState.OnGround
         car.supersonic_time = 0
-        car.boost_amount = player_info.boost / 100
+        car.boost_amount = player_info.boost
         car.boost_active_time = 0
         car.handbrake = 0
         car.has_jumped = player_info.has_jumped
@@ -190,12 +209,15 @@ class Car:
         car.autoflip_timer = 0
         car.autoflip_direction = 0
         car.physics = PhysicsObject.create_compat_physics_object()
-        car._tick_skip = tick_skip
-        car._ball_touch_ticks = deque([False] * tick_skip, tick_skip)
         car._prev_air_state = int(player_info.air_state)
         car._game_seconds = packet.match_info.seconds_elapsed
         car._cur_tick = packet.match_info.frame_num
+        car._last_reset_ball_touches_tick = packet.match_info.frame_num
         return car
+
+    def reset_ball_touches(self):
+        self.ball_touches = 0
+        self._last_reset_ball_touches_tick = self._cur_tick
 
     def update(
         self,
@@ -209,8 +231,6 @@ class Car:
         time_elapsed = TICK_TIME * ticks_elapsed
         self._game_seconds += time_elapsed
 
-        for _ in range(min(self._tick_skip, ticks_elapsed)):
-            self._ball_touch_ticks.append(False)
         if player_info.latest_touch is not None:
             ticks_since_touch = int(
                 round(
@@ -218,9 +238,8 @@ class Car:
                     * TICKS_PER_SECOND
                 )
             )
-            if ticks_since_touch < self._tick_skip:
-                self._ball_touch_ticks[-(ticks_since_touch + 1)] = True
-        self.ball_touches = sum(self._ball_touch_ticks)
+            if ticks_since_touch < ticks_elapsed:
+                self.ball_touches += 1
         self.demo_respawn_timer = (
             0
             if player_info.demolished_timeout == -1
@@ -230,7 +249,7 @@ class Car:
             self.supersonic_time += time_elapsed
         else:
             self.supersonic_time = 0
-        self.boost_amount = player_info.boost / 100
+        self.boost_amount = player_info.boost
         # Taken from rocket sim
         if self.boost_active_time > 0:
             if (
@@ -260,10 +279,6 @@ class Car:
         self.flip_torque[1] = player_info.dodge_dir.x
         if self.has_jumped or self.is_jumping:
             self.jump_time += TICK_TIME * ticks_elapsed
-        if player_info.dodge_timeout == -1:
-            self.air_time_since_jump = 0
-        else:
-            self.air_time_since_jump = DOUBLEJUMP_MAX_DELAY - player_info.dodge_timeout
 
         match player_info.air_state:
             case AirState.OnGround:
@@ -286,27 +301,43 @@ class Car:
                 self.on_ground = False
                 self.is_jumping = False
 
-        # TODO: remove?
-        # if self.has_jumped and not self.is_jumping:
-        #     self.air_time_since_jump += time_elapsed
-        # else:
-        #     self.air_time_since_jump = 0
+        if player_info.dodge_timeout != -1:
+            self.air_time_since_jump = DOUBLEJUMP_MAX_DELAY - player_info.dodge_timeout
+
+        if not self.has_jumped or self.is_jumping:
+            self.air_time_since_jump = 0
 
         self.physics.update(player_info.physics)
         self._inverted_physics = self.physics.inverted()
 
         # Override with extra info if available
         if extra_player_info is not None:
-            self.on_ground = extra_player_info.on_ground
-            self.handbrake = extra_player_info.handbrake
-            self.ball_touches = extra_player_info.ball_touches
-            self.bump_victim_id = (
-                extra_player_info.car_contact_id
-                if extra_player_info.car_contact_cooldown_timer > 0
-                else None
-            )
-            self.is_autoflipping = extra_player_info.is_autoflipping
-            self.autoflip_timer = extra_player_info.autoflip_timer
-            self.autoflip_direction = extra_player_info.autoflip_direction
+            if extra_player_info.wheels_with_contact is not None:
+                self.wheels_with_contact = extra_player_info.wheels_with_contact
+            if extra_player_info.handbrake is not None:
+                self.handbrake = extra_player_info.handbrake
+            if extra_player_info.ball_touch_ticks is not None:
+                self.ball_touches = len(
+                    [
+                        v
+                        for v in extra_player_info.ball_touch_ticks
+                        if v > self._last_reset_ball_touches_tick
+                    ]
+                )
+            if (
+                extra_player_info.car_contact_id is not None
+                and extra_player_info.car_contact_cooldown_timer is not None
+            ):
+                self.bump_victim_id = (
+                    extra_player_info.car_contact_id
+                    if extra_player_info.car_contact_cooldown_timer > 0
+                    else None
+                )
+            if extra_player_info.is_autoflipping is not None:
+                self.is_autoflipping = extra_player_info.is_autoflipping
+            if extra_player_info.autoflip_timer is not None:
+                self.autoflip_timer = extra_player_info.autoflip_timer
+            if extra_player_info.autoflip_direction is not None:
+                self.autoflip_direction = extra_player_info.autoflip_direction
 
         self._prev_air_state = int(player_info.air_state)

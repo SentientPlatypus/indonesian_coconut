@@ -57,8 +57,8 @@ class IndonesianCoconut(Bot):
         self.prev_control = ControllerState()
         self.controls = ControllerState()
         self.action_parser = LookupTableAction()
-        self.extra_info = SimExtraInfo(self.field_info, tick_skip=self.tick_skip)
-        self.game_state = self.game_state.create_compat_game_state(self.field_info, tick_skip=self.tick_skip)
+        self.extra_info = SimExtraInfo(self.field_info)
+        self.game_state = self.game_state.create_compat_game_state(self.field_info)
         # load all three up front so switching mode mid-series never stalls a tick
         for n in POLICY_FILES:
             self._policy(n)

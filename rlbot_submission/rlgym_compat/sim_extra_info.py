@@ -1,9 +1,14 @@
-from collections import deque
-from typing import Dict
+from typing import Dict, List
 
-import RocketSim as rsim
+try:
+    import RocketSim as rsim
+
+    rs_successfully_imported = True
+except:
+    rs_successfully_imported = False
 from rlbot.flat import (
     BallTypeMutator,
+    BoostAmountMutator,
     BoostStrengthMutator,
     DemolishMutator,
     FieldInfo,
@@ -16,16 +21,10 @@ from rlbot.flat import (
     MultiBallMutator,
     PlayerInfo,
     RespawnTimeMutator,
-    RumbleMutator
+    RumbleMutator,
 )
 
 from .car import Car
-
-# rlbot_flatbuffers renamed these enum members (Soccer->Soccar, Hockey->Snowday,
-# NoRumble->Off); accept either spelling.
-GM_SOCCAR = getattr(GameMode, "Soccar", None) or getattr(GameMode, "Soccer")
-GM_SNOWDAY = getattr(GameMode, "Snowday", None) or getattr(GameMode, "Hockey")
-RUMBLE_OFF = getattr(RumbleMutator, "Off", None) or getattr(RumbleMutator, "NoRumble")
 from .extra_info import ExtraBallInfo, ExtraPacketInfo, ExtraPlayerInfo
 from .math import euler_to_rotation
 from .utils import rotator_to_numpy, vector_to_numpy
@@ -33,23 +32,29 @@ from .utils import rotator_to_numpy, vector_to_numpy
 
 class SimExtraInfo:
     def __init__(
-        self, field_info: FieldInfo, match_settings=MatchConfiguration(), tick_skip=8
+        self,
+        field_info: FieldInfo,
+        match_configuration=MatchConfiguration(),
+        ball_touch_ticks_max_len=100,
     ):
-        gm = match_settings.game_mode
-        if gm == GM_SOCCAR:
-            mode = rsim.GameMode.SOCCAR
-        elif gm == GameMode.Hoops:
-            mode = rsim.GameMode.HOOPS
-        elif gm == GameMode.Heatseeker:
-            mode = rsim.GameMode.HEATSEEKER
-        elif gm == GM_SNOWDAY:
-            mode = rsim.GameMode.SNOWDAY
-        else:
-            raise NotImplementedError(gm)
+        assert (
+            rs_successfully_imported
+        ), "SimExtraInfo cannot be used without having RocketSim installed."
+        match match_configuration.game_mode:
+            case GameMode.Soccar:
+                mode = rsim.GameMode.SOCCAR
+            case GameMode.Hoops:
+                mode = rsim.GameMode.HOOPS
+            case GameMode.Heatseeker:
+                mode = rsim.GameMode.HEATSEEKER
+            case GameMode.Snowday:
+                mode = rsim.GameMode.SNOWDAY
+            case _:
+                raise NotImplementedError(match_configuration.game_mode)
         # TODO: ensure the boost pads are right
 
         # Ensure there are no mutators configured that we can't support
-        mutators = match_settings.mutators
+        mutators = match_configuration.mutators
         if mutators is not None:
             mutator_config = {}
             assert (
@@ -63,23 +68,34 @@ class SimExtraInfo:
             match mutators.ball_type:
                 case BallTypeMutator.Default:
                     assert (
-                        match_settings.game_mode == GM_SOCCAR
+                        match_configuration.game_mode == GameMode.Soccar
                     ), "Cannot use non-soccer ball in soccer with sim"
                 case BallTypeMutator.Puck:
                     assert (
-                        match_settings.game_mode == GM_SNOWDAY
+                        match_configuration.game_mode == GameMode.Snowday
                     ), "Cannot use non-puck ball in hockey with sim"
                 case BallTypeMutator.Basketball:
                     assert (
-                        match_settings.game_mode == GameMode.Hoops
+                        match_configuration.game_mode == GameMode.Hoops
                     ), "Cannot use non-basketball ball in hoops with sim"
                 case _:
                     raise NotImplementedError(mutators.ball_type)
 
+            match mutators.boost_amount:
+                case BoostAmountMutator.NormalBoost:
+                    pass
+                case BoostAmountMutator.UnlimitedBoost:
+                    mutator_config["boost_used_per_second"] = 0
+                    mutator_config["car_spawn_boost_amount"] = 100
+                case BoostAmountMutator.NoBoost:
+                    mutator_config["boost_accel"] = 0
+                    print(
+                        "Warning: No Boost boost option support is an experimental feature"
+                    )
+                case _:
+                    raise NotImplementedError(mutators.boost_amount)
 
-            assert (
-                mutators.rumble == RUMBLE_OFF
-            ), "Rumble is unsupported by sim"
+            assert mutators.rumble == RumbleMutator.Off, "Rumble is unsupported by sim"
 
             match mutators.boost_strength:
                 case BoostStrengthMutator.One:
@@ -134,12 +150,13 @@ class SimExtraInfo:
             # TODO: BallWeightOption
             # TODO: BallSizeOption
             # TODO: BallBouncinessOption
+        self.ball_touch_ticks_max_len = ball_touch_ticks_max_len
+
         self._ball_touched_on_tick: Dict[int, bool] = {}
-        self._touches: Dict[int, deque[int]] = {}
-        self._car_id_spawn_id_map: Dict[int, int] = {}
-        self._spawn_id_car_id_map: Dict[int, int] = {}
+        self._ball_touch_ticks: Dict[int, List[int]] = {}
+        self._car_id_player_id_map: Dict[int, int] = {}
+        self._player_id_car_id_map: Dict[int, int] = {}
         self._current_car_ids: set[int] = set()
-        self._tick_skip = tick_skip
         self._first_call = True
         self._tick_count = 0
         self._arena = rsim.Arena(mode)
@@ -158,13 +175,13 @@ class SimExtraInfo:
     def _get_extra_player_info(self, car) -> ExtraPlayerInfo:
         car_state = car.get_state()
         return ExtraPlayerInfo(
-            on_ground=car_state.is_on_ground,
+            wheels_with_contact=car_state.wheels_with_contact,
             handbrake=car_state.handbrake_val,
-            ball_touches=sum(self._touches[car.id]),
+            ball_touch_ticks=self._ball_touch_ticks[car.id],
             car_contact_id=(
                 0
                 if car_state.car_contact_id == 0
-                else self._car_id_spawn_id_map[car_state.car_contact_id]
+                else self._car_id_player_id_map[car_state.car_contact_id]
             ),
             car_contact_cooldown_timer=car_state.car_contact_cooldown_timer,
             is_autoflipping=car_state.is_auto_flipping,
@@ -187,14 +204,13 @@ class SimExtraInfo:
             return self._get_extra_packet_info()
 
         ticks_elapsed = packet.match_info.frame_num - self._tick_count
-        self._tick_count = packet.match_info.frame_num
-        spawn_id_player_info_map = {
+        player_id_player_info_map = {
             player_info.player_id: player_info for player_info in packet.players
         }
         for car in self._arena.get_cars():
             car_controls = rsim.CarControls()
-            player_input = spawn_id_player_info_map[
-                self._car_id_spawn_id_map[car.id]
+            player_input = player_id_player_info_map[
+                self._car_id_player_id_map[car.id]
             ].last_input
             car_controls.throttle = player_input.throttle
             car_controls.steer = player_input.steer
@@ -205,11 +221,17 @@ class SimExtraInfo:
             car_controls.jump = player_input.jump
             car_controls.handbrake = player_input.handbrake
             car.set_controls(car_controls)
-        for _ in range(ticks_elapsed):
+        for t in range(ticks_elapsed):
             self._ball_touched_on_tick = {k: False for k in self._ball_touched_on_tick}
             self._arena.step(1)
-            for k, v in self._ball_touched_on_tick.items():
-                self._touches[k].append(v)
+            for car_id, ball_touched in self._ball_touched_on_tick.items():
+                if ball_touched:
+                    self._ball_touch_ticks[car_id].append(self._tick_count + t + 1)
+        self._ball_touch_ticks = {
+            k: v[-self.ball_touch_ticks_max_len :]
+            for (k, v) in self._ball_touch_ticks.items()
+        }
+        self._tick_count = packet.match_info.frame_num
         self._set_sim_state(packet)
         return self._get_extra_packet_info()
 
@@ -228,7 +250,7 @@ class SimExtraInfo:
                 ),
             )
             if latest_touch_player_info.latest_touch is not None:
-                ball_state.last_hit_car_id = self._spawn_id_car_id_map[
+                ball_state.last_hit_car_id = self._player_id_car_id_map[
                     packet.players[latest_touch_player_idx].player_id
                 ]
             ball_state.pos = rsim.Vec(
@@ -255,7 +277,7 @@ class SimExtraInfo:
             )
         else:
             car = self._arena.get_car_from_id(
-                self._spawn_id_car_id_map[player_info.player_id]
+                self._player_id_car_id_map[player_info.player_id]
             )
         car_state = car.get_state()
         car_state.pos = rsim.Vec(*vector_to_numpy(player_info.physics.location))
@@ -275,18 +297,18 @@ class SimExtraInfo:
             player_info.demolished_timeout * car_state.is_demoed
         )
         car.set_state(car_state)
-        self._touches = {
-            car.id: deque([False] * self._tick_skip, self._tick_skip),
-            **self._touches,
+        self._ball_touch_ticks = {
+            car.id: [],
+            **self._ball_touch_ticks,
         }
-        self._car_id_spawn_id_map[car.id] = player_info.player_id
-        self._spawn_id_car_id_map[player_info.player_id] = car.id
+        self._car_id_player_id_map[car.id] = player_info.player_id
+        self._player_id_car_id_map[player_info.player_id] = car.id
         self._current_car_ids.add(car.id)
 
     def _is_new_car(self, player_info: PlayerInfo):
         return (
-            player_info.player_id not in self._spawn_id_car_id_map
-            or self._spawn_id_car_id_map[player_info.player_id]
+            player_info.player_id not in self._player_id_car_id_map
+            or self._player_id_car_id_map[player_info.player_id]
             not in self._current_car_ids
         )
 
@@ -298,17 +320,17 @@ class SimExtraInfo:
 
         # Remove data for cars that are no longer in the packet
         packet_car_ids = [
-            self._spawn_id_car_id_map[player_info.player_id]
+            self._player_id_car_id_map[player_info.player_id]
             for player_info in packet.players
         ]
         for car_id in list(self._current_car_ids):
             if car_id not in packet_car_ids:
                 self._arena.remove_car(car_id)
                 self._current_car_ids.remove(car_id)
-                spawn_id = self._car_id_spawn_id_map.pop(car_id, None)
-                if spawn_id is not None:
-                    self._spawn_id_car_id_map.pop(spawn_id, None)
-                self._touches.pop(car_id, None)
+                player_id = self._car_id_player_id_map.pop(car_id, None)
+                if player_id is not None:
+                    self._player_id_car_id_map.pop(player_id, None)
+                self._ball_touch_ticks.pop(car_id, None)
                 self._ball_touched_on_tick.pop(car_id, None)
 
     def _set_sim_state(self, packet: GamePacket):
