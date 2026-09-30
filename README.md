@@ -10,12 +10,12 @@ The bot is trained using a specialized multi-component reward architecture desig
 
 | Opponent | Opponent rank | Checkpoint | Score (goals) | p-value | Replay |
 |---|---|---|---:|---:|---|
-| **Nexto** | Grand Champion | `PPO_POLICY_V4_E2G1.pt` | **26–6** | 2.7 × 10⁻⁴ | [ballchasing](https://ballchasing.com/replay/7b91dc1a-297b-4ac8-bf66-6b324895f95b) |
+| **Nexto** | Grand Champion | `PPO_POLICY_V4_E2G1.pt` | **42–11** | 1.1 × 10⁻⁵ | [ballchasing](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30) |
 | **Element** | Champion | earlier V3 checkpoint | **47–3** | 1.9 × 10⁻¹¹ | [ballchasing](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b) |
 
 p-values are exact one-sided binomial tests on goals (each goal an independent
 50/50 trial under the null hypothesis that the two bots are equally strong).
-Against Nexto, E2G1 also out-shot it 38–8. In headless RocketSim evaluation,
+Against Nexto, E2G1 also out-shot it 65–16. In headless RocketSim evaluation,
 E2G1 beats Element 567–33 over 600 kickoff games.
 
 To benchmark policy quality, Indonesian Coconut was evaluated against Element, an established S-tier bot in the RLBot competitive scene. Using a binomial scoring model to assess statistical significance:
