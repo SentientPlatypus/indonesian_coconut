@@ -273,6 +273,18 @@ spacing weight 12 -> 4, distance 1300 -> 1100, and the ball-crowd term no
 longer charging the car nearest the ball (`team_crowd_closest_exempt`).
 Passes fell in both modes (0.4 -> ~0.13/g); revisit once spacing settles.
 
+| 2 | 2v2 | 66M | 0.525 | 0.019 | 0.195 | 4171 |
+| 2 | 3v3 (T3b) | 32M | 0.245 | 0.043 | 0.145 | 2057 |
+
+Check 2: 2v2 steady (promoted the 66M snapshot, more passes). T3b better
+than T3a at the same steps (0.245 vs 0.185) but still loses to the
+all-chase start. Measured T3b's weighted spacing penalty: -0.34/step/car
+(~-110/episode vs 1200 per goal), so it is not dominant. Suspect kickoffs
+(eval games end at the first goal; the crowd term discourages a second car
+at the kickoff). **T3c control:** 3v3 from the transfer with spacing
+weight 0 (pass + team spirit kept), 8 procs, to test whether spacing is
+what costs the goals.
+
 ## E8 — shell contact, not wheels — SUPERSEDED by E8b 2026-09-29 (at check 2)
 
 User (2026-09-28): contact with the opponent should be with the shell of
