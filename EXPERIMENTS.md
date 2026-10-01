@@ -362,6 +362,14 @@ promoted to `2v2.pt` (first 2v2 gain since check 5; passes 0.535 -> 0.595).
 T3h 166M vs T3g 110M **107-93 (0.535)**, under the bar; `3v3.pt` stays at
 T3g 110M. Both keep training.
 
+| 8 | 2v2 (T2e) | 141M | **0.895** | 0.077 | 0.565 | 3237 |
+| 8 | 3v3 (T3h) | 206M | 0.845 | 0.097 | 0.99 | 1727 |
+
+Head-to-head vs the submission: T2e 141M vs T2e 103M **112-88 (0.56)**,
+promoted to `2v2.pt`. T3h 206M vs T3g 110M **97-103 (0.485)**: 3v3 has not
+beaten T3g 110M in two checks (0.535, 0.485), so it is on a plateau;
+`3v3.pt` stays at T3g 110M.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
