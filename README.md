@@ -1,4 +1,4 @@
-# Indonesian Coconut — A Reinforcement-Learning Rocket League Bot
+# Indonesian Coconut: PPO Rocket League Bot
 
 ![alt text](assets/cover.png)
 
