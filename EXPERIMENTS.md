@@ -335,6 +335,14 @@ T2c 21M beats the old 2v2.pt (T2 66M) **167-33**; T3g 62M beats T3g 20M
 62M). Starting 2v2 from the trained 3v3 beat starting from 1v1 (0.83 vs
 0.80, less crowding), so T2d is stopped; T2c and T3g keep training.
 
+| 6 | 2v2 (T2c) | 55M | 0.855 | 0.069 | 0.535 | 2996 |
+| 6 | 3v3 (T3g) | 110M | 0.885 | 0.110 | 1.10 | 1601 |
+
+Head-to-head vs the submission: T2c 55M vs T2c 21M **108-92 (0.54)**, under
+the 0.55 bar and within noise for 200 games, so 2v2.pt stays at 21M. T3g
+110M vs T3g 62M **115-85 (0.575)**, promoted to `3v3.pt`. Gains per check
+are shrinking; both keep training.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
