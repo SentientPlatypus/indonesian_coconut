@@ -380,6 +380,18 @@ modes on a plateau. **T2f_lr25 / T3i_lr25:** resume from T2e 187M / T3h
 254M with policy_lr 5e-5 -> 2.5e-5 (checked the new rate is applied after
 the optimizer state loads), everything else unchanged.
 
+| 10 | 2v2 (T2f, half LR) | 227M | 0.835 | 0.077 | 0.59 | 3188 |
+| 10 | 3v3 (T3i, half LR) | 295M | **0.88** | 0.088 | 0.87 | 1804 |
+
+Head-to-head vs the submission: T2f 227M vs T2e 141M 116-84, confirmed
+(119-81): **235-165 over 400 (0.588)**; T3i 295M vs T3g 110M **125-75
+(0.625)** — the first 3v3 gain since check 6. Halving the LR broke both
+plateaus. Promoted: `2v2.pt` = T2f 227M, `3v3.pt` = T3i 295M (bot smoke
+test OK in all three modes; `1v1.pt` still byte-identical to E2G1).
+Note: the vs-init score no longer tracks the head-to-head well (T2f 0.835
+vs T2e 141M's 0.895, yet T2f wins the direct match), so promotions go by
+head-to-head.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
