@@ -370,6 +370,16 @@ promoted to `2v2.pt`. T3h 206M vs T3g 110M **97-103 (0.485)**: 3v3 has not
 beaten T3g 110M in two checks (0.535, 0.485), so it is on a plateau;
 `3v3.pt` stays at T3g 110M.
 
+| 9 | 2v2 (T2e) | 181M | 0.835 | 0.064 | 0.485 | 3187 |
+| 9 | 3v3 (T3h) | 247M | 0.85 | 0.086 | 0.885 | 1764 |
+
+Head-to-head vs the submission: T2e 181M vs T2e 141M **95-105 (0.475)**,
+not promoted. T3h 247M vs T3g 110M 112-88, confirmed with 200 more games
+(104-96): **216-184 over 400 (0.54)**, under the bar; not promoted. Both
+modes on a plateau. **T2f_lr25 / T3i_lr25:** resume from T2e 187M / T3h
+254M with policy_lr 5e-5 -> 2.5e-5 (checked the new rate is applied after
+the optimizer state loads), everything else unchanged.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
