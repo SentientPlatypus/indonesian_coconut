@@ -325,6 +325,16 @@ training, T3f stopped. 2v2 restarted with the same settings (spacing dist
 1500), 9 procs each: **T2c_from3g** = T3g 20M shrunk to 2v2 (user's idea),
 **T2d_lowent** = E2G1 widened to 2v2, as the comparison.
 
+| 5 | 2v2 (T2c, from 3v3) | 21M | **0.83** | 0.085 | 0.50 | 2572 |
+| 5 | 2v2 (T2d, from 1v1) | 21M | 0.80 | 0.118 | 0.49 | 2236 |
+| 5 | 3v3 (T3g) | 62M | **0.855** | 0.100 | 0.775 | 1601 |
+
+Head-to-head vs the policies then in the submission (200 games each):
+T2c 21M beats the old 2v2.pt (T2 66M) **167-33**; T3g 62M beats T3g 20M
+**123-77**. Both promoted (`policies/2v2.pt` = T2c 21M, `3v3.pt` = T3g
+62M). Starting 2v2 from the trained 3v3 beat starting from 1v1 (0.83 vs
+0.80, less crowding), so T2d is stopped; T2c and T3g keep training.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
