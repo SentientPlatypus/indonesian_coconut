@@ -354,6 +354,14 @@ the latest checkpoints, 14 procs each: **T2e_teamposs** (from T2c 75M) and
 **T3h_teamposs** (from T3g 137M). The spacing penalty is unchanged (weight
 4; 1500 / 1100 uu; the car nearest the ball is exempt from the crowd term).
 
+| 7 | 2v2 (T2e, team poss) | 103M | **0.87** | 0.069 | 0.595 | 3268 |
+| 7 | 3v3 (T3h, team poss) | 166M | 0.84 | 0.104 | 1.045 | 1704 |
+
+Head-to-head vs the submission: T2e 103M vs T2c 21M **128-72 (0.64)**,
+promoted to `2v2.pt` (first 2v2 gain since check 5; passes 0.535 -> 0.595).
+T3h 166M vs T3g 110M **107-93 (0.535)**, under the bar; `3v3.pt` stays at
+T3g 110M. Both keep training.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
