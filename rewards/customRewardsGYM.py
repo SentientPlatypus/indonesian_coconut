@@ -1447,14 +1447,16 @@ class AirBoostReward(RewardFunction[AgentID, GameState, float]):
 
 class PossessionReward(RewardFunction[AgentID, GameState, float]):
     """
-    Zero-sum 1v1 possession. Exclusive control by one agent:
+    Zero-sum TEAM possession (identical to the old per-agent version in 1v1).
+    A team possesses when its cars are the only ones in control, each:
       - close to ball (possess_radius)
       - facing ball enough (face_cos_min)
       - relative ball-car speed small (rel_speed_max)
       - AND (optionally) last touched recently (touch_window)
 
-    If both satisfy control, or neither does -> 0 / 0 (contested or loose).
-    If one has it: +r to them, -r to the other. Steal is the same swap.
+    Cars of both teams in control, or nobody -> 0 / 0 (contested or loose).
+    If one team has it: +r to every car on it, -r to every opponent (team
+    sums cancel). A steal is the same swap; a teammate taking over is not.
 
     Previously this was only *partly* adversarial (retain +1 / -0.6, steal
     +1 / -1.2, and a both-lose stalemate). That is not zero-sum: you could
@@ -1536,11 +1538,13 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
         return True
 
     def _choose_possessor(self, agents: List[AgentID], state: GameState) -> Optional[AgentID]:
-        # exclusive control logic
+        """Nearest controlling car of the possessing team, or None when no
+        car / both teams are in control."""
         controls = [a for a in agents if self._is_in_control(a, state)]
-        if len(controls) == 1:
-            return controls[0]
-        return None  # none or contested => no possessor
+        if not controls or len({state.cars[a].team_num for a in controls}) > 1:
+            return None
+        bpos = np.array(state.ball.position, dtype=float)
+        return min(controls, key=lambda a: _safe_norm(bpos - np.array(state.cars[a].physics.position, dtype=float)))
 
     def get_rewards(self, agents: List[AgentID], state: GameState,
                     is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
@@ -1575,11 +1579,9 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
         possessor = self._choose_possessor(agents, state)
 
         def _credit(winner: AgentID, amount: float) -> None:
-            rewards[winner] += amount
             team = state.cars[winner].team_num
             for o in agents:
-                if state.cars[o].team_num != team:
-                    rewards[o] -= amount
+                rewards[o] += amount if state.cars[o].team_num == team else -amount
 
         def _team(a):
             car = state.cars.get(a)
@@ -1591,7 +1593,8 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
                 and possessor != self.prev_possessor
                 and _team(possessor) != _team(self.prev_possessor)):
             _credit(possessor, self.capture_reward)
-        elif possessor is not None and self.prev_possessor is None:
+        elif (possessor is not None
+              and (self.prev_possessor is None or _team(self.prev_possessor) is None)):
             _credit(possessor, 0.5 * self.capture_reward)
 
         # retain — +r / -r

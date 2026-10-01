@@ -343,6 +343,17 @@ the 0.55 bar and within noise for 200 games, so 2v2.pt stays at 21M. T3g
 110M vs T3g 62M **115-85 (0.575)**, promoted to `3v3.pt`. Gains per check
 are shrinking; both keep training.
 
+**2026-10-01 (user): team zero-sum possession + more pass reward.**
+PossessionReward is now zero-sum by team: while a team has sole control,
+every car on it gets +r and every opponent -r (it used to pay only the
+possessor, 1 vs -N); teammates in control together count as their team's
+possession instead of contested; a teammate taking over is not a steal.
+1v1 is identical to before (checked: 0 difference over 2400 steps), and
+each team-mode step sums to 0. Pass weight 50 -> 100. Runs resumed from
+the latest checkpoints, 14 procs each: **T2e_teamposs** (from T2c 75M) and
+**T3h_teamposs** (from T3g 137M). The spacing penalty is unchanged (weight
+4; 1500 / 1100 uu; the car nearest the ball is exempt from the crowd term).
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
