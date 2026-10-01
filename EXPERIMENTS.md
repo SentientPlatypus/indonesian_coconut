@@ -392,6 +392,13 @@ Note: the vs-init score no longer tracks the head-to-head well (T2f 0.835
 vs T2e 141M's 0.895, yet T2f wins the direct match), so promotions go by
 head-to-head.
 
+| 11 | 2v2 (T2f) | 266M | 0.87 | 0.070 | 0.395 | 3187 |
+| 11 | 3v3 (T3i) | 336M | 0.88 | 0.079 | 0.895 | 1870 |
+
+Head-to-head vs the submission: T2f 266M vs T2f 227M **103-97 (0.515)**,
+T3i 336M vs T3i 295M **102-98 (0.51)**: even, nothing promoted. 2v2
+passes are slipping (0.59 -> 0.395/game). Both keep training.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
