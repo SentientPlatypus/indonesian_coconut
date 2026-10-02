@@ -2,3 +2,5 @@ rlbot>=2.0.0b44
 torch
 rlgym_compat@git+https://github.com/JPK314/rlgym-compat.git
 rocketsim
+rlgym==2.0.1
+rlgym-tools==2.3.13
