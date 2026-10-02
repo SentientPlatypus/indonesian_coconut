@@ -490,6 +490,17 @@ resets/g, so team play already resets ~5x more, as the user noticed.)
 Promotion still by head-to-head (>= 0.55) vs `2v2.pt` (T2g 391M) /
 `3v3.pt` (T3j 508M).
 
+| check | mode | steps | h2h vs submission | mate bumps/min | crowd | passes/g | resets/g | dtaps/g |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| base | 2v2 (submitted) | — | — | 0.82 | 0.080 | 0.63 | 0.015 | 0.075 |
+| base | 3v3 (submitted) | — | — | 1.70 | 0.088 | 1.035 | 0.010 | 0.105 |
+| 19 | 2v2 (T2h) | 660M | 105-95 (0.525) | 0.90 | 0.065 | 0.59 | 0.015 | 0.08 |
+| 19 | 3v3 (T3k) | 744M | 100-100 (0.50) | 1.35 | 0.070 | 1.035 | 0.015 | 0.15 |
+
+Check 19 (~40M steps in): strength held in both modes (no over-correction).
+3v3 is already cleaner: teammate bumps -21%, crowding -20%, resets +50%,
+double taps +43%. 2v2 bumps not down yet. Nothing promoted.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
