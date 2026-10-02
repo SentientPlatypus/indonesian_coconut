@@ -414,6 +414,14 @@ gold standard, better than E2G1; same 92-input net, byte-identical to
 `indonesiancoco/src/PPO_POLICY_V4_E8B2.pt`). All three policies load and
 act through the bot's load path. Submitted by the user.
 
+| 13 | 2v2 (T2g, quarter LR) | 351M | 0.85 | 0.066 | 0.655 | 3289 |
+| 13 | 3v3 (T3j, quarter LR) | 425M | **0.905** | 0.095 | 0.86 | 1848 |
+
+Head-to-head vs the submission: T2g 351M vs T2f 227M 111-89, confirmed
+(109-91): **220-180 over 400 (0.55)**, exactly the bar; promoted to
+`2v2.pt` (after the user's first upload, so it ships as a policy update;
+zip rebuilt). T3j 425M vs T3i 295M **102-98 (0.51)**, not promoted.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
