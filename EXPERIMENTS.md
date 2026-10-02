@@ -454,6 +454,10 @@ T3j 591M vs T3j 508M **98-102 (0.49)**. Nothing promoted. 2v2 flat for
 three checks (0.495, 0.505, 0.49) and 3v3 for two (0.45, 0.49) at
 quarter LR: plateau again.
 
+Check 18 (head-to-head only, 2026-10-02 16:00Z): T2g 568M vs T2g 391M
+114-86, confirmation 101-99: **215-185 over 400 (0.538)**, under the bar.
+T3j 649M vs T3j 508M **101-99 (0.505)**. Nothing promoted.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
