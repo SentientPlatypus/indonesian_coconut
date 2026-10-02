@@ -501,6 +501,15 @@ Check 19 (~40M steps in): strength held in both modes (no over-correction).
 3v3 is already cleaner: teammate bumps -21%, crowding -20%, resets +50%,
 double taps +43%. 2v2 bumps not down yet. Nothing promoted.
 
+| 20 | 2v2 (T2h) | 701M | 103-97 (0.515) | **0.60** | 0.063 | 0.57 | 0.0 | 0.035 |
+| 20 | 3v3 (T3k) | 788M | 105-95 (0.525) | 1.66 | 0.079 | 0.86 | 0.015 | 0.07 |
+
+Check 20: strength still even. 2v2 teammate bumps now -27% vs baseline;
+3v3 bumps back near baseline (1.35 -> 1.66), so check 19's drop may have
+been noise. Resets and double taps in 200 kickoff games are only 0-30
+events, too few to read; flip-reset progress needs a probe on reset spawns.
+Nothing promoted.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
