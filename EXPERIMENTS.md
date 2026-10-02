@@ -409,6 +409,11 @@ LR. **T2g_lr125 / T3j_lr125:** policy_lr 2.5e-5 -> 1.25e-5, resumed from
 T2f 312M / T3i 385M. The first launch (2026-10-01 16:03) died at startup
 unnoticed; relaunched detached 2026-10-02 02:59Z.
 
+**2026-10-02 (user): `policies/1v1.pt` = E8B2** (the user's in-game
+gold standard, better than E2G1; same 92-input net, byte-identical to
+`indonesiancoco/src/PPO_POLICY_V4_E8B2.pt`). All three policies load and
+act through the bot's load path. Submitted by the user.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
@@ -542,7 +547,8 @@ E2G1 quick read: ~0.1 double taps/game, ~0 real resets.
 |---|---|---|
 | E1ZS1 | expE1_52398221424 | E1 check 1 |
 | E1BSTYLE | expE1b_53146341650 | E1b check 5 (kept) |
-| **E2G1** | expE2_53240356340 | E2 check 1, **current recommendation**. User in-game: "very good", **beats Nexto 26-6**, then **42-11** (2026-09-29, shots 65-16, p=1.1e-5; [replay](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30)) (previous recorded best: GOALDIRECTED6 7-6) |
+| **E8B2** | `checkpoints_to_test/PPO_POLICY_V4_E8B2.pt` | E8b check 2. **1v1 gold standard** (user, 2026-10-02: better than E2G1). Submitted as `rlbot_submission/policies/1v1.pt`; benchmark future 1v1 work against it |
+| E2G1 | expE2_53240356340 | E2 check 1, previous recommendation. User in-game: "very good", **beats Nexto 26-6**, then **42-11** (2026-09-29, shots 65-16, p=1.1e-5; [replay](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30)) (previous recorded best: GOALDIRECTED6 7-6) |
 
 ## Reverting
 
