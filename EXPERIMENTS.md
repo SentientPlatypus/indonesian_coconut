@@ -422,6 +422,14 @@ Head-to-head vs the submission: T2g 351M vs T2f 227M 111-89, confirmed
 `2v2.pt` (after the user's first upload, so it ships as a policy update;
 zip rebuilt). T3j 425M vs T3i 295M **102-98 (0.51)**, not promoted.
 
+| 14 | 2v2 (T2g) | 391M | 0.835 | 0.063 | 0.485 | 3247 |
+| 14 | 3v3 (T3j) | 466M | **0.91** | 0.088 | 0.87 | 1831 |
+
+Head-to-head vs the submission: T2g 391M vs T2g 351M 109-91, confirmed
+(111-89): **220-180 over 400 (0.55)**, promoted to `2v2.pt` (zip
+rebuilt). T3j 466M vs T3i 295M **101-99 (0.505)**: 3v3 flat for three
+checks at quarter LR, `3v3.pt` stays at T3i 295M.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
