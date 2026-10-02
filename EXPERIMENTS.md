@@ -446,6 +446,14 @@ T3j 548M vs T3j 508M **90-110 (0.45)**. Nothing promoted. Final
 submission for the Oct 2 deadline: 1v1 = E8B2, 2v2 = T2g 391M, 3v3 = T3j
 508M. Both runs keep training for later policy updates.
 
+| 17 | 2v2 (T2g) | 512M | 0.89 | 0.064 | 0.405 | 3230 |
+| 17 | 3v3 (T3j) | 591M | 0.88 | 0.096 | 0.91 | 1829 |
+
+Head-to-head vs the submission: T2g 512M vs T2g 391M **98-102 (0.49)**;
+T3j 591M vs T3j 508M **98-102 (0.49)**. Nothing promoted. 2v2 flat for
+three checks (0.495, 0.505, 0.49) and 3v3 for two (0.45, 0.49) at
+quarter LR: plateau again.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
