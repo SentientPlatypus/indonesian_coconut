@@ -438,6 +438,14 @@ not promoted. T3j 508M vs T3i 295M 125-75, confirmed (112-88): **237-163
 over 400 (0.593)**, the first 3v3 gain since check 10; promoted to
 `3v3.pt` (zip rebuilt).
 
+| 16 | 2v2 (T2g) | 471M | 0.885 | 0.073 | 0.495 | 3073 |
+| 16 | 3v3 (T3j) | 548M | 0.915 | 0.079 | 0.815 | 1928 |
+
+Head-to-head vs the submission: T2g 471M vs T2g 391M **101-99 (0.505)**;
+T3j 548M vs T3j 508M **90-110 (0.45)**. Nothing promoted. Final
+submission for the Oct 2 deadline: 1v1 = E8B2, 2v2 = T2g 391M, 3v3 = T3j
+508M. Both runs keep training for later policy updates.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
