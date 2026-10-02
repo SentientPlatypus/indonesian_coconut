@@ -461,6 +461,35 @@ T3j 649M vs T3j 508M **101-99 (0.505)**. Nothing promoted.
 User (2026-10-02 16:20Z): keep training team play until told to stop.
 T2g / T3j continue unchanged; checks every ~40M steps.
 
+**2026-10-02 18:40Z (user): teammate collisions, double commits, two cars
+going for the same boost in 3v3; wants flip resets.** T2g / T3j stopped
+at 619M / 701M. New runs resume from them, 14 procs each:
+**T2h_coord_fr / T3k_coord_fr** = previous config +
+- `TeamCoordinationReward` (weight 1): -80 to BOTH cars per new teammate
+  contact; -2/step to each car committing to the ball (within 1500, closing
+  >= 500 uu/s) except the teammate with the shortest time-to-ball; -1.5/step
+  to each car heading for a big pad (within 2000, closing >= 500, boost < 80)
+  that a teammate reaches sooner. Before this, only the bumper paid for a
+  teammate bump (<= ~17, under 2% of a goal) and the car nearest the ball was
+  exempt from the crowd term.
+- Flip resets: `fr_on_ball_contact` was still **false** in every team run
+  (the E7 bug: reset-on-ball looks like ground contact, so obtain / use never
+  paid). Now true; flip-reset curriculum 0.10 -> 0.15, easy share 0.40,
+  assisted spawns 0.30.
+- Spawns: the attacker's teammates go to a support spot behind the play
+  (were placed as "active defenders" facing their own attacker), and
+  overlapping grounded cars are pushed >= 300 uu apart (2+ parked per team
+  could spawn on top of each other). 1v1 spawns unchanged.
+- policy_lr 1.25e-5 -> 2.5e-5 (new behaviour to learn).
+
+`tools/eval_team.py` now also reports teammate bumps (new contacts only),
+real flip resets and double taps. Baseline, submitted policies vs
+themselves (200 games): 2v2 0.82 mate bumps/min, 0.015 resets/g, 0.075
+dtaps/g; 3v3 1.70 bumps/min, 0.010 resets/g, 0.105 dtaps/g. (1v1 E2: 0.0021
+resets/g, so team play already resets ~5x more, as the user noticed.)
+Promotion still by head-to-head (>= 0.55) vs `2v2.pt` (T2g 391M) /
+`3v3.pt` (T3j 508M).
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
