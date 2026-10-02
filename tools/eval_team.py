@@ -34,7 +34,7 @@ def main():
     cand, cin = load_policy(a.candidate, dev)
     opp, oin = load_policy(a.opponent, dev)
 
-    cg = og = truncs = touches = passes = 0
+    cg = og = truncs = touches = passes = mate_bumps = 0
     mate_dist, crowd = [], 0
     steps = 0
     for g in range(a.games):
@@ -56,6 +56,7 @@ def main():
                 ds = [np.linalg.norm(ps[i] - ps[j]) for i in range(len(ps)) for j in range(i + 1, len(ps))]
                 mate_dist.append(min(ds))
                 crowd += sum(np.linalg.norm(x - ball) < 900 for x in ps) >= 2
+                mate_bumps += sum(s.cars[ag].bump_victim_id in mine for ag in mine)
             t = [ag for ag, c in s.cars.items() if c.ball_touches > 0]
             if len(t) == 1:
                 ag = t[0]
@@ -80,7 +81,9 @@ def main():
            "score": round(cg / max(1, cg + og), 4),
            "mean_min_mate_dist": round(float(np.mean(mate_dist)), 1) if mate_dist else None,
            "crowd_frac": round(crowd / max(1, steps), 4),
-           "passes_pg": round(passes / a.games, 3), "touches_pg": round(touches / a.games, 2)}
+           "passes_pg": round(passes / a.games, 3), "touches_pg": round(touches / a.games, 2),
+           "mate_bumps_pg": round(mate_bumps / a.games, 3),
+           "mate_bumps_per_min": round(mate_bumps / max(1, steps) * 15 * 60, 3)}
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         json.dump(res, open(a.out, "w"), indent=2)
