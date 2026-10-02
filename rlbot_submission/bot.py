@@ -4,6 +4,7 @@ from collections import OrderedDict
 import numpy as np
 import torch
 from rlbot.flat import ControllerState, GamePacket, MatchPhase
+from rlbot.interface import SocketRelay
 from rlbot.managers import Bot
 from rlgym_compat import GameState, common_values
 
@@ -11,6 +12,21 @@ from act import LookupTableAction
 from discrete import DiscreteFF
 from obs import DefaultObs
 from rlgym_compat.sim_extra_info import SimExtraInfo
+
+def _read_message(self: SocketRelay) -> bytes:
+    # rlbot's non-blocking drain raises BlockingIOError mid-message and drops the bytes it
+    # already consumed, desyncing the stream ("Invalid offset"). Only the first recv may be
+    # non-blocking; once any byte of a message is read, the rest must be read blocking.
+    header = self.socket.recv(2)
+    if not header:
+        raise EOFError
+    self.socket.setblocking(True)
+    if len(header) == 1:
+        header += self._read_exact(1)
+    return self._read_exact(int.from_bytes(header, "big"))
+
+
+SocketRelay.read_message = _read_message
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # One policy per team size; each was trained on DefaultObs with exactly that
