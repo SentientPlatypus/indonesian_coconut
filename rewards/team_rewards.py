@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 import numpy as np
 from rlgym.api import AgentID, RewardFunction
 from rlgym.rocket_league.api import GameState
+from rlgym.rocket_league.common_values import BOOST_LOCATIONS
 
 
 def _pos(car):
@@ -96,6 +97,93 @@ class PassReward(RewardFunction[AgentID, GameState, float]):
                 if toucher in rewards:
                     rewards[toucher] += self.receiver_share * mult
         self.last = (toucher, team, state.tick_count, ball)
+        return rewards
+
+
+BIG_PADS = np.array([p for p in BOOST_LOCATIONS if p[2] > 71.5], dtype=float)
+
+
+class TeamCoordinationReward(RewardFunction[AgentID, GameState, float]):
+    """Penalties for teammates getting in each other's way (all 0 in 1v1).
+
+    - mate_bump: -1 to BOTH cars on each new teammate contact (bump_victim_id
+      stays set for the contact cooldown, so only the first step counts).
+    - double_commit: per step, -1 to every car committing to the ball
+      (within `commit_dist` and closing at >= `min_closing`) except the
+      teammate with the shortest time-to-ball.
+    - boost_steal: per step, -1 to every car heading for a big pad (within
+      `pad_dist`, closing at >= `min_closing`, boost < `pad_max_boost`)
+      that a teammate reaches sooner."""
+
+    def __init__(self, bump_w: float = 1.0, commit_w: float = 1.0, boost_w: float = 1.0,
+                 commit_dist: float = 1500.0, pad_dist: float = 2000.0,
+                 min_closing: float = 500.0, pad_max_boost: float = 80.0):
+        self.bump_w = bump_w
+        self.commit_w = commit_w
+        self.boost_w = boost_w
+        self.commit_dist = commit_dist
+        self.pad_dist = pad_dist
+        self.min_closing = min_closing
+        self.pad_max_boost = pad_max_boost
+        self.prev_victim = {}
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev_victim = {a: c.bump_victim_id for a, c in initial_state.cars.items()}
+
+    @staticmethod
+    def _eta(pos, vel, target, max_dist, min_closing):
+        diff = target - pos
+        d = float(np.linalg.norm(diff))
+        if d >= max_dist:
+            return None
+        closing = float(np.dot(vel, diff)) / max(d, 1.0)
+        if closing < min_closing:
+            return None
+        return d / closing
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        cars = state.cars
+        live = {a: c for a, c in cars.items() if not c.is_demoed}
+
+        for a, c in cars.items():
+            v = c.bump_victim_id
+            if (v is not None and v != self.prev_victim.get(a) and v in cars
+                    and cars[v].team_num == c.team_num):
+                for x in (a, v):
+                    if x in rewards:
+                        rewards[x] -= self.bump_w
+            self.prev_victim[a] = v
+
+        ball = np.asarray(state.ball.position, dtype=float)
+        pos = {a: _pos(c) for a, c in live.items()}
+        vel = {a: np.asarray(c.physics.linear_velocity, dtype=float) for a, c in live.items()}
+
+        def charge_all_but_first(etas, w):
+            for team in (0, 1):
+                ts = sorted((t, a) for a, t in etas.items() if live[a].team_num == team)
+                for _, a in ts[1:]:
+                    if a in rewards:
+                        rewards[a] -= w
+
+        commit = {}
+        for a in live:
+            t = self._eta(pos[a], vel[a], ball, self.commit_dist, self.min_closing)
+            if t is not None:
+                commit[a] = t
+        charge_all_but_first(commit, self.commit_w)
+
+        for pad in BIG_PADS:
+            going = {}
+            for a, c in live.items():
+                if c.boost_amount >= self.pad_max_boost:
+                    continue
+                t = self._eta(pos[a], vel[a], pad, self.pad_dist, self.min_closing)
+                if t is not None:
+                    going[a] = t
+            charge_all_but_first(going, self.boost_w)
         return rewards
 
 

@@ -404,6 +404,18 @@ class CurriculumStateMutator(StateMutator[GameState]):
         of the ball — between the ball and the net the attacker is attacking — at a
         challenging gap, grounded, facing back toward the oncoming attacker. `attack`
         is the ATTACKER's attack dir; the defended net is at attack*BACK_NET_Y."""
+        if self._attack_dir(car.team_num) == attack:
+            # attacker's teammate (2v2 / 3v3): support behind the play, not a defender
+            sup_y = float(np.clip(by - attack * random.uniform(1500, 3000),
+                                  -BACK_NET_Y + 600.0, BACK_NET_Y - 600.0))
+            car.physics.position = _f32(float(np.clip(bx + random.uniform(-1800, 1800), -3500, 3500)),
+                                        sup_y, 17.0)
+            car.physics.linear_velocity = _f32(0.0, attack * random.uniform(0.0, 700.0), 0.0)
+            car.physics.angular_velocity = _f32(0, 0, 0)
+            car.physics.euler_angles = _f32(0.0, attack * np.pi / 2.0, 0.0)
+            car.boost_amount = random.uniform(30.0, 70.0)
+            car.on_ground = True
+            return
         # goal-side of the ball, ahead toward the defended net but in front of it
         def_y = by + attack * random.uniform(1300, 3300)
         def_y = float(np.clip(def_y, -BACK_NET_Y + 400.0, BACK_NET_Y - 400.0))
@@ -856,7 +868,34 @@ class CurriculumStateMutator(StateMutator[GameState]):
         else:
             self._awkward_recovery_setup(state)
 
+    @staticmethod
+    def _separate_cars(state: GameState, min_gap: float = 300.0) -> None:
+        """Parked cars share a spawn line, so with 2+ per team they can overlap;
+        shift grounded cars sideways until every pair is >= `min_gap` apart."""
+        cars = list(state.cars.values())
+        for _ in range(8):
+            moved = False
+            for i, a in enumerate(cars):
+                for b in cars[i + 1:]:
+                    pa = np.asarray(a.physics.position, dtype=float)
+                    pb = np.asarray(b.physics.position, dtype=float)
+                    if pb[2] > 50.0 or np.linalg.norm(pa - pb) >= min_gap:
+                        continue
+                    side = 1.0 if pb[0] <= pa[0] else -1.0
+                    nx = pb[0] - side * min_gap * 1.2
+                    if abs(nx) > 3600.0:
+                        nx = pb[0] + side * min_gap * 1.2
+                    b.physics.position = _f32(nx, pb[1], pb[2])
+                    moved = True
+            if not moved:
+                return
+
     def apply(self, state: GameState, shared_info: Dict[str, Any]) -> None:
+        self._apply_setup(state, shared_info)
+        if len(state.cars) > 2:
+            self._separate_cars(state)
+
+    def _apply_setup(self, state: GameState, shared_info: Dict[str, Any]) -> None:
         r = random.random()
         acc = 0.0
         for weight, fn in (

@@ -59,7 +59,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         s = float(zs.get(key, 0.0))
         return ZeroSumReward(fn, s) if s > 0 else fn
 
-    from rewards.team_rewards import TeamSpacingReward, PassReward, TeamSpiritReward
+    from rewards.team_rewards import TeamSpacingReward, PassReward, TeamSpiritReward, TeamCoordinationReward
     combined = CombinedReward(
         (GoalReward(), w["goal"]),
         # v13 (user on V13NG65 vs Nexto): good air dribbles, finishes hit the
@@ -254,6 +254,12 @@ def _reward_fn(cfg: Dict[str, Any]):
                            closest_exempt=cfg.get("team_crowd_closest_exempt", False)),
          w.get("team_spacing", 0.0)),
         (PassReward(), w.get("pass", 0.0)),
+        (TeamCoordinationReward(bump_w=cfg.get("team_mate_bump", 1.0),
+                                commit_w=cfg.get("team_double_commit", 1.0),
+                                boost_w=cfg.get("team_boost_steal", 1.0),
+                                commit_dist=cfg.get("team_commit_dist", 1500.0),
+                                pad_dist=cfg.get("team_pad_dist", 2000.0)),
+         w.get("team_coord", 0.0)),
     )
     tau = float(cfg.get("team_spirit", 0.0))
     return TeamSpiritReward(combined, tau) if tau > 0 else combined

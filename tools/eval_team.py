@@ -27,6 +27,7 @@ def main():
     from loop_config import load_config
     from v4_env import build_env
     from rewards.team_rewards import _pos
+    from rewards.freestyleMechs import DoubleTapTracker, wheels_on_ball
 
     cfg = load_config(os.environ.get("V4_LOOP_CONFIG"))
     env = build_env(cfg, for_training=False)
@@ -35,12 +36,16 @@ def main():
     opp, oin = load_policy(a.opponent, dev)
 
     cg = og = truncs = touches = passes = mate_bumps = 0
+    resets = dtaps = 0
     mate_dist, crowd = [], 0
     steps = 0
     for g in range(a.games):
         obs = env.reset()
         cand_team = BLUE_TEAM if g % 2 == 0 else ORANGE_TEAM
         last = None
+        dt_tracker = DoubleTapTracker()
+        prev_flip = {ag: c.has_flip for ag, c in env.state.cars.items()}
+        prev_victim = {ag: c.bump_victim_id for ag, c in env.state.cars.items()}
         while True:
             acts = {}
             for ag, o in obs.items():
@@ -56,7 +61,19 @@ def main():
                 ds = [np.linalg.norm(ps[i] - ps[j]) for i in range(len(ps)) for j in range(i + 1, len(ps))]
                 mate_dist.append(min(ds))
                 crowd += sum(np.linalg.norm(x - ball) < 900 for x in ps) >= 2
-                mate_bumps += sum(s.cars[ag].bump_victim_id in mine for ag in mine)
+            for ag in mine:
+                car = s.cars[ag]
+                v = car.bump_victim_id
+                if v in mine and v != prev_victim.get(ag):
+                    mate_bumps += 1
+                if car.has_flip and not prev_flip.get(ag) and wheels_on_ball(
+                        car, s.ball.position, require_ground=False):
+                    resets += 1
+            prev_victim = {ag: c.bump_victim_id for ag, c in s.cars.items()}
+            prev_flip = {ag: c.has_flip for ag, c in s.cars.items()}
+            for ag, kind, _ in dt_tracker.update(s):
+                if kind == "second" and ag in mine:
+                    dtaps += 1
             t = [ag for ag, c in s.cars.items() if c.ball_touches > 0]
             if len(t) == 1:
                 ag = t[0]
@@ -83,7 +100,8 @@ def main():
            "crowd_frac": round(crowd / max(1, steps), 4),
            "passes_pg": round(passes / a.games, 3), "touches_pg": round(touches / a.games, 2),
            "mate_bumps_pg": round(mate_bumps / a.games, 3),
-           "mate_bumps_per_min": round(mate_bumps / max(1, steps) * 15 * 60, 3)}
+           "mate_bumps_per_min": round(mate_bumps / max(1, steps) * 15 * 60, 3),
+           "resets_pg": round(resets / a.games, 4), "dtaps_pg": round(dtaps / a.games, 4)}
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         json.dump(res, open(a.out, "w"), indent=2)
