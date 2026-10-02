@@ -458,6 +458,9 @@ Check 18 (head-to-head only, 2026-10-02 16:00Z): T2g 568M vs T2g 391M
 114-86, confirmation 101-99: **215-185 over 400 (0.538)**, under the bar.
 T3j 649M vs T3j 508M **101-99 (0.505)**. Nothing promoted.
 
+User (2026-10-02 16:20Z): keep training team play until told to stop.
+T2g / T3j continue unchanged; checks every ~40M steps.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
