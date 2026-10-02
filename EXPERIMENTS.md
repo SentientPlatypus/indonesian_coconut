@@ -399,6 +399,16 @@ Head-to-head vs the submission: T2f 266M vs T2f 227M **103-97 (0.515)**,
 T3i 336M vs T3i 295M **102-98 (0.51)**: even, nothing promoted. 2v2
 passes are slipping (0.59 -> 0.395/game). Both keep training.
 
+| 12 | 2v2 (T2f) | 306M | 0.885 | 0.074 | 0.605 | 3119 |
+| 12 | 3v3 (T3i) | 379M | 0.89 | 0.096 | 1.13 | 1812 |
+
+Head-to-head vs the submission: T2f 306M vs T2f 227M **98-102 (0.49)**;
+T3i 379M vs T3i 295M 113-87, confirmed (106-94): **219-181 over 400
+(0.548)**, just under the bar. Nothing promoted; both modes flat at half
+LR. **T2g_lr125 / T3j_lr125:** policy_lr 2.5e-5 -> 1.25e-5, resumed from
+T2f 312M / T3i 385M. The first launch (2026-10-01 16:03) died at startup
+unnoticed; relaunched detached 2026-10-02 02:59Z.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
