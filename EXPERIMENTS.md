@@ -580,6 +580,17 @@ to `3v3.pt`** (zip rebuilt). 2v2 even with T2i 919M. FR probe: 2v2 0 / 7,
 Check 27 (vs `2v2.pt` = T2i 919M, `3v3.pt` = T3k 1064M): nothing
 promoted. FR probe: 2v2 0 / 14, 3v3 0 / 12 — no gain.
 
+User (2026-10-03 15:30Z) checked in; cumulative gain since the
+coordination change, 200 games: 2v2 T2i 919M vs T2g 391M **114-86
+(0.57)**, 3v3 T3k 1064M vs T3j 508M **128-72 (0.64)**. "Keep improving."
+
+| 28 | 2v2 (T2i) | 1047M | 98-102 (0.49) | 0.67 | 0.061 | 0.68 | — | 0.10 |
+| 28 | 3v3 (T3k) | 1156M | 212-188 (0.53) | 1.24 | 0.071 | 1.07 | — | 0.07 |
+
+Check 28: nothing promoted. 2v2 flat three checks since T2i 919M (0.505,
+0.51, 0.49): **T2j_coord_lr0625** = T2i 1051M resumed at policy_lr
+6.25e-6. 3v3 keeps T3k. FR probe: 2v2 1 / 8, 3v3 0 / 21 — no gain.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
