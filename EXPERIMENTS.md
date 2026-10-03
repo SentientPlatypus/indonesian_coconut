@@ -574,6 +574,12 @@ Check 26: T3k 1064M vs T3k 876M 110-90, confirmed (115-85), **promoted
 to `3v3.pt`** (zip rebuilt). 2v2 even with T2i 919M. FR probe: 2v2 0 / 7,
 3v3 0 / 11 — no gain.
 
+| 27 | 2v2 (T2i) | 1004M | 102-98 (0.51) | 0.71 | 0.058 | 0.76 | — | 0.05 |
+| 27 | 3v3 (T3k) | 1111M | 92-108 (0.46) | 1.44 | 0.076 | 1.04 | — | 0.11 |
+
+Check 27 (vs `2v2.pt` = T2i 919M, `3v3.pt` = T3k 1064M): nothing
+promoted. FR probe: 2v2 0 / 14, 3v3 0 / 12 — no gain.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
