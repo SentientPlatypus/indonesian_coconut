@@ -510,6 +510,29 @@ been noise. Resets and double taps in 200 kickoff games are only 0-30
 events, too few to read; flip-reset progress needs a probe on reset spawns.
 Nothing promoted.
 
+| 21 | 2v2 (T2h) | 742M | **222-178 (0.555)** | 0.83 | 0.058 | 0.65 | 0.0 | 0.105 |
+| 21 | 3v3 (T3k) | 832M | 193-207 (0.483) | 1.62 | 0.064 | 0.79 | 0.005 | 0.075 |
+
+Check 21: T2h 742M vs T2g 391M 109-91, confirmed (113-87): **promoted to
+`2v2.pt`** (zip rebuilt; includes the user's socket-read fix). T3k 832M
+85-115 then 108-92: 0.483 over 400, not promoted.
+
+New flip-reset probe `tools/eval_team_fr.py` (flip-reset spawns only, all
+cars driven by the candidate; attacker resets / then used the flip, 100
+episodes each):
+
+| policy | normal FR spawns | assisted spawns |
+|---|---:|---:|
+| 2v2 T2h 742M | 0 / 0 | 12 / 5 |
+| 2v2 submitted (T2g 391M) | 0 / 0 | 17 / 6 |
+| 3v3 T3k 832M | 0 / 0 | 13 / 10 |
+| 3v3 submitted (T3j 508M) | 1 / 1 | 16 / 5 |
+
+Same picture as E7b in 1v1: after ~120M steps with the fixed reward, the
+policies get no more resets than before (a car with no input resets in
+~59/100 assisted spawns), though T3k uses the reset it gets more often
+(10/13). The fixed reward alone is not teaching the mechanic.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
