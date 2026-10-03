@@ -26,7 +26,7 @@ def main():
     from rlgym.rocket_league.common_values import BLUE_TEAM, ORANGE_TEAM
     from loop_config import load_config
     from v4_env import build_env
-    from rewards.team_rewards import _pos
+    from rewards.team_rewards import _pos, team_attacking, team_aerial_play
     from rewards.freestyleMechs import DoubleTapTracker, wheels_on_ball
 
     cfg = load_config(os.environ.get("V4_LOOP_CONFIG"))
@@ -38,6 +38,7 @@ def main():
     cg = og = truncs = touches = passes = mate_bumps = 0
     resets = dtaps = 0
     mate_dist, crowd = [], 0
+    att_steps = att_crowd = aer_steps = aer_crowd = 0
     steps = 0
     for g in range(a.games):
         obs = env.reset()
@@ -61,6 +62,13 @@ def main():
                 ds = [np.linalg.norm(ps[i] - ps[j]) for i in range(len(ps)) for j in range(i + 1, len(ps))]
                 mate_dist.append(min(ds))
                 crowd += sum(np.linalg.norm(x - ball) < 900 for x in ps) >= 2
+                second = sorted(np.linalg.norm(x - ball) for x in ps)[1]
+                if team_attacking(s, cand_team):
+                    att_steps += 1
+                    att_crowd += second < 1600
+                if team_aerial_play(s, cand_team):
+                    aer_steps += 1
+                    aer_crowd += second < 1600
             for ag in mine:
                 car = s.cars[ag]
                 v = car.bump_victim_id
@@ -98,6 +106,8 @@ def main():
            "score": round(cg / max(1, cg + og), 4),
            "mean_min_mate_dist": round(float(np.mean(mate_dist)), 1) if mate_dist else None,
            "crowd_frac": round(crowd / max(1, steps), 4),
+           "off_crowd_frac": round(att_crowd / max(1, att_steps), 4),
+           "aerial_crowd_frac": round(aer_crowd / max(1, aer_steps), 4),
            "passes_pg": round(passes / a.games, 3), "touches_pg": round(touches / a.games, 2),
            "mate_bumps_pg": round(mate_bumps / a.games, 3),
            "mate_bumps_per_min": round(mate_bumps / max(1, steps) * 15 * 60, 3),

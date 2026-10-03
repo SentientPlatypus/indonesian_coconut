@@ -59,7 +59,11 @@ def _reward_fn(cfg: Dict[str, Any]):
         s = float(zs.get(key, 0.0))
         return ZeroSumReward(fn, s) if s > 0 else fn
 
-    from rewards.team_rewards import TeamSpacingReward, PassReward, TeamSpiritReward, TeamCoordinationReward
+    from rewards.team_rewards import (TeamSpacingReward, PassReward, TeamSpiritReward,
+                                      TeamCoordinationReward, OffenseSupportReward, FirstManOnly)
+
+    def _fm(fn):
+        return FirstManOnly(fn) if cfg.get("team_aerial_first_man_only", False) else fn
     combined = CombinedReward(
         (GoalReward(), w["goal"]),
         # v13 (user on V13NG65 vs Nexto): good air dribbles, finishes hit the
@@ -82,7 +86,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         # V3 trained with the diluted (~zero) value, so no critic shock — and
         # this is THE signal that must offset the boost-spend penalties
         # (BoostChange/BoostKeep/Energy) when committing to a popped ball.
-        (AerialBoostTowardBallReward(per_second_scale=0.96), w["aerial_boost"]),
+        (_fm(AerialBoostTowardBallReward(per_second_scale=0.96)), w["aerial_boost"]),
         (AerialDistanceReward(), w["aerial_distance"]),
         (InAirReward(), w["in_air"]),
         (AirdribbleReward(
@@ -229,7 +233,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         (PressureFlickToGoalReward(), w.get("pressure_flick", 0.0)),
         # v9.2 (user): Nexto beats us by jumping/aerialing high balls while we
         # wait underneath. Climb/close on elevated balls (positive-only).
-        (ContestHighBallReward(), w.get("high_ball", 0.0)),
+        (_fm(ContestHighBallReward()), w.get("high_ball", 0.0)),
         # v9.5: aerial start only when takeoff speed matches remaining
         # distance to their net; under pressure stay on the flick/shot path.
         (PossessionRangeCarryReward(
@@ -260,6 +264,11 @@ def _reward_fn(cfg: Dict[str, Any]):
                                 commit_dist=cfg.get("team_commit_dist", 1500.0),
                                 pad_dist=cfg.get("team_pad_dist", 2000.0)),
          w.get("team_coord", 0.0)),
+        (OffenseSupportReward(bands=cfg.get("offense_support_bands",
+                                            [[1600.0, 3500.0], [2800.0, 5500.0]]),
+                              band_bonus=cfg.get("offense_support_bonus", 0.3),
+                              ahead_penalty=cfg.get("offense_ahead_penalty", 0.3)),
+         w.get("offense_support", 0.0)),
     )
     tau = float(cfg.get("team_spirit", 0.0))
     return TeamSpiritReward(combined, tau) if tau > 0 else combined

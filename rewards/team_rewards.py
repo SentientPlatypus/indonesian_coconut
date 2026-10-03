@@ -187,6 +187,115 @@ class TeamCoordinationReward(RewardFunction[AgentID, GameState, float]):
         return rewards
 
 
+def team_attacking(state: GameState, team: int, attack_half_y: float = 1000.0) -> bool:
+    """Our nearest car beats their nearest car to the ball, or the ball is
+    deep in the opponent half."""
+    ball = np.asarray(state.ball.position, dtype=float)
+    ours, theirs = [np.inf], [np.inf]
+    for c in state.cars.values():
+        if c.is_demoed:
+            continue
+        d = float(np.linalg.norm(_pos(c) - ball))
+        (ours if c.team_num == team else theirs).append(d)
+    attack = 1.0 if team == 0 else -1.0
+    return min(ours) < min(theirs) or attack * float(ball[1]) > attack_half_y
+
+
+def support_ranks(state: GameState, team: int) -> Dict[AgentID, int]:
+    """0 = teammate closest to the ball, 1 = next, ..."""
+    ball = np.asarray(state.ball.position, dtype=float)
+    ds = sorted((float(np.linalg.norm(_pos(c) - ball)), a) for a, c in state.cars.items()
+                if c.team_num == team and not c.is_demoed)
+    return {a: i for i, (_, a) in enumerate(ds)}
+
+
+def team_aerial_play(state: GameState, team: int, ball_z_min: float = 400.0,
+                     reach: float = 1800.0) -> bool:
+    """Ball is up and a teammate is airborne going for it."""
+    ball = np.asarray(state.ball.position, dtype=float)
+    if ball[2] < ball_z_min:
+        return False
+    return any(c.team_num == team and not c.is_demoed and not c.on_ground
+               and np.linalg.norm(_pos(c) - ball) < reach for c in state.cars.values())
+
+
+class FirstManOnly(RewardFunction[AgentID, GameState, float]):
+    """While the ball is above `ball_z_min`, only the teammate closest to the
+    ball keeps positive reward from `reward_fn`; the rest keep penalties only.
+    No-op in 1v1."""
+
+    def __init__(self, reward_fn: RewardFunction, ball_z_min: float = 300.0):
+        self.reward_fn = reward_fn
+        self.ball_z_min = ball_z_min
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.reward_fn.reset(agents, initial_state, shared_info)
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        raw = self.reward_fn.get_rewards(agents, state, is_terminated, is_truncated, shared_info)
+        if state.ball.position[2] < self.ball_z_min:
+            return raw
+        out = dict(raw)
+        for team in (0, 1):
+            for a, k in support_ranks(state, team).items():
+                if k > 0 and a in out:
+                    out[a] = min(float(out[a]), 0.0)
+        return out
+
+
+class OffenseSupportReward(RewardFunction[AgentID, GameState, float]):
+    """Anti-crowding on offense and aerial plays (all 0 in 1v1).
+
+    While the team is attacking (or a teammate is up on an aerial), the first
+    man (closest to ball) is free.
+    Rank-k support (k >= 1) should sit `bands[k-1] = (lo, hi)` from the ball
+    and not ahead of it:
+    - inside `lo`: -(1 - d / lo)   (crowding the attacker)
+    - in [lo, hi] and goal-side of the ball: +`band_bonus`
+    - ahead of the ball by > `ahead_margin`: -`ahead_penalty`"""
+
+    def __init__(self, bands=((1600.0, 3500.0), (2800.0, 5500.0)),
+                 band_bonus: float = 0.3, ahead_margin: float = 300.0,
+                 ahead_penalty: float = 0.3, attack_half_y: float = 1000.0):
+        self.bands = [tuple(b) for b in bands]
+        self.band_bonus = band_bonus
+        self.ahead_margin = ahead_margin
+        self.ahead_penalty = ahead_penalty
+        self.attack_half_y = attack_half_y
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        ball = np.asarray(state.ball.position, dtype=float)
+        for team in (0, 1):
+            if not (team_attacking(state, team, self.attack_half_y)
+                    or team_aerial_play(state, team)):
+                continue
+            attack = 1.0 if team == 0 else -1.0
+            for a, k in support_ranks(state, team).items():
+                if k == 0 or a not in rewards:
+                    continue
+                lo, hi = self.bands[min(k, len(self.bands)) - 1]
+                p = _pos(state.cars[a])
+                d = float(np.linalg.norm(p - ball))
+                ahead = attack * float(p[1] - ball[1])
+                r = 0.0
+                if d < lo:
+                    r -= 1.0 - d / lo
+                elif d <= hi and ahead < 0.0:
+                    r += self.band_bonus
+                if ahead > self.ahead_margin:
+                    r -= self.ahead_penalty
+                rewards[a] = r
+        return rewards
+
+
 class TeamSpiritReward(RewardFunction[AgentID, GameState, float]):
     """r_i' = (1 - tau) * r_i + tau * mean(r over i's team)."""
 
