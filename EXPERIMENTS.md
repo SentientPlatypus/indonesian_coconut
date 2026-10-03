@@ -558,6 +558,15 @@ Check 24: nothing promoted. 2v2 has not beaten T2h 742M in three checks
 unchanged. 3v3 keeps T3k (bumps 1.70 -> ~1.1/min). FR probe: 2v2 2 / 8,
 3v3 1 / 16 — no gain.
 
+| 25 | 2v2 (T2i, quarter LR) | 919M | **222-178 (0.555)** | **0.66** | **0.054** | 0.66 | — | 0.065 |
+| 25 | 3v3 (T3k) | 1019M | 205-195 (0.513) | 1.38 | 0.064 | 0.95 | — | 0.085 |
+
+Check 25: quarter LR broke the 2v2 plateau at once: T2i 919M vs T2h
+742M 113-87, confirmed (109-91), **promoted to `2v2.pt`** (zip rebuilt).
+First 2v2 policy with clearly fewer teammate bumps (0.82 -> 0.66/min,
+-20%) and less crowding (8.0% -> 5.4%). 3v3 0.513, not promoted. FR
+probe: 2v2 1 / 10, 3v3 0 / 18 (13 used) — no gain in resets.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
