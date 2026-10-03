@@ -591,6 +591,14 @@ Check 28: nothing promoted. 2v2 flat three checks since T2i 919M (0.505,
 0.51, 0.49): **T2j_coord_lr0625** = T2i 1051M resumed at policy_lr
 6.25e-6. 3v3 keeps T3k. FR probe: 2v2 1 / 8, 3v3 0 / 21 — no gain.
 
+| 29 | 2v2 (T2j, LR 6.25e-6) | 1092M | 104-96 (0.52) | 0.73 | 0.067 | 0.56 | — | 0.08 |
+| 29 | 3v3 (T3k) | 1205M | 208-192 (0.52) | 1.28 | 0.069 | 0.95 | — | 0.11 |
+
+Check 29: nothing promoted. 3v3 flat three checks since T3k 1064M (0.46,
+0.53, 0.52): **T3l_coord_lr125** = T3k 1210M resumed at policy_lr
+1.25e-5. 2v2 T2j continues (one check in). FR probe: 2v2 1 / 12, 3v3
+1 / 15 — no gain.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
