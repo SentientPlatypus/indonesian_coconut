@@ -542,6 +542,13 @@ Check 22 (h2h vs `2v2.pt` = T2h 742M, `3v3.pt` = T3j 508M; 400 games each):
 bumps than the old 3v3 (1.36 vs 1.70/min). FR probe (normal / assisted
 spawns, resets): 2v2 0 / 11, 3v3 0 / 18 — still no gain.
 
+| 23 | 2v2 (T2h) | 829M | 209-191 (0.523) | 0.84 | 0.065 | 0.63 | — | 0.065 |
+| 23 | 3v3 (T3k) | 923M | 100-100 (0.50) | **1.16** | 0.069 | 0.96 | — | 0.105 |
+
+Check 23 (vs `2v2.pt` = T2h 742M, `3v3.pt` = T3k 876M): nothing promoted.
+3v3 teammate bumps keep falling (1.70 baseline -> 1.36 -> 1.16/min, -32%).
+FR probe (normal / assisted resets): 2v2 0 / 13, 3v3 1 / 12 — no gain.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
