@@ -533,6 +533,15 @@ policies get no more resets than before (a car with no input resets in
 ~59/100 assisted spawns), though T3k uses the reset it gets more often
 (10/13). The fixed reward alone is not teaching the mechanic.
 
+| 22 | 2v2 (T2h) | 785M | 218-182 (0.545) | 0.82 | 0.069 | 0.80 | — | 0.125 |
+| 22 | 3v3 (T3k) | 876M | **220-180 (0.55)** | **1.36** | 0.075 | 0.94 | — | 0.078 |
+
+Check 22 (h2h vs `2v2.pt` = T2h 742M, `3v3.pt` = T3j 508M; 400 games each):
+2v2 107-93 then 111-89, 0.545, not promoted. 3v3 114-86 then 106-94,
+**0.55, T3k 876M promoted to `3v3.pt`** (zip rebuilt); 20% fewer teammate
+bumps than the old 3v3 (1.36 vs 1.70/min). FR probe (normal / assisted
+spawns, resets): 2v2 0 / 11, 3v3 0 / 18 — still no gain.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
