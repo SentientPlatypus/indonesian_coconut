@@ -567,6 +567,13 @@ First 2v2 policy with clearly fewer teammate bumps (0.82 -> 0.66/min,
 -20%) and less crowding (8.0% -> 5.4%). 3v3 0.513, not promoted. FR
 probe: 2v2 1 / 10, 3v3 0 / 18 (13 used) — no gain in resets.
 
+| 26 | 2v2 (T2i) | 961M | 101-99 (0.505) | 0.60 | 0.063 | 0.72 | — | 0.06 |
+| 26 | 3v3 (T3k) | 1064M | **225-175 (0.563)** | 1.21 | 0.071 | 1.08 | — | 0.095 |
+
+Check 26: T3k 1064M vs T3k 876M 110-90, confirmed (115-85), **promoted
+to `3v3.pt`** (zip rebuilt). 2v2 even with T2i 919M. FR probe: 2v2 0 / 7,
+3v3 0 / 11 — no gain.
+
 Submission bot fixes the same day (the user compared it with the
 `indonesiancoco` bot that beat Nexto 42-11): it sampled actions
 (`deterministic=False`) and bundled an old `rlgym_compat` whose boost
