@@ -296,6 +296,63 @@ class OffenseSupportReward(RewardFunction[AgentID, GameState, float]):
         return rewards
 
 
+class TeammateProximityReward(RewardFunction[AgentID, GameState, float]):
+    """Penalties between teammates (all 0 in 1v1).
+
+    - linger: once a pair has stayed within `close_dist` for more than
+      `grace_s` without a break, -1 per step to both cars until they separate.
+    - contact: -`contact_w` to both cars on each new contact (centres within
+      `contact_dist`; the pair must separate past it before it counts again)."""
+
+    def __init__(self, close_dist: float = 1200.0, grace_s: float = 1.5,
+                 contact_dist: float = 200.0, contact_w: float = 1.0):
+        self.close_dist = close_dist
+        self.grace_ticks = int(grace_s * 120)
+        self.contact_dist = contact_dist
+        self.contact_w = contact_w
+        self.close_since = {}
+        self.touching = set()
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.close_since = {}
+        self.touching = set()
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        cars = state.cars
+        ids = sorted(cars)
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                ca, cb = cars[a], cars[b]
+                if ca.team_num != cb.team_num:
+                    continue
+                pair = (a, b)
+                if ca.is_demoed or cb.is_demoed:
+                    self.close_since.pop(pair, None)
+                    self.touching.discard(pair)
+                    continue
+                d = float(np.linalg.norm(_pos(ca) - _pos(cb)))
+                r = 0.0
+                if d < self.close_dist:
+                    start = self.close_since.setdefault(pair, state.tick_count)
+                    if state.tick_count - start > self.grace_ticks:
+                        r -= 1.0
+                else:
+                    self.close_since.pop(pair, None)
+                if d < self.contact_dist:
+                    if pair not in self.touching:
+                        self.touching.add(pair)
+                        r -= self.contact_w
+                else:
+                    self.touching.discard(pair)
+                for x in pair:
+                    if x in rewards:
+                        rewards[x] += r
+        return rewards
+
+
 class TeamSpiritReward(RewardFunction[AgentID, GameState, float]):
     """r_i' = (1 - tau) * r_i + tau * mean(r over i's team)."""
 

@@ -60,7 +60,8 @@ def _reward_fn(cfg: Dict[str, Any]):
         return ZeroSumReward(fn, s) if s > 0 else fn
 
     from rewards.team_rewards import (TeamSpacingReward, PassReward, TeamSpiritReward,
-                                      TeamCoordinationReward, OffenseSupportReward, FirstManOnly)
+                                      TeamCoordinationReward, OffenseSupportReward, FirstManOnly,
+                                      TeammateProximityReward)
 
     def _fm(fn):
         return FirstManOnly(fn) if cfg.get("team_aerial_first_man_only", False) else fn
@@ -269,6 +270,11 @@ def _reward_fn(cfg: Dict[str, Any]):
                               band_bonus=cfg.get("offense_support_bonus", 0.3),
                               ahead_penalty=cfg.get("offense_ahead_penalty", 0.3)),
          w.get("offense_support", 0.0)),
+        (TeammateProximityReward(close_dist=cfg.get("team_linger_dist", 1200.0),
+                                 grace_s=cfg.get("team_linger_grace_s", 1.5),
+                                 contact_dist=cfg.get("team_contact_dist", 200.0),
+                                 contact_w=cfg.get("team_contact_w", 1.0)),
+         w.get("team_proximity", 0.0)),
     )
     tau = float(cfg.get("team_spirit", 0.0))
     return TeamSpiritReward(combined, tau) if tau > 0 else combined
