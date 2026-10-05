@@ -273,7 +273,9 @@ def _reward_fn(cfg: Dict[str, Any]):
         (TeammateProximityReward(close_dist=cfg.get("team_linger_dist", 1200.0),
                                  grace_s=cfg.get("team_linger_grace_s", 1.5),
                                  contact_dist=cfg.get("team_contact_dist", 200.0),
-                                 contact_w=cfg.get("team_contact_w", 1.0)),
+                                 contact_w=cfg.get("team_contact_w", 1.0),
+                                 approach_dist=cfg.get("team_approach_dist", 800.0),
+                                 approach_w=cfg.get("team_approach_w", 0.0)),
          w.get("team_proximity", 0.0)),
     )
     tau = float(cfg.get("team_spirit", 0.0))

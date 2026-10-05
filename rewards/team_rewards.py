@@ -302,14 +302,19 @@ class TeammateProximityReward(RewardFunction[AgentID, GameState, float]):
     - linger: once a pair has stayed within `close_dist` for more than
       `grace_s` without a break, -1 per step to both cars until they separate.
     - contact: -`contact_w` to both cars on each new contact (centres within
-      `contact_dist`; the pair must separate past it before it counts again)."""
+      `contact_dist`; the pair must separate past it before it counts again).
+    - approach: per step within `approach_dist` while closing on each other,
+      -`approach_w` * (closing / 2300) * (1 - d / approach_dist) to both."""
 
     def __init__(self, close_dist: float = 1200.0, grace_s: float = 1.5,
-                 contact_dist: float = 200.0, contact_w: float = 1.0):
+                 contact_dist: float = 200.0, contact_w: float = 1.0,
+                 approach_dist: float = 800.0, approach_w: float = 0.0):
         self.close_dist = close_dist
         self.grace_ticks = int(grace_s * 120)
         self.contact_dist = contact_dist
         self.contact_w = contact_w
+        self.approach_dist = approach_dist
+        self.approach_w = approach_w
         self.close_since = {}
         self.touching = set()
 
@@ -333,8 +338,15 @@ class TeammateProximityReward(RewardFunction[AgentID, GameState, float]):
                     self.close_since.pop(pair, None)
                     self.touching.discard(pair)
                     continue
-                d = float(np.linalg.norm(_pos(ca) - _pos(cb)))
+                diff = _pos(cb) - _pos(ca)
+                d = float(np.linalg.norm(diff))
                 r = 0.0
+                if self.approach_w > 0.0 and d < self.approach_dist:
+                    rel_v = (np.asarray(ca.physics.linear_velocity, dtype=float)
+                             - np.asarray(cb.physics.linear_velocity, dtype=float))
+                    closing = float(np.dot(rel_v, diff)) / max(d, 1.0)
+                    if closing > 0.0:
+                        r -= self.approach_w * min(closing / 2300.0, 1.0) * (1.0 - d / self.approach_dist)
                 if d < self.close_dist:
                     start = self.close_since.setdefault(pair, state.tick_count)
                     if state.tick_count - start > self.grace_ticks:
