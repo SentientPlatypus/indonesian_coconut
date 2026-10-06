@@ -61,7 +61,8 @@ def _reward_fn(cfg: Dict[str, Any]):
 
     from rewards.team_rewards import (TeamSpacingReward, PassReward, TeamSpiritReward,
                                       TeamCoordinationReward, OffenseSupportReward, FirstManOnly,
-                                      TeammateProximityReward, RetreatBumpReward)
+                                      TeammateProximityReward, RetreatBumpReward,
+                                      LeaveItToMateReward)
 
     def _fm(fn):
         return FirstManOnly(fn) if cfg.get("team_aerial_first_man_only", False) else fn
@@ -280,6 +281,9 @@ def _reward_fn(cfg: Dict[str, Any]):
         (RetreatBumpReward(min_retreat_speed=cfg.get("retreat_bump_min_speed", 600.0),
                            demo_w=cfg.get("retreat_bump_demo_w", 2.0)),
          w.get("retreat_bump", 0.0)),
+        (LeaveItToMateReward(receive_dist=cfg.get("leave_mate_receive_dist", 600.0),
+                             chase_dist=cfg.get("leave_mate_chase_dist", 3000.0)),
+         w.get("leave_to_mate", 0.0)),
     )
     tau = float(cfg.get("team_spirit", 0.0))
     return TeamSpiritReward(combined, tau) if tau > 0 else combined

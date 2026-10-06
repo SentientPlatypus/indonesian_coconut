@@ -26,7 +26,7 @@ def main():
     from rlgym.rocket_league.common_values import BLUE_TEAM, ORANGE_TEAM
     from loop_config import load_config
     from v4_env import build_env
-    from rewards.team_rewards import _pos, team_attacking, team_aerial_play
+    from rewards.team_rewards import _pos, team_attacking, team_aerial_play, LeaveItToMateReward
     from rewards.freestyleMechs import DoubleTapTracker, wheels_on_ball
 
     cfg = load_config(os.environ.get("V4_LOOP_CONFIG"))
@@ -38,7 +38,8 @@ def main():
     cg = og = truncs = touches = passes = mate_bumps = 0
     resets = dtaps = 0
     mate_dist, crowd = [], 0
-    att_steps = att_crowd = aer_steps = aer_crowd = mate_close = linger = contacts = retreat_bumps = 0
+    att_steps = att_crowd = aer_steps = aer_crowd = mate_close = linger = contacts = retreat_bumps = mate_chase = 0
+    leave_rf = LeaveItToMateReward()
     steps = 0
     for g in range(a.games):
         obs = env.reset()
@@ -80,6 +81,8 @@ def main():
                         else:
                             touching.discard(pair)
                 linger += lingering
+                steal = leave_rf.get_rewards(mine, s, {}, {}, {})
+                mate_chase += any(steal[ag] < 0 for ag in mine)
                 crowd += sum(np.linalg.norm(x - ball) < 900 for x in ps) >= 2
                 second = sorted(np.linalg.norm(x - ball) for x in ps)[1]
                 if team_attacking(s, cand_team):
@@ -133,6 +136,7 @@ def main():
            "linger_frac": round(linger / max(1, len(mate_dist)), 4),
            "mate_contacts_pg": round(contacts / a.games, 3),
            "retreat_bumps_pg": round(retreat_bumps / a.games, 3),
+           "mate_chase_frac": round(mate_chase / max(1, len(mate_dist)), 4),
            "off_crowd_frac": round(att_crowd / max(1, att_steps), 4),
            "aerial_crowd_frac": round(aer_crowd / max(1, aer_steps), 4),
            "passes_pg": round(passes / a.games, 3), "touches_pg": round(touches / a.games, 2),

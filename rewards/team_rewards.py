@@ -365,6 +365,58 @@ class TeammateProximityReward(RewardFunction[AgentID, GameState, float]):
         return rewards
 
 
+class LeaveItToMateReward(RewardFunction[AgentID, GameState, float]):
+    """Don't go for a ball that is heading to a teammate (all 0 in 1v1).
+
+    The ball path over the next `horizon_s` (ballistic, floor-clamped) is
+    sampled; the teammate it passes closest to, within `receive_dist`, is the
+    receiver. Every other car on that team that is within `chase_dist` of the
+    arrival point and closing on it at >= `min_closing` gets -1 per step."""
+
+    def __init__(self, horizon_s: float = 1.5, receive_dist: float = 600.0,
+                 chase_dist: float = 3000.0, min_closing: float = 500.0):
+        self.ts = np.linspace(0.1, horizon_s, int(horizon_s * 10))
+        self.receive_dist = receive_dist
+        self.chase_dist = chase_dist
+        self.min_closing = min_closing
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        pass
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        b0 = np.asarray(state.ball.position, dtype=float)
+        bv = np.asarray(state.ball.linear_velocity, dtype=float)
+        path = b0[None, :] + bv[None, :] * self.ts[:, None]
+        path[:, 2] = np.maximum(path[:, 2] - 325.0 * self.ts ** 2, 93.0)
+        for team in (0, 1):
+            mates = {a: c for a, c in state.cars.items() if c.team_num == team and not c.is_demoed}
+            if len(mates) < 2:
+                continue
+            best = None
+            for a, c in mates.items():
+                d = np.linalg.norm(path - _pos(c)[None, :], axis=1)
+                i = int(np.argmin(d))
+                if d[i] < self.receive_dist and (best is None or d[i] < best[0]):
+                    best = (float(d[i]), a, path[i])
+            if best is None:
+                continue
+            _, receiver, target = best
+            for a, c in mates.items():
+                if a == receiver or a not in rewards:
+                    continue
+                diff = target - _pos(c)
+                d = float(np.linalg.norm(diff))
+                if d >= self.chase_dist:
+                    continue
+                closing = float(np.dot(np.asarray(c.physics.linear_velocity, dtype=float), diff)) / max(d, 1.0)
+                if closing >= self.min_closing:
+                    rewards[a] -= 1.0
+        return rewards
+
+
 class RetreatBumpReward(RewardFunction[AgentID, GameState, float]):
     """Bump/demo opponents that are in the way while heading back to defend.
 
