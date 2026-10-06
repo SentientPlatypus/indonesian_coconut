@@ -365,6 +365,50 @@ class TeammateProximityReward(RewardFunction[AgentID, GameState, float]):
         return rewards
 
 
+class RetreatBumpReward(RewardFunction[AgentID, GameState, float]):
+    """Bump/demo opponents that are in the way while heading back to defend.
+
+    Pays only on a new bump of an opponent while the bumper is moving toward
+    its own net at >= `min_retreat_speed`: `demo_w` for a demo, otherwise
+    min(1, victim dv / `hard_dv`)."""
+
+    def __init__(self, min_retreat_speed: float = 600.0, hard_dv: float = 900.0,
+                 demo_w: float = 2.0):
+        self.min_retreat_speed = min_retreat_speed
+        self.hard_dv = hard_dv
+        self.demo_w = demo_w
+        self.prev = None
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.prev = initial_state
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        rewards = {a: 0.0 for a in agents}
+        prev = self.prev
+        self.prev = state
+        if prev is None:
+            return rewards
+        for a in agents:
+            car = state.cars[a]
+            v = car.bump_victim_id
+            if (v is None or v not in state.cars or v == prev.cars[a].bump_victim_id
+                    or state.cars[v].team_num == car.team_num):
+                continue
+            attack = 1.0 if car.team_num == 0 else -1.0
+            if -attack * float(car.physics.linear_velocity[1]) < self.min_retreat_speed:
+                continue
+            victim, victim_prev = state.cars[v], prev.cars[v]
+            if victim.is_demoed and not victim_prev.is_demoed:
+                rewards[a] += self.demo_w
+            else:
+                dv = np.linalg.norm(np.asarray(victim.physics.linear_velocity, dtype=float)
+                                    - np.asarray(victim_prev.physics.linear_velocity, dtype=float))
+                rewards[a] += min(1.0, float(dv) / self.hard_dv)
+        return rewards
+
+
 class TeamSpiritReward(RewardFunction[AgentID, GameState, float]):
     """r_i' = (1 - tau) * r_i + tau * mean(r over i's team)."""
 

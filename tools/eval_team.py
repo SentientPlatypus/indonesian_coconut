@@ -38,7 +38,7 @@ def main():
     cg = og = truncs = touches = passes = mate_bumps = 0
     resets = dtaps = 0
     mate_dist, crowd = [], 0
-    att_steps = att_crowd = aer_steps = aer_crowd = mate_close = linger = contacts = 0
+    att_steps = att_crowd = aer_steps = aer_crowd = mate_close = linger = contacts = retreat_bumps = 0
     steps = 0
     for g in range(a.games):
         obs = env.reset()
@@ -93,6 +93,10 @@ def main():
                 v = car.bump_victim_id
                 if v in mine and v != prev_victim.get(ag):
                     mate_bumps += 1
+                if v is not None and v not in mine and v != prev_victim.get(ag):
+                    attack = 1.0 if cand_team == BLUE_TEAM else -1.0
+                    if -attack * float(car.physics.linear_velocity[1]) >= 600.0:
+                        retreat_bumps += 1
                 if car.has_flip and not prev_flip.get(ag) and wheels_on_ball(
                         car, s.ball.position, require_ground=False):
                     resets += 1
@@ -128,6 +132,7 @@ def main():
            "mate_close_frac": round(mate_close / max(1, len(mate_dist)), 4),
            "linger_frac": round(linger / max(1, len(mate_dist)), 4),
            "mate_contacts_pg": round(contacts / a.games, 3),
+           "retreat_bumps_pg": round(retreat_bumps / a.games, 3),
            "off_crowd_frac": round(att_crowd / max(1, att_steps), 4),
            "aerial_crowd_frac": round(aer_crowd / max(1, aer_steps), 4),
            "passes_pg": round(passes / a.games, 3), "touches_pg": round(touches / a.games, 2),
