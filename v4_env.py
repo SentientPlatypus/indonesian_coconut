@@ -66,6 +66,9 @@ def _reward_fn(cfg: Dict[str, Any]):
 
     def _fm(fn):
         return FirstManOnly(fn) if cfg.get("team_aerial_first_man_only", False) else fn
+
+    def _chase(fn):
+        return FirstManOnly(fn, ball_z_min=-1e9) if cfg.get("team_chase_first_man_only", False) else fn
     combined = CombinedReward(
         (GoalReward(), w["goal"]),
         # v13 (user on V13NG65 vs Nexto): good air dribbles, finishes hit the
@@ -75,8 +78,8 @@ def _reward_fn(cfg: Dict[str, Any]):
         (BallTravelReward(), w["ball_travel"]),
         (_z("vel_ball_to_goal", VelocityBallToGoalReward()), w["vel_ball_to_goal"]),
         (_z("goal_dist", GoalDistReward()), w["goal_dist"]),
-        (_z("speed_to_ball", SpeedTowardBallReward()), w["speed_to_ball"]),
-        (_z("face_ball", FaceBallReward()), w["face_ball"]),
+        (_chase(_z("speed_to_ball", SpeedTowardBallReward())), w["speed_to_ball"]),
+        (_chase(_z("face_ball", FaceBallReward())), w["face_ball"]),
         (_z("touch", TouchReward()), w["touch"]),
         # Zero-sum exclusive possession: +r / -r on retain and steal.
         (PossessionReward(), w["possession"]),
