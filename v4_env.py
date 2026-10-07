@@ -230,7 +230,8 @@ def _reward_fn(cfg: Dict[str, Any]):
          w.get("safe_boost", 0.0)),
         # v9 bump_shadow (user on V10STRONG vs Nexto): "we stay close when Nexto
         # has possession, then he flicks and scores". Shadow at a gap instead.
-        (OpponentPossessionSpaceReward(), w.get("shadow_space", 0.0)),
+        (OpponentPossessionSpaceReward(team_aware=bool(cfg.get("team_shadow_aware", False))),
+         w.get("shadow_space", 0.0)),
         # v9.1 (user): when WE have possession and opp is near (not on a wall),
         # flick it away toward net. Separate from FlickReward — that channel's
         # ETA gate often zeros the exact pressure-flick we want here.

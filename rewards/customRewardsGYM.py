@@ -680,7 +680,9 @@ class OpponentPossessionSpaceReward(RewardFunction[AgentID, GameState, float]):
         far_dist: float = 2400.0,
         per_second: float = 1.0,
         crowd_penalty_per_second: float = 1.2,
+        team_aware: bool = False,
     ):
+        self.team_aware = team_aware
         self.opp_control_radius = opp_control_radius
         self.ball_max_z = ball_max_z
         self.crowd_dist = crowd_dist
@@ -700,26 +702,42 @@ class OpponentPossessionSpaceReward(RewardFunction[AgentID, GameState, float]):
         if ball_z > self.ball_max_z:
             return rewards
 
+        ball_pos = np.array(ball, dtype=float)
+
+        def ball_dist(car):
+            return float(np.linalg.norm(np.asarray(car.physics.position, dtype=float) - ball_pos))
+
         for a in agents:
             me = state.cars[a]
-            # Find the (single) opponent in 1v1.
-            opp = None
-            for oid, ocar in state.cars.items():
-                if oid != a and ocar.team_num != me.team_num:
-                    opp = ocar
-                    break
+            if self.team_aware:
+                opps = [c for c in state.cars.values() if c.team_num != me.team_num and not c.is_demoed]
+                opp = min(opps, key=ball_dist) if opps else None
+            else:
+                # Find the (single) opponent in 1v1.
+                opp = None
+                for oid, ocar in state.cars.items():
+                    if oid != a and ocar.team_num != me.team_num:
+                        opp = ocar
+                        break
             if opp is None or opp.is_demoed:
                 continue
 
             me_pos = np.array(me.physics.position, dtype=float)
             opp_pos = np.array(opp.physics.position, dtype=float)
-            ball_pos = np.array(ball, dtype=float)
             d_me = float(np.linalg.norm(me_pos - ball_pos))
             d_opp = float(np.linalg.norm(opp_pos - ball_pos))
 
             # Opponent has ground-ish control: closer than us and cradling the ball.
             if d_opp > self.opp_control_radius or d_opp >= d_me:
                 continue
+
+            if self.team_aware:
+                # Only our closest-to-ball car shadows; teammates just avoid flick range.
+                mates = [c for c in state.cars.values() if c.team_num == me.team_num and not c.is_demoed]
+                if min(mates, key=ball_dist) is not me:
+                    if d_me < self.crowd_dist:
+                        rewards[a] -= self.crowd_per_tick * (1.0 - d_me / max(self.crowd_dist, 1.0))
+                    continue
 
             attack = -1.0 if me.is_orange else 1.0
             # Goal-side of the ball (between ball and our net) — shadow, don't dive past.
