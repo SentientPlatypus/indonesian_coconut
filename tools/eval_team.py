@@ -26,7 +26,8 @@ def main():
     from rlgym.rocket_league.common_values import BLUE_TEAM, ORANGE_TEAM
     from loop_config import load_config
     from v4_env import build_env
-    from rewards.team_rewards import _pos, team_attacking, team_aerial_play, LeaveItToMateReward
+    from rewards.team_rewards import (_pos, team_attacking, team_aerial_play, LeaveItToMateReward,
+                                      LastManBackReward, OwnGoalTouchReward, SaveReward)
     from rewards.freestyleMechs import DoubleTapTracker, wheels_on_ball
 
     cfg = load_config(os.environ.get("V4_LOOP_CONFIG"))
@@ -40,6 +41,8 @@ def main():
     mate_dist, crowd = [], 0
     att_steps = att_crowd = aer_steps = aer_crowd = mate_close = linger = contacts = retreat_bumps = mate_chase = 0
     leave_rf = LeaveItToMateReward()
+    lm_rf, og_rf, sv_rf = LastManBackReward(), OwnGoalTouchReward(), SaveReward()
+    no_back = saves = opp_saves = og_touches = 0
     steps = 0
     for g in range(a.games):
         obs = env.reset()
@@ -49,6 +52,8 @@ def main():
         prev_flip = {ag: c.has_flip for ag, c in env.state.cars.items()}
         prev_victim = {ag: c.bump_victim_id for ag, c in env.state.cars.items()}
         close_since, touching = {}, set()
+        all_ags = list(obs)
+        og_rf.reset(all_ags, env.state, {}); sv_rf.reset(all_ags, env.state, {})
         while True:
             acts = {}
             for ag, o in obs.items():
@@ -58,6 +63,11 @@ def main():
             s = env.state
             steps += 1
             mine = [ag for ag, c in s.cars.items() if c.team_num == cand_team]
+            no_back += any(v < 0 for v in lm_rf.get_rewards(mine, s, {}, {}, {}).values())
+            sv = sv_rf.get_rewards(all_ags, s, {}, {}, {})
+            saves += sum(sv[ag] > 0 for ag in mine)
+            opp_saves += sum(v > 0 for ag, v in sv.items() if ag not in mine)
+            og_touches += sum(v < 0 for ag, v in og_rf.get_rewards(mine, s, {}, {}, {}).items())
             ball = np.asarray(s.ball.position, dtype=float)
             if len(mine) > 1:
                 ps = [_pos(s.cars[ag]) for ag in mine]
@@ -142,7 +152,9 @@ def main():
            "passes_pg": round(passes / a.games, 3), "touches_pg": round(touches / a.games, 2),
            "mate_bumps_pg": round(mate_bumps / a.games, 3),
            "mate_bumps_per_min": round(mate_bumps / max(1, steps) * 15 * 60, 3),
-           "resets_pg": round(resets / a.games, 4), "dtaps_pg": round(dtaps / a.games, 4)}
+           "resets_pg": round(resets / a.games, 4), "dtaps_pg": round(dtaps / a.games, 4),
+           "no_back_frac": round(no_back / max(1, steps), 4), "saves_pg": round(saves / a.games, 3),
+           "opp_saves_pg": round(opp_saves / a.games, 3), "own_goal_touches_pg": round(og_touches / a.games, 3)}
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         json.dump(res, open(a.out, "w"), indent=2)

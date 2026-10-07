@@ -93,10 +93,17 @@ class CurriculumStateMutator(StateMutator[GameState]):
                  fr_mid_frac: float = 0.35,
                  # E7b: share of FR mass given to the ASSISTED stage (the reset
                  # happens with near-zero input), taken before easy/mid/natural.
-                 fr_assist_frac: float = 0.0):
+                 fr_assist_frac: float = 0.0,
+                 team_random_w: float = 0.0,
+                 team_counter_w: float = 0.0,
+                 team_rotation_w: float = 0.0):
         total = (kickoff_w + air_dribble_w + flip_reset_w + wall_pop_w
                  + ground_dribble_w + ground_to_air_w + aerial_front_bump_w
-                 + double_tap_w + wall_leak_w + awkward_ball_w)
+                 + double_tap_w + wall_leak_w + awkward_ball_w
+                 + team_random_w + team_counter_w + team_rotation_w)
+        self.team_random_w = team_random_w / total
+        self.team_counter_w = team_counter_w / total
+        self.team_rotation_w = team_rotation_w / total
         assert total > 0, "curriculum weights must sum to > 0"
         self.kickoff_w = kickoff_w / total
         self.air_dribble_w = air_dribble_w / total
@@ -868,6 +875,103 @@ class CurriculumStateMutator(StateMutator[GameState]):
         else:
             self._awkward_recovery_setup(state)
 
+    # -- team scenarios (every car placed; for 2v2/3v3) -------------------------
+    @staticmethod
+    def _place_ground_car(car, x: float, y: float, yaw: float, speed: float, boost: float) -> None:
+        x = float(np.clip(x, -SIDE_WALL_X + 300.0, SIDE_WALL_X - 300.0))
+        y = float(np.clip(y, -BACK_NET_Y + 1300.0, BACK_NET_Y - 1300.0))
+        car.physics.position = _f32(x, y, 17.0)
+        car.physics.linear_velocity = _f32(speed * np.cos(yaw), speed * np.sin(yaw), 0.0)
+        car.physics.angular_velocity = _f32(0, 0, 0)
+        car.physics.euler_angles = _f32(0.0, yaw, 0.0)
+        car.boost_amount = float(np.clip(boost, 0.0, 100.0))
+        car.on_ground = True
+
+    @staticmethod
+    def _set_ball(state: GameState, x: float, y: float, z: float, vx: float, vy: float, vz: float) -> None:
+        x = float(np.clip(x, -SIDE_WALL_X + 400.0, SIDE_WALL_X - 400.0))
+        y = float(np.clip(y, -BACK_NET_Y + 1500.0, BACK_NET_Y - 1500.0))
+        state.ball.position = _f32(x, y, max(93.15, z))
+        state.ball.linear_velocity = _f32(vx, vy, vz)
+        state.ball.angular_velocity = _f32(0, 0, 0)
+
+    def _team_random_setup(self, state: GameState) -> None:
+        """Ball and every car anywhere, any heading/speed/boost: broad game-state coverage."""
+        z = 93.15 if random.random() < 0.5 else random.uniform(150, 1400)
+        ang = random.uniform(-np.pi, np.pi)
+        sp = random.uniform(0, 1800)
+        self._set_ball(state, random.uniform(-3800, 3800), random.uniform(-4400, 4400), z,
+                       sp * np.cos(ang), sp * np.sin(ang), random.uniform(-400, 600) if z > 93.15 else 0.0)
+        for car in state.cars.values():
+            yaw = random.uniform(-np.pi, np.pi)
+            self._place_ground_car(car, random.uniform(-3800, 3800), random.uniform(-4600, 4600),
+                                   yaw, random.uniform(0, 1800), random.uniform(0, 100))
+
+    def _team_counter_setup(self, state: GameState) -> None:
+        """Odd-man rush: one team carries the ball upfield with support; the
+        defending team is caught upfield (behind the play), sometimes with one
+        man back. Attackers learn to finish 2v1/3v2; defenders to recover."""
+        cars = list(state.cars.values())
+        att_team = random.choice([BLUE_TEAM, 1 - BLUE_TEAM])
+        attack = self._attack_dir(att_team)
+        atk = [c for c in cars if c.team_num == att_team]
+        dfn = [c for c in cars if c.team_num != att_team]
+        random.shuffle(atk)
+        random.shuffle(dfn)
+
+        bx = random.uniform(-2500, 2500)
+        by = attack * random.uniform(-1500, 2200)
+        bvy = attack * random.uniform(500, 1500)
+        bvx = random.uniform(-300, 300)
+        self._set_ball(state, bx, by, 93.15 if random.random() < 0.7 else random.uniform(150, 450),
+                       bvx, bvy, 0.0)
+        fwd_yaw = attack * np.pi / 2.0
+        for i, c in enumerate(atk):
+            if i == 0:   # carrier just behind the ball, moving with it
+                self._place_ground_car(c, bx + random.uniform(-150, 150), by - attack * random.uniform(200, 450),
+                                       fwd_yaw + random.uniform(-0.3, 0.3), abs(bvy) * random.uniform(0.8, 1.1),
+                                       random.uniform(30, 100))
+            else:        # support: trailing and offset laterally
+                side = random.choice([-1.0, 1.0])
+                self._place_ground_car(c, bx + side * random.uniform(800, 2200),
+                                       by - attack * random.uniform(1200, 3500),
+                                       fwd_yaw + random.uniform(-0.4, 0.4), random.uniform(500, 1400),
+                                       random.uniform(20, 100))
+        back_man = random.random() < 0.6
+        for i, c in enumerate(dfn):
+            if back_man and i == 0:   # last man near own net (attackers' target)
+                self._place_ground_car(c, random.uniform(-1200, 1200), attack * random.uniform(3200, 3800),
+                                       -fwd_yaw + random.uniform(-0.6, 0.6), random.uniform(0, 600),
+                                       random.uniform(10, 80))
+            else:                     # caught upfield, behind the ball
+                self._place_ground_car(c, random.uniform(-3500, 3500), by - attack * random.uniform(400, 3200),
+                                       random.uniform(-np.pi, np.pi), random.uniform(0, 1500),
+                                       random.uniform(0, 60))
+
+    def _team_rotation_setup(self, state: GameState) -> None:
+        """Neutral midfield ball; each team in rotation shape (first man
+        challenging, second in support, third back). Teaches the structure."""
+        bx = random.uniform(-2800, 2800)
+        by = random.uniform(-2500, 2500)
+        ang = random.uniform(-np.pi, np.pi)
+        sp = random.uniform(0, 900)
+        self._set_ball(state, bx, by, 93.15 if random.random() < 0.75 else random.uniform(150, 700),
+                       sp * np.cos(ang), sp * np.sin(ang), 0.0)
+        for team in (BLUE_TEAM, 1 - BLUE_TEAM):
+            attack = self._attack_dir(team)
+            mates = [c for c in state.cars.values() if c.team_num == team]
+            random.shuffle(mates)
+            for rank, c in enumerate(mates):
+                if rank == 0:
+                    dist, lat = random.uniform(700, 1800), random.uniform(-900, 900)
+                elif rank == 1:
+                    dist, lat = random.uniform(2400, 3600), random.uniform(-1800, 1800)
+                else:
+                    dist, lat = random.uniform(4000, 6500), random.uniform(-1200, 1200)
+                x, y = bx + lat, by - attack * dist
+                yaw = float(np.arctan2(by - y, bx - x)) + random.uniform(-0.4, 0.4)
+                self._place_ground_car(c, x, y, yaw, random.uniform(0, 1200), random.uniform(10, 100))
+
     @staticmethod
     def _separate_cars(state: GameState, min_gap: float = 300.0) -> None:
         """Parked cars share a spawn line, so with 2+ per team they can overlap;
@@ -908,6 +1012,9 @@ class CurriculumStateMutator(StateMutator[GameState]):
             (self.double_tap_w, lambda: self._double_tap_setup(state)),
             (self.wall_leak_w, lambda: self._wall_leak_setup(state)),
             (self.awkward_ball_w, lambda: self._awkward_ball_setup(state)),
+            (self.team_random_w, lambda: self._team_random_setup(state)),
+            (self.team_counter_w, lambda: self._team_counter_setup(state)),
+            (self.team_rotation_w, lambda: self._team_rotation_setup(state)),
         ):
             acc += weight
             if r < acc:

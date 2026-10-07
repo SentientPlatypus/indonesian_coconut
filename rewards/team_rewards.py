@@ -481,3 +481,126 @@ class TeamSpiritReward(RewardFunction[AgentID, GameState, float]):
             mates = [raw[b] for b in agents if state.cars[b].team_num == team]
             out[a] = (1.0 - self.tau) * float(raw[a]) + self.tau * float(np.mean(mates))
         return out
+
+
+GOAL_LINE_Y = 5120.0
+GOAL_HALF_W = 893.0
+GOAL_H = 642.0
+
+
+def _attack(team: int) -> float:
+    return 1.0 if team == 0 else -1.0
+
+
+def ball_on_target(ball_pos, ball_vel, defending_team: int, horizon_s: float = 2.5,
+                   min_speed: float = 500.0, margin: float = 120.0):
+    """Ballistic (no bounce) projection: seconds until the ball crosses
+    `defending_team`'s goal mouth, or None if it isn't heading in."""
+    toward = -_attack(defending_team)          # direction of that team's own net in y
+    vy = float(ball_vel[1]) * toward
+    if vy < min_speed:
+        return None
+    t = (GOAL_LINE_Y - float(ball_pos[1]) * toward) / vy
+    if t < 0 or t > horizon_s:
+        return None
+    x = float(ball_pos[0]) + float(ball_vel[0]) * t
+    z = float(ball_pos[2]) + float(ball_vel[2]) * t - 325.0 * t * t
+    if abs(x) > GOAL_HALF_W + margin or z > GOAL_H + margin:
+        return None
+    return t
+
+
+class LastManBackReward(RewardFunction[AgentID, GameState, float]):
+    """When no teammate is goal-side of the ball (between it and our net),
+    the rearmost car is charged -threat per step, threat rising from `base`
+    (ball at the opponent's back wall) to 1 (ball at our goal line)."""
+
+    def __init__(self, margin: float = 200.0, base: float = 0.25):
+        self.margin = margin
+        self.base = base
+
+    def reset(self, agents, initial_state, shared_info):
+        pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        out = {a: 0.0 for a in agents}
+        ball_y = float(state.ball.position[1])
+        for team in {state.cars[a].team_num for a in agents}:
+            att = _attack(team)
+            mates = [a for a, c in state.cars.items() if c.team_num == team and not c.is_demoed]
+            if not mates:
+                continue
+            if any(att * float(state.cars[a].physics.position[1]) < att * ball_y - self.margin for a in mates):
+                continue
+            rear = min(mates, key=lambda a: att * float(state.cars[a].physics.position[1]))
+            if rear in out:
+                u = float(np.clip((GOAL_LINE_Y - att * ball_y) / (2 * GOAL_LINE_Y), 0.0, 1.0))
+                out[rear] = -(self.base + (1.0 - self.base) * u)
+        return out
+
+
+class OwnGoalTouchReward(RewardFunction[AgentID, GameState, float]):
+    """Touch that puts a ball that wasn't heading in on target for our own
+    goal: -min(speed/2300, 1), full strength within `near_dist` of our goal
+    line, fading to 0.3 further out. Touches on a ball already going in
+    (failed saves) are not charged."""
+
+    def __init__(self, horizon_s: float = 3.0, near_dist: float = 3000.0):
+        self.horizon_s = horizon_s
+        self.near_dist = near_dist
+        self.prev = None
+
+    def reset(self, agents, initial_state, shared_info):
+        self.prev = (np.asarray(initial_state.ball.position, dtype=float).copy(),
+                     np.asarray(initial_state.ball.linear_velocity, dtype=float).copy())
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        out = {a: 0.0 for a in agents}
+        bp = np.asarray(state.ball.position, dtype=float).copy()
+        bv = np.asarray(state.ball.linear_velocity, dtype=float).copy()
+        prev, self.prev = self.prev, (bp, bv)
+        for a in agents:
+            car = state.cars[a]
+            if car.ball_touches <= 0:
+                continue
+            if ball_on_target(bp, bv, car.team_num, self.horizon_s, min_speed=300.0) is None:
+                continue
+            if prev is not None and ball_on_target(prev[0], prev[1], car.team_num, self.horizon_s,
+                                                   min_speed=300.0) is not None:
+                continue
+            d = GOAL_LINE_Y + _attack(car.team_num) * float(bp[1])
+            prox = 1.0 if d <= self.near_dist else max(0.3, 1.0 - 0.7 * (d - self.near_dist) / (GOAL_LINE_Y - self.near_dist + 1e-6))
+            out[a] = -min(float(np.linalg.norm(bv)) / 2300.0, 1.0) * prox
+        return out
+
+
+class SaveReward(RewardFunction[AgentID, GameState, float]):
+    """Touch that turns a ball on target for our net (arriving within
+    `horizon_s`) into one that isn't: +1, +`urgency_bonus` scaled by how
+    soon it would have gone in."""
+
+    def __init__(self, horizon_s: float = 2.5, urgency_bonus: float = 1.0):
+        self.horizon_s = horizon_s
+        self.urgency_bonus = urgency_bonus
+        self.prev = None
+
+    def reset(self, agents, initial_state, shared_info):
+        self.prev = (np.asarray(initial_state.ball.position, dtype=float).copy(),
+                     np.asarray(initial_state.ball.linear_velocity, dtype=float).copy())
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        out = {a: 0.0 for a in agents}
+        bp = np.asarray(state.ball.position, dtype=float).copy()
+        bv = np.asarray(state.ball.linear_velocity, dtype=float).copy()
+        if self.prev is not None and not state.goal_scored:
+            pp, pv = self.prev
+            for a in agents:
+                car = state.cars[a]
+                if car.ball_touches <= 0:
+                    continue
+                t_before = ball_on_target(pp, pv, car.team_num, self.horizon_s)
+                if t_before is None or ball_on_target(bp, bv, car.team_num, self.horizon_s + 1.0) is not None:
+                    continue
+                out[a] = 1.0 + self.urgency_bonus * (1.0 - t_before / self.horizon_s)
+        self.prev = (bp, bv)
+        return out

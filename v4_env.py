@@ -62,7 +62,8 @@ def _reward_fn(cfg: Dict[str, Any]):
     from rewards.team_rewards import (TeamSpacingReward, PassReward, TeamSpiritReward,
                                       TeamCoordinationReward, OffenseSupportReward, FirstManOnly,
                                       TeammateProximityReward, RetreatBumpReward,
-                                      LeaveItToMateReward)
+                                      LeaveItToMateReward, LastManBackReward,
+                                      OwnGoalTouchReward, SaveReward)
 
     def _fm(fn):
         return FirstManOnly(fn) if cfg.get("team_aerial_first_man_only", False) else fn
@@ -288,6 +289,10 @@ def _reward_fn(cfg: Dict[str, Any]):
         (LeaveItToMateReward(receive_dist=cfg.get("leave_mate_receive_dist", 600.0),
                              chase_dist=cfg.get("leave_mate_chase_dist", 3000.0)),
          w.get("leave_to_mate", 0.0)),
+        (LastManBackReward(margin=cfg.get("last_man_margin", 200.0), base=cfg.get("last_man_base", 0.25)),
+         w.get("last_man", 0.0)),
+        (OwnGoalTouchReward(), w.get("own_goal_touch", 0.0)),
+        (SaveReward(), w.get("save", 0.0)),
     )
     tau = float(cfg.get("team_spirit", 0.0))
     return TeamSpiritReward(combined, tau) if tau > 0 else combined
@@ -315,6 +320,9 @@ def _state_mutator(cfg: Dict[str, Any], for_training: bool):
             fr_easy_frac=c.get("fr_easy_frac", 0.25),
             fr_mid_frac=c.get("fr_mid_frac", 0.35),
             fr_assist_frac=c.get("fr_assist_frac", 0.0),
+            team_random_w=c.get("team_random_w", 0.0),
+            team_counter_w=c.get("team_counter_w", 0.0),
+            team_rotation_w=c.get("team_rotation_w", 0.0),
         )
     else:
         reset_mutator = KickoffMutator()   # eval = standard kickoff games
