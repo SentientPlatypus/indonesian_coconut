@@ -710,6 +710,8 @@ class OpponentPossessionSpaceReward(RewardFunction[AgentID, GameState, float]):
         for a in agents:
             me = state.cars[a]
             if self.team_aware:
+                if me.is_demoed:
+                    continue
                 opps = [c for c in state.cars.values() if c.team_num != me.team_num and not c.is_demoed]
                 opp = min(opps, key=ball_dist) if opps else None
             else:
