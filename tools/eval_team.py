@@ -21,6 +21,8 @@ def main():
     p.add_argument("--opponent", required=True)
     p.add_argument("--games", type=int, default=100)
     p.add_argument("--out", default=None)
+    p.add_argument("--cand-det", action="store_true", help="candidate picks argmax actions (as the RLBot submission does)")
+    p.add_argument("--opp-det", action="store_true")
     a = p.parse_args()
 
     from rlgym.rocket_league.common_values import BLUE_TEAM, ORANGE_TEAM
@@ -57,8 +59,9 @@ def main():
         while True:
             acts = {}
             for ag, o in obs.items():
-                pol = cand if env.state.cars[ag].team_num == cand_team else opp
-                acts[ag] = np.array([pol.act(o)], dtype=np.int64)
+                is_cand = env.state.cars[ag].team_num == cand_team
+                pol = cand if is_cand else opp
+                acts[ag] = np.array([pol.act(o, deterministic=a.cand_det if is_cand else a.opp_det)], dtype=np.int64)
             obs, _, term, trunc = env.step(acts)
             s = env.state
             steps += 1
