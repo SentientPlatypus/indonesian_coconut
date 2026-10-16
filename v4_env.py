@@ -323,6 +323,7 @@ def _state_mutator(cfg: Dict[str, Any], for_training: bool):
             team_random_w=c.get("team_random_w", 0.0),
             team_counter_w=c.get("team_counter_w", 0.0),
             team_rotation_w=c.get("team_rotation_w", 0.0),
+            aerial_def_w=c.get("aerial_def_w", 0.0),
         )
     else:
         reset_mutator = KickoffMutator()   # eval = standard kickoff games

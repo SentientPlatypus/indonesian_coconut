@@ -96,14 +96,16 @@ class CurriculumStateMutator(StateMutator[GameState]):
                  fr_assist_frac: float = 0.0,
                  team_random_w: float = 0.0,
                  team_counter_w: float = 0.0,
-                 team_rotation_w: float = 0.0):
+                 team_rotation_w: float = 0.0,
+                 aerial_def_w: float = 0.0):
         total = (kickoff_w + air_dribble_w + flip_reset_w + wall_pop_w
                  + ground_dribble_w + ground_to_air_w + aerial_front_bump_w
                  + double_tap_w + wall_leak_w + awkward_ball_w
-                 + team_random_w + team_counter_w + team_rotation_w)
+                 + team_random_w + team_counter_w + team_rotation_w + aerial_def_w)
         self.team_random_w = team_random_w / total
         self.team_counter_w = team_counter_w / total
         self.team_rotation_w = team_rotation_w / total
+        self.aerial_def_w = aerial_def_w / total
         assert total > 0, "curriculum weights must sum to > 0"
         self.kickoff_w = kickoff_w / total
         self.air_dribble_w = air_dribble_w / total
@@ -972,6 +974,39 @@ class CurriculumStateMutator(StateMutator[GameState]):
                 yaw = float(np.arctan2(by - y, bx - x)) + random.uniform(-0.4, 0.4)
                 self._place_ground_car(c, x, y, yaw, random.uniform(0, 1200), random.uniform(10, 100))
 
+    def _aerial_defense_setup(self, state: GameState) -> None:
+        """High ball dropping into one team's half. Defenders are grounded and
+        goal-side, spaced (first man under it, the rest further back). Attackers
+        are behind the ball. The defended team has to leave the ground to
+        contest; teammates should not all jump."""
+        cars = list(state.cars.values())
+        def_team = random.choice([BLUE_TEAM, 1 - BLUE_TEAM])
+        attack = self._attack_dir(def_team)
+        own = -attack
+        bx = random.uniform(-2200, 2200)
+        by = own * random.uniform(600, 3200)
+        bz = random.uniform(500, 1200)
+        self._set_ball(state, bx, by, bz,
+                       random.uniform(-400, 400), own * random.uniform(200, 1200),
+                       random.uniform(-500, 200))
+        defs = [c for c in cars if c.team_num == def_team]
+        atks = [c for c in cars if c.team_num != def_team]
+        random.shuffle(defs)
+        random.shuffle(atks)
+        for rank, c in enumerate(defs):
+            if rank == 0:
+                dist, lat = random.uniform(350, 900), random.uniform(-400, 400)
+            else:
+                dist, lat = random.uniform(1400, 2800) + 600 * (rank - 1), random.uniform(-1600, 1600)
+            x, y = bx + lat, by + own * dist
+            yaw = float(np.arctan2(by - y, bx - x))
+            self._place_ground_car(c, x, y, yaw, random.uniform(0, 800), random.uniform(20, 100))
+        for rank, c in enumerate(atks):
+            dist = random.uniform(900, 2200) + 500 * rank
+            x, y = bx + random.uniform(-1800, 1800), by - own * dist
+            yaw = float(np.arctan2(by - y, bx - x))
+            self._place_ground_car(c, x, y, yaw, random.uniform(200, 1400), random.uniform(10, 80))
+
     @staticmethod
     def _separate_cars(state: GameState, min_gap: float = 300.0) -> None:
         """Parked cars share a spawn line, so with 2+ per team they can overlap;
@@ -1015,6 +1050,7 @@ class CurriculumStateMutator(StateMutator[GameState]):
             (self.team_random_w, lambda: self._team_random_setup(state)),
             (self.team_counter_w, lambda: self._team_counter_setup(state)),
             (self.team_rotation_w, lambda: self._team_rotation_setup(state)),
+            (self.aerial_def_w, lambda: self._aerial_defense_setup(state)),
         ):
             acc += weight
             if r < acc:
