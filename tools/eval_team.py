@@ -29,7 +29,8 @@ def main():
     from loop_config import load_config
     from v4_env import build_env
     from rewards.team_rewards import (_pos, team_attacking, team_aerial_play, LeaveItToMateReward,
-                                      LastManBackReward, OwnGoalTouchReward, SaveReward)
+                                      LastManBackReward, OwnGoalTouchReward, SaveReward,
+                                      support_ranks, _attack, GOAL_LINE_Y)
     from rewards.freestyleMechs import DoubleTapTracker, wheels_on_ball
 
     cfg = load_config(os.environ.get("V4_LOOP_CONFIG"))
@@ -45,6 +46,8 @@ def main():
     leave_rf = LeaveItToMateReward()
     lm_rf, og_rf, sv_rf = LastManBackReward(), OwnGoalTouchReward(), SaveReward()
     no_back = saves = opp_saves = og_touches = 0
+    backwall = car_n = rotate_n = 0
+    rotate_speed = 0.0
     steps = 0
     for g in range(a.games):
         obs = env.reset()
@@ -66,6 +69,26 @@ def main():
             s = env.state
             steps += 1
             mine = [ag for ag, c in s.cars.items() if c.team_num == cand_team]
+            ranks = support_ranks(s, cand_team)
+            attack = _attack(cand_team)
+            ball_y = float(s.ball.position[1])
+            limit = -attack * GOAL_LINE_Y + attack * 800.0
+            for ag in mine:
+                car = s.cars[ag]
+                pos = _pos(car)
+                spd = float(np.linalg.norm(car.physics.linear_velocity))
+                car_n += 1
+                if -attack * float(pos[1]) > 4700 and pos[2] > 150 and spd < 800:
+                    backwall += 1
+                k = ranks.get(ag, 0)
+                if k > 0:
+                    dist = (2200.0, 3800.0)[min(k, 2) - 1]
+                    slot_y = ball_y - attack * dist
+                    if attack * slot_y < attack * limit:
+                        slot_y = limit
+                    if attack * (float(pos[1]) - slot_y) > 200:
+                        rotate_n += 1
+                        rotate_speed += -attack * float(car.physics.linear_velocity[1])
             no_back += any(v < 0 for v in lm_rf.get_rewards(mine, s, {}, {}, {}).values())
             sv = sv_rf.get_rewards(all_ags, s, {}, {}, {})
             saves += sum(sv[ag] > 0 for ag in mine)
@@ -157,7 +180,9 @@ def main():
            "mate_bumps_per_min": round(mate_bumps / max(1, steps) * 15 * 60, 3),
            "resets_pg": round(resets / a.games, 4), "dtaps_pg": round(dtaps / a.games, 4),
            "no_back_frac": round(no_back / max(1, steps), 4), "saves_pg": round(saves / a.games, 3),
-           "opp_saves_pg": round(opp_saves / a.games, 3), "own_goal_touches_pg": round(og_touches / a.games, 3)}
+           "opp_saves_pg": round(opp_saves / a.games, 3), "own_goal_touches_pg": round(og_touches / a.games, 3),
+           "backwall_frac": round(backwall / max(1, car_n), 4),
+           "rotate_speed": round(rotate_speed / max(1, rotate_n), 1)}
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         json.dump(res, open(a.out, "w"), indent=2)

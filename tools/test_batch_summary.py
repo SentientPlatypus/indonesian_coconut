@@ -10,7 +10,7 @@ import json
 import os
 import sys
 
-KEYS = ["no_back_frac", "saves_pg", "own_goal_touches_pg", "mate_contacts_pg", "linger_frac",
+KEYS = ["backwall_frac", "rotate_speed", "no_back_frac", "saves_pg", "own_goal_touches_pg", "mate_contacts_pg", "linger_frac",
         "mate_close_frac", "off_crowd_frac", "aerial_crowd_frac", "mate_chase_frac", "passes_pg"]
 
 
