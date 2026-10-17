@@ -62,7 +62,7 @@ def _reward_fn(cfg: Dict[str, Any]):
     from rewards.team_rewards import (TeamSpacingReward, PassReward, TeamSpiritReward,
                                       TeamCoordinationReward, OffenseSupportReward, FirstManOnly,
                                       TeammateProximityReward, RetreatBumpReward,
-                                      LeaveItToMateReward, LastManBackReward,
+                                      LeaveItToMateReward, FastRotateReward, LastManBackReward,
                                       OwnGoalTouchReward, SaveReward)
 
     def _fm(fn):
@@ -289,6 +289,8 @@ def _reward_fn(cfg: Dict[str, Any]):
         (LeaveItToMateReward(receive_dist=cfg.get("leave_mate_receive_dist", 600.0),
                              chase_dist=cfg.get("leave_mate_chase_dist", 3000.0)),
          w.get("leave_to_mate", 0.0)),
+        (FastRotateReward(slot_dists=cfg.get("fast_rotate_slots", (2200.0, 3800.0))),
+         w.get("fast_rotate", 0.0)),
         (LastManBackReward(margin=cfg.get("last_man_margin", 200.0), base=cfg.get("last_man_base", 0.25)),
          w.get("last_man", 0.0)),
         (OwnGoalTouchReward(), w.get("own_goal_touch", 0.0)),

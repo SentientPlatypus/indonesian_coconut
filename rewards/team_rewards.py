@@ -510,6 +510,61 @@ def ball_on_target(ball_pos, ball_vel, defending_team: int, horizon_s: float = 2
     return t
 
 
+class FastRotateReward(RewardFunction[AgentID, GameState, float]):
+    """Get back to the defensive slot quickly. 0 for the car closest to the
+    ball, and 0 in 1v1.
+
+    Support rank k owns a slot `slot_dists[k-1]` goal-side of the ball, never
+    closer than `wall_clearance` to the back wall.
+    - Still upfield of the slot: speed toward own goal, from -1 (driving the
+      wrong way) to +1 (supersonic back). Extra -0.5 while doing it under
+      600 uu/s.
+    - More than `too_deep` behind the slot (camped on the back wall): -1,
+      eased to -0.25 while driving forward toward the slot.
+    - In the pocket: +0.25.
+    """
+
+    def __init__(self, slot_dists=(2200.0, 3800.0), too_deep: float = 900.0,
+                 wall_clearance: float = 800.0, max_speed: float = 2300.0):
+        self.slot_dists = tuple(float(d) for d in slot_dists)
+        self.too_deep = too_deep
+        self.wall_clearance = wall_clearance
+        self.max_speed = max_speed
+
+    def reset(self, agents, initial_state, shared_info):
+        pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        out = {a: 0.0 for a in agents}
+        ball_y = float(state.ball.position[1])
+        for team in {state.cars[a].team_num for a in agents}:
+            ranks = support_ranks(state, team)
+            if len(ranks) < 2:
+                continue
+            attack = _attack(team)
+            limit = -attack * GOAL_LINE_Y + attack * self.wall_clearance
+            for a, k in ranks.items():
+                if k == 0 or a not in out:
+                    continue
+                dist = self.slot_dists[min(k, len(self.slot_dists)) - 1]
+                slot_y = ball_y - attack * dist
+                if attack * slot_y < attack * limit:
+                    slot_y = limit
+                car = state.cars[a]
+                gap = attack * (float(car.physics.position[1]) - slot_y)
+                back_speed = -attack * float(car.physics.linear_velocity[1])
+                if gap > 200.0:
+                    out[a] = max(-1.0, min(1.0, back_speed / self.max_speed))
+                    if back_speed < 600.0:
+                        out[a] -= 0.5
+                elif gap < -self.too_deep:
+                    toward_slot = max(0.0, min(1.0, -back_speed / self.max_speed))
+                    out[a] = -1.0 + 0.75 * toward_slot
+                else:
+                    out[a] = 0.25
+        return out
+
+
 class LastManBackReward(RewardFunction[AgentID, GameState, float]):
     """When no teammate is goal-side of the ball (between it and our net),
     the rearmost car is charged -threat per step, threat rising from `base`
