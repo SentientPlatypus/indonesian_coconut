@@ -527,7 +527,8 @@ class FastRotateReward(RewardFunction[AgentID, GameState, float]):
     def __init__(self, slot_dists=(2200.0, 3800.0), too_deep: float = 900.0,
                  wall_clearance: float = 800.0, max_speed: float = 2300.0,
                  speed_for_full: float = 2300.0, dawdle_below: float = 600.0,
-                 wall_y: float = 4700.0, wall_penalize: bool = False):
+                 wall_y: float = 4700.0, wall_penalize: bool = False,
+                 wall_allow_shot: bool = False, shot_speed: float = 600.0):
         self.slot_dists = tuple(float(d) for d in slot_dists)
         self.too_deep = too_deep
         self.wall_clearance = wall_clearance
@@ -536,6 +537,8 @@ class FastRotateReward(RewardFunction[AgentID, GameState, float]):
         self.dawdle_below = dawdle_below
         self.wall_y = wall_y
         self.wall_penalize = wall_penalize
+        self.wall_allow_shot = wall_allow_shot
+        self.shot_speed = shot_speed
 
     def reset(self, agents, initial_state, shared_info):
         pass
@@ -543,6 +546,7 @@ class FastRotateReward(RewardFunction[AgentID, GameState, float]):
     def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
         out = {a: 0.0 for a in agents}
         ball_y = float(state.ball.position[1])
+        ball_vy = float(state.ball.linear_velocity[1])
         for team in {state.cars[a].team_num for a in agents}:
             ranks = support_ranks(state, team)
             if len(ranks) < 2:
@@ -562,6 +566,10 @@ class FastRotateReward(RewardFunction[AgentID, GameState, float]):
                 back_speed = -attack * float(car.physics.linear_velocity[1])
                 on_wall = (-attack * car_y > self.wall_y and float(car.physics.position[2]) > 150.0
                            and -attack * ball_y < 3500.0)
+                shot_coming = self.wall_allow_shot and -attack * ball_vy > self.shot_speed
+                if shot_coming and (on_wall or gap < -self.too_deep):
+                    out[a] = 0.0
+                    continue
                 if self.wall_penalize and on_wall:
                     out[a] = -1.0
                     continue
