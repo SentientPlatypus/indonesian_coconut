@@ -525,11 +525,17 @@ class FastRotateReward(RewardFunction[AgentID, GameState, float]):
     """
 
     def __init__(self, slot_dists=(2200.0, 3800.0), too_deep: float = 900.0,
-                 wall_clearance: float = 800.0, max_speed: float = 2300.0):
+                 wall_clearance: float = 800.0, max_speed: float = 2300.0,
+                 speed_for_full: float = 2300.0, dawdle_below: float = 600.0,
+                 wall_y: float = 4700.0, wall_penalize: bool = False):
         self.slot_dists = tuple(float(d) for d in slot_dists)
         self.too_deep = too_deep
         self.wall_clearance = wall_clearance
         self.max_speed = max_speed
+        self.speed_for_full = speed_for_full
+        self.dawdle_below = dawdle_below
+        self.wall_y = wall_y
+        self.wall_penalize = wall_penalize
 
     def reset(self, agents, initial_state, shared_info):
         pass
@@ -551,11 +557,17 @@ class FastRotateReward(RewardFunction[AgentID, GameState, float]):
                 if attack * slot_y < attack * limit:
                     slot_y = limit
                 car = state.cars[a]
-                gap = attack * (float(car.physics.position[1]) - slot_y)
+                car_y = float(car.physics.position[1])
+                gap = attack * (car_y - slot_y)
                 back_speed = -attack * float(car.physics.linear_velocity[1])
+                on_wall = (-attack * car_y > self.wall_y and float(car.physics.position[2]) > 150.0
+                           and -attack * ball_y < 3500.0)
+                if self.wall_penalize and on_wall:
+                    out[a] = -1.0
+                    continue
                 if gap > 200.0:
-                    out[a] = max(-1.0, min(1.0, back_speed / self.max_speed))
-                    if back_speed < 600.0:
+                    out[a] = max(-1.0, min(1.0, back_speed / self.speed_for_full))
+                    if back_speed < self.dawdle_below:
                         out[a] -= 0.5
                 elif gap < -self.too_deep:
                     toward_slot = max(0.0, min(1.0, -back_speed / self.max_speed))
