@@ -83,7 +83,9 @@ class DefaultObs(ObsBuilder[AgentID, np.ndarray, GameState, Tuple[str, int]]):
                 car.is_flipping,
                 car.has_double_jumped,
                 car.can_flip,
-                car.air_time_since_jump
+                # rlgym_compat already freezes this at 1.25s; clamp so a raw
+                # RocketSim value cannot diverge from training.
+                min(car.air_time_since_jump, 1.25)
             ]
         ]
 

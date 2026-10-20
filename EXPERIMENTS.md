@@ -742,3 +742,16 @@ E2G1 quick read: ~0.1 double taps/game, ~0 real resets.
 - To E1: `expE1_52681266522` + `E1_zerosum.json` (tag `exp-E1-keep`).
 - To the pre-experiment trainer: tag `exp-base-v13goalprob`, snapshot
   `gdv13_52307206004`, config `bump_shadow_config.json`.
+
+## E9 — team flip resets (started 2026-10-20, side branch)
+
+Does not replace `2v2.pt` / `3v3.pt`. Those are T2aj_rotate 2795M and
+T3al_rotfast 3567M, not the older T2i/T3k names. E9a only: FlipResetReward
+zero-summed at opp_scale 0.5, and APPROACH is skipped when a closer teammate
+is already airborne. Weight is not raised. Obs: training air_time_since_jump
+grows past 1.25s (measured to 1.725); rlgym_compat freezes it at 1.25 once
+dodge_timeout is -1. has_flip/can_flip already agree after the window (both
+false). E9 clamps that one feature at 1.25 so training matches the bot.
+E9b/E9c wait on E9a. Keep bar: normal-spawn resets >= 3/100, assisted
+used/obtained >= 0.6, h2h >= 0.52 over 400 games twice, teammate bumps
+within +10%. Revert at 500M if normal resets are still <= 1.

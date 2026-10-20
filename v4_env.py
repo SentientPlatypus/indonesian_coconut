@@ -19,11 +19,11 @@ NO_TOUCH_TIMEOUT_S = 30
 GAME_TIMEOUT_S = 300
 
 
-def _obs_builder():
+def _obs_builder(clamp_air_time: bool = False):
     import numpy as np
     from rlgym.rocket_league.obs_builders import DefaultObs
     from rlgym.rocket_league import common_values
-    return DefaultObs(
+    obs = DefaultObs(
         zero_padding=None,
         pos_coef=np.asarray([1 / common_values.SIDE_WALL_X,
                              1 / common_values.BACK_NET_Y,
@@ -33,6 +33,26 @@ def _obs_builder():
         ang_vel_coef=1 / common_values.CAR_MAX_ANG_VEL,
         boost_coef=1 / 100.0,
     )
+    if not clamp_air_time:
+        return obs
+    # rlgym_compat freezes air_time_since_jump at 1.25s once dodge_timeout hits -1.
+    # RocketSim keeps counting. Clamp the training feature to what the bot sees.
+    # Layout: ball 9 + boost pads + 8 flags, then air_time.
+    n_pads = len(common_values.BOOST_LOCATIONS)
+    air_idx = 9 + n_pads + 8
+    wrapped = obs
+
+    def build_obs(agents, state, shared_info):
+        out = DefaultObs.build_obs(wrapped, agents, state, shared_info)
+        for a, v in out.items():
+            if v[air_idx] > 1.25:
+                v = np.array(v, copy=True)
+                v[air_idx] = 1.25
+                out[a] = v
+        return out
+
+    wrapped.build_obs = build_obs
+    return wrapped
 
 
 def _reward_fn(cfg: Dict[str, Any]):
@@ -150,7 +170,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         # available) -> obtain -> hold control -> USE the flip. The old version was
         # two sparse events behind a ~36deg wheel cone, so PPO had no gradient to
         # find it. Nothing here is negative: plain air dribbles are unaffected.
-        (FlipResetReward(
+        (_z("flip_reset", FlipResetReward(
             min_wheels_cos=cfg.get("fr_min_wheels_cos", 0.55),
             approach_per_second=cfg.get("fr_approach_per_second", 0.30),
             approach_radius=cfg.get("fr_approach_radius", 700.0),
@@ -161,7 +181,8 @@ def _reward_fn(cfg: Dict[str, Any]):
             hit_ball_weight=cfg.get("fr_use_weight", 2.5),
             obtain_decay=cfg.get("fr_obtain_decay", 0.55),
             on_ball_contact=cfg.get("fr_on_ball_contact", False),
-        ), w["flip_reset"]),
+            team_aware_approach=cfg.get("fr_team_approach", False),
+        )), w["flip_reset"]),
         (DoubleTapReward(
             bounce_weight=cfg.get("dt_bounce_weight", 0.2),
             goal_bonus=cfg.get("dt_goal_bonus", 1.5),
@@ -360,7 +381,7 @@ def build_env(cfg: Dict[str, Any], for_training: bool = True):
 
     rlgym_env = RLGym(
         state_mutator=_state_mutator(cfg, for_training),
-        obs_builder=_obs_builder(),
+        obs_builder=_obs_builder(clamp_air_time=bool(cfg.get("clamp_air_time", False))),
         action_parser=action_parser,
         reward_fn=_reward_fn(cfg),
         termination_cond=termination_condition,

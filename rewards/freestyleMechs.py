@@ -990,8 +990,11 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
         # False keeps the pre-2026-09-27 behaviour, where that contact cleared
         # all stage state so OBTAIN/HOLD/USE could never fire.
         on_ball_contact: bool = False,
+        # E9a: skip APPROACH when a teammate is already the closer airborne car.
+        team_aware_approach: bool = False,
     ):
         self.on_ball_contact = on_ball_contact
+        self.team_aware_approach = team_aware_approach
         self.obtain_flip_weight = obtain_flip_weight
         self.hit_ball_weight = hit_ball_weight
         self.min_ball_z = min_ball_z
@@ -1072,8 +1075,18 @@ class FlipResetReward(RewardFunction[AgentID, GameState, float]):
 
             # ---- A. APPROACH: only meaningful when a reset is actually available
             # (flip already spent) and we are under a high ball turning wheels to it.
+            closer_air_mate = False
+            if self.team_aware_approach:
+                for other in state.cars.values():
+                    if (other.team_num != car.team_num or other is car or other.is_demoed
+                            or other.on_ground):
+                        continue
+                    if _safe_norm(ball_pos - np.array(other.physics.position, dtype=float)) < dist:
+                        closer_air_mate = True
+                        break
             if (
-                not car.has_flip
+                not closer_air_mate
+                and not car.has_flip
                 and ball_high
                 and dist <= self.approach_radius
                 and wheels_cos >= self.approach_min_cos
