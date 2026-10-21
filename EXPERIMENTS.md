@@ -755,3 +755,28 @@ false). E9 clamps that one feature at 1.25 so training matches the bot.
 E9b/E9c wait on E9a. Keep bar: normal-spawn resets >= 3/100, assisted
 used/obtained >= 0.6, h2h >= 0.52 over 400 games twice, teammate bumps
 within +10%. Revert at 500M if normal resets are still <= 1.
+
+## Queued after E9 (do not start while T2ao_fr / T3ap_fr are running)
+
+Do not edit `FlipResetReward` or the E9 configs for this queue. Do not
+overwrite `1v1.pt`, `2v2.pt`, or `3v3.pt`. Resume from the E9 winner if one
+is promoted, otherwise from the latest full checkpoint of T2aj_rotate /
+T3al_rotfast (the `.pt` files alone cannot resume). Stop before the policy
+lock: no new arm after 12:00 UTC on Oct 23, which is 12h before Oct 24 00:00
+UTC. One arm at a time, 2v2 and 3v3 together. Keep only if h2h >= 0.52 over
+400 games and a second 400 agrees, bumps/min are not worse than the current
+policy in that same eval, and the flip-reset probe is not worse.
+
+- **T-A — already live, skip.** `team_chase_first_man_only` and
+  `team_aerial_first_man_only` are already true on T2aj, T2ao, T3al, and T3ap.
+- **T-B.** Per-reward team spirit using the max teammate reward instead of the
+  mean. Goals, possession, and saves at 0.9. Touches at 0.5. Mechanics at 0.
+  Flip reset at 0. Current `team_spirit` is 0, and the only spirit code averages.
+- **T-C.** Lower the teammate-bump penalty. The live knob is `team_mate_bump`
+  = 300 (both cars, once per new teammate bump, weight `team_coord` 1). The
+  requested 80 is not in these configs. Apply 300 → 20.
+- **T-D.** Only with a matching `rlbot_submission/obs.py` change and a
+  fake-match observation diff that passes: closest-to-ball flag, and shuffle
+  teammate and opponent order during training.
+- **After Oct 24 only.** Gate the pass reward on a following goal or
+  possession, and mixed-mode arenas. Not before the stream.
