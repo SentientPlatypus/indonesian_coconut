@@ -756,27 +756,44 @@ E9b/E9c wait on E9a. Keep bar: normal-spawn resets >= 3/100, assisted
 used/obtained >= 0.6, h2h >= 0.52 over 400 games twice, teammate bumps
 within +10%. Revert at 500M if normal resets are still <= 1.
 
-## Queued after E9 (do not start while T2ao_fr / T3ap_fr are running)
+## Queued after E9 (revised 2026-10-21 19:42 UTC)
 
-Do not edit `FlipResetReward` or the E9 configs for this queue. Do not
-overwrite `1v1.pt`, `2v2.pt`, or `3v3.pt`. Resume from the E9 winner if one
-is promoted, otherwise from the latest full checkpoint of T2aj_rotate /
-T3al_rotfast (the `.pt` files alone cannot resume). Stop before the policy
-lock: no new arm after 12:00 UTC on Oct 23, which is 12h before Oct 24 00:00
-UTC. One arm at a time, 2v2 and 3v3 together. Keep only if h2h >= 0.52 over
-400 games and a second 400 agrees, bumps/min are not worse than the current
-policy in that same eval, and the flip-reset probe is not worse.
+Do not start while T2ao_fr / T3ap_fr are running. Do not edit FlipResetReward
+or the E9 configs. Do not overwrite 1v1.pt, 2v2.pt, or 3v3.pt. New run names
+only. Resume from the E9 winner if one is promoted, otherwise the latest full
+checkpoint of T2aj_rotate / T3al_rotfast.
 
-- **T-A — already live, skip.** `team_chase_first_man_only` and
-  `team_aerial_first_man_only` are already true on T2aj, T2ao, T3al, and T3ap.
-- **T-B.** Per-reward team spirit using the max teammate reward instead of the
-  mean. Goals, possession, and saves at 0.9. Touches at 0.5. Mechanics at 0.
-  Flip reset at 0. Current `team_spirit` is 0, and the only spirit code averages.
-- **T-C.** Lower the teammate-bump penalty. The live knob is `team_mate_bump`
-  = 300 (both cars, once per new teammate bump, weight `team_coord` 1). The
-  requested 80 is not in these configs. Apply 300 → 20.
-- **T-D.** Only with a matching `rlbot_submission/obs.py` change and a
-  fake-match observation diff that passes: closest-to-ball flag, and shuffle
-  teammate and opponent order during training.
-- **After Oct 24 only.** Gate the pass reward on a following goal or
-  possession, and mixed-mode arenas. Not before the stream.
+Hard cutoff: no arm may still be in evaluation at 12:00 UTC Oct 23 (12h
+before Oct 24 00:00 UTC). An arm that cannot finish h2h 400 twice, bumps, and
+the flip-reset probe before that time is not started. Each arm is 500M steps
+max, but 500M at the live 2v2 rate (~800 steps/s) is about 7 days, so nothing
+reaches 500M before the cutoff.
+
+Timing from 2026-10-21 19:42 UTC, 2v2 ~800 steps/s, 3v3 ~1090 steps/s, eval
+of one arm (both modes, 400 games twice, plus probe) about 8–10 hours:
+
+- E9 check 2 is the gate. 2v2 has ~71M steps left and is the slow side, so
+  that check starts about 2026-10-22 20:00 UTC and its games finish about
+  2026-10-23 00:00 UTC. Twelve hours then remain before the cutoff.
+- **T-C does not fit** if E9 runs through that check. The leftover window is
+  shorter than training plus a double evaluation.
+- **T-B does not fit** after T-C in any version of this window.
+- **T-D and the pass-reward / mixed-arena ideas** are after Oct 24.
+
+Order once E9 has stopped and the cutoff still leaves a full evaluation:
+
+1. **T-C.** `team_mate_bump` 300 → 100 (the live value is 300, not 80). If
+   ~200M steps show bumps/min not worse and h2h holds, a later arm may try 50.
+   Do not go below 50 before Oct 24.
+2. **T-B, only if T-C finished with time left, which it will not before this
+   stream.** Max over teammates, not the mean. Goals, possession, and saves
+   0.5. Touches 0.3. Mechanics and flip reset 0. Try 0.9 on goals, possession,
+   and saves only after the 0.5 arm passes the keep bar.
+3. **T-A skipped.** Both first-man flags are already true.
+4. **After Oct 24:** T-D (closest-to-ball flag and shuffled order, only after
+   the bot observation code matches and a fake-match diff passes), then gate
+   the pass reward on a following goal or possession, and mixed-mode arenas.
+
+Keep bar: h2h >= 0.52 over 400 games, confirmed by a second 400; bumps/min not
+worse than the current policy (reference 2v2 0.66, 3v3 1.21); flip-reset probe
+not worse. Log every result here, including negatives.
