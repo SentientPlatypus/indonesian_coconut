@@ -772,12 +772,13 @@ reaches 500M before the cutoff.
 Timing from 2026-10-21 19:42 UTC, 2v2 ~800 steps/s, 3v3 ~1090 steps/s, eval
 of one arm (both modes, 400 games twice, plus probe) about 8–10 hours:
 
-- E9 check 2 is the gate. 2v2 has ~71M steps left and is the slow side, so
-  that check starts about 2026-10-22 20:00 UTC and its games finish about
-  2026-10-23 00:00 UTC. Twelve hours then remain before the cutoff.
-- **T-C does not fit** if E9 runs through that check. The leftover window is
-  shorter than training plus a double evaluation.
-- **T-B does not fit** after T-C in any version of this window.
+- E9 check 2 was started early, 2026-10-22 16:49 UTC, on the live
+  checkpoints (2v2 ~3144M, 3v3 ~3907M) instead of waiting for 3150M. Flip
+  resets stop when that check returns. T-C then takes the slots.
+- T-C (`team_mate_bump` 300 → 100) can train only until about 02:00 UTC Oct 23,
+  then must be evaluated so the games finish before 12:00 UTC. That is on the
+  order of 30 million steps, not 500 million. The follow-up at 50, and T-B,
+  do not fit before the cutoff.
 - **T-D and the pass-reward / mixed-arena ideas** are after Oct 24.
 
 Order once E9 has stopped and the cutoff still leaves a full evaluation:
