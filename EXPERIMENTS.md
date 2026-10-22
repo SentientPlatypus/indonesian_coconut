@@ -756,6 +756,16 @@ E9b/E9c wait on E9a. Keep bar: normal-spawn resets >= 3/100, assisted
 used/obtained >= 0.6, h2h >= 0.52 over 400 games twice, teammate bumps
 within +10%. Revert at 500M if normal resets are still <= 1.
 
+E9 check 2 (2026-10-22, ~145M flip-reset steps) did not beat the 99bb5f0
+policies, which are 2v2 T2ae 2563M and 3v3 T3ad 3385M. Against those:
+2v2 50.5% (202-198), 3v3 54.5% (218-182), and 0 resets in those 400 games.
+Normal-spawn probe was 0/100 and 1/100. Not promoted. Policies restored to
+99bb5f0 in 527249f. T-C (`team_mate_bump` 300→100, runs T2ap_bump100 and
+T3aq_bump100) started from those policy weights with a fresh optimizer,
+because the full training state for those steps was no longer on disk.
+Evaluation of T-C must start by 02:30 UTC Oct 23 so it finishes before the
+12:00 UTC cutoff. T-B does not fit.
+
 ## Queued after E9 (revised 2026-10-21 19:42 UTC)
 
 Do not start while T2ao_fr / T3ap_fr are running. Do not edit FlipResetReward
