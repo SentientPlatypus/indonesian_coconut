@@ -785,6 +785,11 @@ optimizer, value net carried from the later run). Max over teammates:
 goals, possession, and saves 0.5; touches 0.3; mechanics and flip reset 0.
 Bump penalty stays 300. The 0.9 version waits until this arm passes.
 
+Evals from here play 400 games against the submitted policy and 100 against
+each of six older styles (kickoff, leave-it, linger or spacing, chase-first,
+shadow, and the later rotation policy). A single opponent is not enough to
+keep a run.
+
 ## Queued after E9 (revised 2026-10-21 19:42 UTC)
 
 Do not start while T2ao_fr / T3ap_fr are running. Do not edit FlipResetReward
