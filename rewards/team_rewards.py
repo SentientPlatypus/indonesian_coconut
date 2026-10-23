@@ -461,6 +461,34 @@ class RetreatBumpReward(RewardFunction[AgentID, GameState, float]):
         return rewards
 
 
+class MaxTeammateSpirit(RewardFunction[AgentID, GameState, float]):
+    """r_i' = (1 - tau) * r_i + tau * max(r over i's team, including i).
+
+    The car who earned the reward keeps it. Teammates who did not are pulled
+    up toward that best value. tau 0 leaves the reward unchanged.
+    """
+
+    def __init__(self, reward_fn: RewardFunction, tau: float = 0.0):
+        self.reward_fn = reward_fn
+        self.tau = tau
+
+    def reset(self, agents: List[AgentID], initial_state: GameState, shared_info: Dict[str, Any]) -> None:
+        self.reward_fn.reset(agents, initial_state, shared_info)
+
+    def get_rewards(self, agents: List[AgentID], state: GameState,
+                    is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
+                    shared_info: Dict[str, Any]) -> Dict[AgentID, float]:
+        raw = self.reward_fn.get_rewards(agents, state, is_terminated, is_truncated, shared_info)
+        if self.tau <= 0.0:
+            return raw
+        out = {}
+        for a in agents:
+            team = state.cars[a].team_num
+            best = max(float(raw[b]) for b in agents if state.cars[b].team_num == team)
+            out[a] = (1.0 - self.tau) * float(raw[a]) + self.tau * best
+        return out
+
+
 class TeamSpiritReward(RewardFunction[AgentID, GameState, float]):
     """r_i' = (1 - tau) * r_i + tau * mean(r over i's team)."""
 

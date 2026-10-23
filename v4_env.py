@@ -83,6 +83,7 @@ def _reward_fn(cfg: Dict[str, Any]):
                                       TeamCoordinationReward, OffenseSupportReward, FirstManOnly,
                                       TeammateProximityReward, RetreatBumpReward,
                                       LeaveItToMateReward, FastRotateReward, LastManBackReward,
+                                      MaxTeammateSpirit,
                                       OwnGoalTouchReward, SaveReward)
 
     def _fm(fn):
@@ -90,8 +91,17 @@ def _reward_fn(cfg: Dict[str, Any]):
 
     def _chase(fn):
         return FirstManOnly(fn, ball_z_min=-1e9) if cfg.get("team_chase_first_man_only", False) else fn
+
+    # Per-reward max-teammate spirit. Absent or 0 leaves that reward unchanged.
+    # Goals, possession, saves, and touches only. Mechanics and flip reset stay 0.
+    spirit = cfg.get("max_spirit") or {}
+
+    def _ms(key, fn):
+        tau = float(spirit.get(key, 0.0))
+        return MaxTeammateSpirit(fn, tau) if tau > 0.0 else fn
+
     combined = CombinedReward(
-        (GoalReward(), w["goal"]),
+        (_ms("goal", GoalReward()), w["goal"]),
         # v13 (user on V13NG65 vs Nexto): good air dribbles, finishes hit the
         # crossbar or the post. GoalProb is goal-view solid angle from the ball
         # — the mouth vs bar/post signal. 26 -> 40 in bump_shadow_config.
@@ -101,9 +111,9 @@ def _reward_fn(cfg: Dict[str, Any]):
         (_z("goal_dist", GoalDistReward()), w["goal_dist"]),
         (_chase(_z("speed_to_ball", SpeedTowardBallReward())), w["speed_to_ball"]),
         (_chase(_z("face_ball", FaceBallReward())), w["face_ball"]),
-        (_z("touch", TouchReward()), w["touch"]),
+        (_ms("touch", _z("touch", TouchReward())), w["touch"]),
         # Zero-sum exclusive possession: +r / -r on retain and steal.
-        (PossessionReward(), w["possession"]),
+        (_ms("possession", PossessionReward()), w["possession"]),
         (_z("energy", EnergyReward()), w["energy"]),
         (BoostKeepReward(), w["boost_keep"]),
         (BoostChangeReward(lose_weight=0.8), w["boost_change"]),
@@ -319,7 +329,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         (LastManBackReward(margin=cfg.get("last_man_margin", 200.0), base=cfg.get("last_man_base", 0.25)),
          w.get("last_man", 0.0)),
         (OwnGoalTouchReward(), w.get("own_goal_touch", 0.0)),
-        (SaveReward(), w.get("save", 0.0)),
+        (_ms("save", SaveReward()), w.get("save", 0.0)),
     )
     tau = float(cfg.get("team_spirit", 0.0))
     return TeamSpiritReward(combined, tau) if tau > 0 else combined

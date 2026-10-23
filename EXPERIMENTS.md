@@ -776,8 +776,14 @@ the restored 99bb5f0 policies. Not kept. Trainers stopped.
 
 Both passes needed >= 0.52. 2v2 failed the first. 3v3 failed both. The
 flip-reset probe was worse on assisted spawns. No follow-up to penalty 50.
-T-B was not started: not enough time to train and finish two 400s before
-12:00 UTC. Submitted policies remain the 99bb5f0 files.
+T-B was not started before the cutoff. Submitted policies remain the
+99bb5f0 files.
+
+T-B started 2026-10-23 after the cutoff, on the user's go-ahead. Runs
+T2aq_spirit and T3ar_spirit resume the 99bb5f0 policy weights (fresh
+optimizer, value net carried from the later run). Max over teammates:
+goals, possession, and saves 0.5; touches 0.3; mechanics and flip reset 0.
+Bump penalty stays 300. The 0.9 version waits until this arm passes.
 
 ## Queued after E9 (revised 2026-10-21 19:42 UTC)
 
