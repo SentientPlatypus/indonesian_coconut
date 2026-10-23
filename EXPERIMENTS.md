@@ -766,6 +766,19 @@ because the full training state for those steps was no longer on disk.
 Evaluation of T-C must start by 02:30 UTC Oct 23 so it finishes before the
 12:00 UTC cutoff. T-B does not fit.
 
+T-C result (2026-10-23, ~35–40M steps, penalty 300→100), two 400s against
+the restored 99bb5f0 policies. Not kept. Trainers stopped.
+
+| arm | pass A | pass B | bumps/min (base) | normal resets | assisted obtained/used |
+|---|---|---|---|---|---|
+| 2v2 T2ap | 0.480 (192-208) | 0.542 (217-183) | 0.23 / 0.26 (base 0.27) | 0/100 (submitted 0) | 4/2 (submitted 9/3) |
+| 3v3 T3aq | 0.507 (203-197) | 0.497 (199-201) | 0.44 / 0.32 (base 0.30) | 0/100 (submitted 1) | 11/5 (submitted 18/8) |
+
+Both passes needed >= 0.52. 2v2 failed the first. 3v3 failed both. The
+flip-reset probe was worse on assisted spawns. No follow-up to penalty 50.
+T-B was not started: not enough time to train and finish two 400s before
+12:00 UTC. Submitted policies remain the 99bb5f0 files.
+
 ## Queued after E9 (revised 2026-10-21 19:42 UTC)
 
 Do not start while T2ao_fr / T3ap_fr are running. Do not edit FlipResetReward
