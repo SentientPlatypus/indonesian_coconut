@@ -798,6 +798,11 @@ for the current policy. Normal flip-reset probe 2/100 versus 0/100. Assisted
 10 obtained / 3 used versus 12 / 5. Promoted as afef597. 0.9 spirit started
 for 3v3 only (T3as_spirit09) from the latest full checkpoint of that run.
 
+0.9 check (~50M steps, 2026-10-24): not kept. 0.492 (197-203) and 0.475
+(190-210) against the 0.5 policy. Older styles 0.49 to 0.66. Bumps were
+lower (0.38 vs 0.55). Normal resets 0/100 both. Assisted 14 obtained / 10
+used versus 11 / 4. Trainer stopped. 3v3.pt stays the 0.5 spirit policy.
+
 ## Queued after E9 (revised 2026-10-21 19:42 UTC)
 
 Do not start while T2ao_fr / T3ap_fr are running. Do not edit FlipResetReward
