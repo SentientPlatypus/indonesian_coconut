@@ -803,6 +803,37 @@ for 3v3 only (T3as_spirit09) from the latest full checkpoint of that run.
 lower (0.38 vs 0.55). Normal resets 0/100 both. Assisted 14 obtained / 10
 used versus 11 / 4. Trainer stopped. 3v3.pt stays the 0.5 spirit policy.
 
+## E10 queued (not started)
+
+Disco-style aggression, then demo role, then block/save, then kickoff.
+Starts only after a training-stack upgrade (Steps 0-5, rlgym-learn) finishes
+or is stopped. That upgrade is not in this repo: no `stack-upgrade` branch
+and no step list. E10 is waiting.
+
+When it starts: newest stack that passed its gates, warm-start from that
+stack's best 2v2/3v3 checkpoint, new names `E10x_2v2` / `E10x_3v3` on
+`stack-upgrade` or a child branch. One arm at a time, cumulative only if the
+previous arm passed. Do not touch FlipResetReward, `1v1.pt`, `2v2.pt`,
+`3v3.pt`, or existing checkpoints. Do not copy a winner into
+`rlbot_submission/` without an explicit sign-off.
+
+Live facts E10 has to change, from T2aq_spirit / T3ar_spirit / T3as_spirit09
+on 2026-10-24: demo 50, retreat_bump 60, save 150, shadow_space 18,
+team_shadow_aware true, possession 68 and not zero-sum, goal 1200 and concede
+is the same 1200 (GoalReward is +1/-1), no kickoff reward, kickoff starts are
+already 49% (2v2) and 57% (3v3) so E10e would be a skip, teammate bump 300,
+both first-man flags true.
+
+Arms: E10a possession zero-sum scaled by ball position, plus an opponent
+shot/flick/dribble team penalty, plus concede at 0.8x goal. E10b skip if E10a
+already did the concede shift. E10c zero-sum demos paid only to non-first-man,
+own-goal bump penalty, anti-farm. E10d retreat_bump 15 and save 40 for
+non-first-man only, shadow 3 with team_shadow_aware, save zero-sum 0.5.
+Checks every ~45M, 300-500M per arm. Keep only if h2h >= 0.52 twice, goals
+against not worse, teammate bumps not worse, FR probe not worse, and for
+E10c the non-first-man demo share rises. A failed arm reverts to the last
+passing checkpoint.
+
 ## Queued after E9 (revised 2026-10-21 19:42 UTC)
 
 Do not start while T2ao_fr / T3ap_fr are running. Do not edit FlipResetReward
