@@ -790,6 +790,14 @@ each of six older styles (kickoff, leave-it, linger or spacing, chase-first,
 shadow, and the later rotation policy). A single opponent is not enough to
 keep a run.
 
+T-B check (2026-10-24, ~50M steps). 2v2 not kept: 0.495 then 0.502 against
+99bb5f0. Older styles 0.44 to 0.56. Bumps lower than the current policy.
+3v3 kept: 0.557 (223-177) and 0.532 (213-187). Older styles 0.62 to 0.68,
+and 0.49 against the later rotation policy. Bumps 0.28 and 0.37 versus 0.36
+for the current policy. Normal flip-reset probe 2/100 versus 0/100. Assisted
+10 obtained / 3 used versus 12 / 5. Promoted as afef597. 0.9 spirit started
+for 3v3 only (T3as_spirit09) from the latest full checkpoint of that run.
+
 ## Queued after E9 (revised 2026-10-21 19:42 UTC)
 
 Do not start while T2ao_fr / T3ap_fr are running. Do not edit FlipResetReward
