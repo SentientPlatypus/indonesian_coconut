@@ -1,0 +1,104 @@
+# E8B2 1v1 reward recipe.
+# Source: data/loop_state/experiments/E8b_shell_contact_strong.json merged
+# over loop_config.DEFAULT_CONFIG, as v4_env._reward_fn consumes it.
+# Keys left out fall back to the v4_env defaults.
+
+[weights]
+goal = 1200.0
+goal_prob = 40.0
+ball_travel = 10.0
+vel_ball_to_goal = 12.0
+goal_dist = 3.0
+speed_to_ball = 1.0
+face_ball = 1.0
+touch = 6.0
+possession = 68.0
+energy = 3.0
+boost_keep = 5.0
+boost_change = 8.0
+aerial_boost = 14.0
+aerial_distance = 40.0
+in_air = 0.0
+airdribble = 40.0
+airdribble_seq = 55.0
+wall_pop = 7.0
+flick = 22.0
+flip_reset = 70.0
+recover = 70.0
+demo = 50.0
+contact_quality = 250.0
+front_bump_setup = 24.0
+overextend = 0.0
+safe_boost = 16.0
+shadow_space = 18.0
+pressure_flick = 36.0
+high_ball = 18.0
+range_carry = 28.0
+clear_path = 42.0
+ang_vel = 1.0
+
+# r_i - opp_scale * mean(r_opponents)
+[zero_sum]
+goal_dist = 1.0
+energy = 1.0
+face_ball = 1.0
+speed_to_ball = 1.0
+vel_ball_to_goal = 1.0
+touch = 1.0
+
+[airdribble]          # airdribble_*
+w_goal_align = 1.0
+goal_speed_target = 700.0
+push_floor = 0.35
+finish_floor = 0.5
+
+[takeoff]             # airdribble_takeoff_* / pressure_* / advantage_floor
+speed_near = 500.0
+speed_far = 1700.0
+dist_ref = 9000.0
+floor = 0.22
+ok_frac = 0.85
+pressure_dist = 1200.0
+pressure_floor = 0.1
+advantage_floor = 0.25
+
+[flip_reset]          # fr_*
+min_wheels_cos = 0.55
+approach_per_second = 0.3
+approach_radius = 700.0
+approach_budget_ms = 1500.0
+hold_per_second = 0.25
+hold_window_ms = 1200.0
+use_window_ms = 2500.0
+use_weight = 2.5
+obtain_decay = 0.55
+
+[demo]                # aerial_bump_* / ground_bump_* / bump_wheel_scale
+aerial_attack_extra = 1.9
+aerial_attack_min_boost = 20.0
+aerial_hard_target = 900.0
+aerial_hard_power = 2.0
+aerial_ball_min_z = 300.0
+aerial_ball_max_dist = 1800.0
+aerial_away_weight = 0.5
+aerial_carry_min_dist = 300.0
+aerial_front_margin = 80.0
+aerial_require_boost = true
+aerial_nose_goal_min = 0.4
+aerial_nose_hit_min = 0.1
+ground_attack_extra = 1.5
+ground_ball_max_dist = 2200.0
+ground_carry_min_dist = 180.0
+wheel_scale = 0.0
+
+[contact_quality]     # contact_*
+hard_target = 900.0
+wheel_penalty = 0.6
+
+[safe_boost]          # safe_boost_*
+target = 80.0
+min_ball_dist = 1400.0
+
+[clear_path]          # clear_path_*
+min_lead = 900.0
+lane_radius = 1100.0

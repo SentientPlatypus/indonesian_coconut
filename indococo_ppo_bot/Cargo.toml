@@ -1,0 +1,59 @@
+[package]
+name = "indococo-bot"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0"
+description = "indonesian_coconut 1v1 bot on indococo-ppo: E8B2 rewards, 1v1.pt obs/actions, RLBot deploy"
+publish = false
+
+[lib]
+name = "indococo_bot"
+
+[[bin]]
+name = "indococo-train"
+path = "src/bin/train.rs"
+required-features = ["train"]
+
+[[bin]]
+name = "indococo-rlbot"
+path = "src/bin/rlbot.rs"
+required-features = ["rlbot"]
+
+[dependencies]
+glam = { version = "0.34", features = ["serde"] }
+rand = "0.10.1"
+rlgymppo-utils = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "11e58c9e7369885a2c37f9df87a907dbe0d5dd42" }
+serde = { version = "1", features = ["derive"] }
+toml = "1.1"
+
+# training
+burn = { version = "0.22.0", optional = true, default-features = false, features = ["std"] }
+burn-store = { version = "0.22.1", optional = true, features = ["pytorch"] }
+rlgymppo = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "11e58c9e7369885a2c37f9df87a907dbe0d5dd42", optional = true, default-features = false }
+serde_json = { version = "1", optional = true }
+
+# deploy
+rlgymppo-model = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "11e58c9e7369885a2c37f9df87a907dbe0d5dd42", optional = true }
+rlgymppo-rlbot = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "11e58c9e7369885a2c37f9df87a907dbe0d5dd42", optional = true }
+rlbot-rocketsim = { version = "0.2.0", optional = true }
+rustc-hash = { version = "2.1.1", optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+
+[features]
+default = []
+train = ["dep:rlgymppo", "dep:burn", "dep:burn-store", "dep:serde_json", "burn/autodiff", "burn/flex"]
+cuda = ["train", "rlgymppo/cuda"]
+fusion = ["train", "rlgymppo/fusion"]
+torch = ["train", "rlgymppo/torch"]
+rlbot = ["dep:rlgymppo-model", "dep:rlgymppo-rlbot", "dep:rlbot-rocketsim", "dep:rustc-hash", "dep:burn", "burn/flex"]
+
+[profile.release]
+debug = 1
+
+[profile.dist]
+inherits = "release"
+debug = false
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,22 @@
+# Learner settings for indococo-train. CLI: indococo-train train config/train.toml
+reward_config = "config/e8b2_1v1.toml"
+checkpoints = "checkpoints"
+backend = "torch"        # torch (LibTorch CUDA) | cuda (Burn CubeCL)
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = 100_000
+mini_batch_size = 50_000
+epochs = 2
+policy_lr = 1e-4
+critic_lr = 1e-4
+entropy = 0.01
+gamma = 0.995
+lambda = 0.95
+policy_bf16 = false      # bf16 policy raised KL ~5x in the fork A/B; keep f32
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 6
+iterations = 0           # 0 = run until stopped
+self_play_old_versions = true
+skill_tracker = true
