@@ -97,7 +97,7 @@ for arm in $ARMS; do
     tmux new-session -d -s "$session" -n train "$run/train.sh"
   fi
   if ! tmux list-windows -t "$session" -F '#W' | grep -qx eval; then
-    tmux new-window -d -t "$session" -n eval "env TRAIN_BIN='$run/indococo-train' PY='$PY' EVERY=$EVERY GAMES=$GAMES PROCS=$PROCS '$CRATE/tools/eval_loop.sh' '$run/checkpoints' '$run/logs/evals.jsonl' '$run/bots/best' 2>&1 | tee -a '$run/logs/eval_loop.log'; sleep infinity"
+    tmux new-window -d -t "$session" -n eval "env LD_LIBRARY_PATH='$LIBTORCH_LIB' TRAIN_BIN='$run/indococo-train' PY='$PY' EVERY=$EVERY GAMES=$GAMES PROCS=$PROCS '$CRATE/tools/eval_loop.sh' '$run/checkpoints' '$run/logs/evals.jsonl' '$run/bots/best' 2>&1 | tee -a '$run/logs/eval_loop.log'; sleep infinity"
   fi
   until [[ -f $run/TRAIN_DONE ]]; do
     status
