@@ -70,23 +70,49 @@ https://github.com/user-attachments/assets/51c9a929-da8c-4328-8bf6-856f14cc8c4f
 
 ## Project layout
 
+`master` holds the Python (RLGym v2 + rlgym-ppo) training stack and the live
+RLBot submission. **The new Rust bot** (indococo-ppo framework, same rewards and
+obs, RLBot v5 native binary) is on the
+[`indococo-ppo`](https://github.com/SentientPlatypus/indonesian_coconut/tree/indococo-ppo)
+branch, which uses these files from `master`:
+
+- `rlbot_submission/policies/1v1.pt` as its warm start and h2h reference;
+- `v4_env.py`, `loop_config.py`, `rewards/` and `rl_math/` to regenerate its reward parity fixture;
+- `eval_match.py` (and `v4_env.py`, `loop_config.py`) for the h2h evals.
+
 ```
-freestyler.py            Current training entry point (loads data/checkpoints/V3/17.9B)
-train_template.py        Clean starting point for a new run (fresh rewards, no checkpoint)
-rsv_renderer.py          RocketSimVis renderer (rlgym v2), used by the trainers
+rlbot_submission/        Live RLBot submission (1v1/2v2/3v3 policies). Do not modify.
+freestyler_v4.py         V4 trainer, driven by the self-improving loop (LOOP.md)
+v4_env.py                Env, rewards and obs from a config dict (trainer + evaluator)
+loop_config.py           Config schema + hill-climb knobs for the loop
+curriculum_mutators.py   Curriculum state setters (air dribbles, flip resets, ...)
+opponent_pool.py         Frozen-opponent pool for training (optional)
+eval_match.py            Headless RocketSim h2h evaluator (candidate vs opponent .pt)
+rsv_renderer.py          RocketSimVis renderer, used by the trainer
 rewards/                 Reward functions
     customRewardsGYM.py    Core shaping rewards
-    freestyleMechs.py      Freestyle-mechanic rewards (flicks, pogo, wall dash, ...)
-rl_math/                 Geometry helpers (ball trajectory, goal solid-angle)
+    freestyleMechs.py      Freestyle-mechanic rewards (flicks, air dribbles, flip resets, ...)
+    team_rewards.py        2v2/3v3 team-play rewards
+    zero_sum.py            Zero-sum wrapper
+rl_math/                 Geometry helpers (ball trajectory, goal solid angle)
+tools/                   Loop, eval and analysis scripts (see LOOP.md, EXPERIMENTS.md)
 collision_meshes/        RocketSim arena collision data (required at runtime)
-assets/                  README images
-docs/highlights/         Highlight clips
-tools/                   RLBot binaries (rlbotgui, RLBotServer, ...)
-archive/                 Older/unused scripts kept for reference
-data/                    Checkpoints & training data (gitignored; not in the repo)
-Rlgym-v2-to-rlbot-v5/    Submodule: deploy a trained policy as an RLBot v5 bot
-RocketSimVis/            Submodule: the visualizer
+checkpoints_to_test/     Exported loop policies; the eval yardstick panel (LOOP.md, tools/exp_panel.sh)
+data/checkpoints/V3/     The 17.9B V3 policy: freestyler_v4's fallback start point
+assets/, docs/highlights/  README images and highlight clips
+LOOP.md, EXPERIMENTS.md  The self-improving loop and the experiment log
+Rlgym-v2-to-rlbot-v5/    Submodule: RLBot v5 deploy template (Element opponent for evals)
+RocketSimVis/            Submodule: the visualizer rsv_renderer.py talks to
 ```
+
+The RLBot v5 server and GUI are not vendored. Get them from <https://rlbot.org>
+(or <https://github.com/RLBot/core/releases> and <https://github.com/RLBot/gui/releases>).
+RLArenaCollisionDumper (<https://github.com/ZealanL/RLArenaCollisionDumper>)
+is only needed to regenerate `collision_meshes/`.
+
+Removed in the 2026-10 cleanup and still in git history: the V3 trainer
+(`freestyler.py`), `train_template.py`, `archive/`, the old `indonesiancoco/`
+RLBot v4 bot (superseded by `rlbot_submission/`), and the vendored RLBot binaries.
 
 ## EC2 instance (in the works)
 `ssh -i ~/.ssh/indococo.pem ubuntu@54.167.88.183`
