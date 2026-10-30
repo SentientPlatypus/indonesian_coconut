@@ -13,7 +13,10 @@ pub struct NoBoostOverextend {
 
 impl Default for NoBoostOverextend {
     fn default() -> Self {
-        Self { min_boost: 25.0, deadzone: 0.10 }
+        Self {
+            min_boost: 25.0,
+            deadzone: 0.10,
+        }
     }
 }
 

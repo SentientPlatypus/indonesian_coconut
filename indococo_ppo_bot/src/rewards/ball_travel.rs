@@ -75,7 +75,11 @@ impl StepReward for BallTravel {
 
         if let (Some(team), Some(last)) = (state.scoring_team(), self.last_touch) {
             let norm = self.distance_since_touch * self.normalization;
-            let mul = if team == state.cars[last].team { 1.0 } else { -1.0 };
+            let mul = if team == state.cars[last].team {
+                1.0
+            } else {
+                -1.0
+            };
             rewards[last] += mul * norm * self.goal_weight;
         }
 

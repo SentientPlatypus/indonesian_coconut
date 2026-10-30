@@ -164,7 +164,12 @@ impl StepReward for FlipReset {
                 rewards[a] += self.approach_per_step * close * aim;
             }
 
-            if touched && got_flip_now && ball_high && dist <= self.max_car_ball_dist && wheels_cos >= self.p.min_wheels_cos {
+            if touched
+                && got_flip_now
+                && ball_high
+                && dist <= self.max_car_ball_dist
+                && wheels_cos >= self.p.min_wheels_cos
+            {
                 self.has_reset.insert(a);
                 self.reset_at.insert(a, self.step);
                 let n = self.n_resets_air[a];
@@ -178,7 +183,8 @@ impl StepReward for FlipReset {
                     self.has_reset.remove(&a);
                     self.reset_at.remove(&a);
                 } else if age <= self.hold_window_steps && dist <= self.hold_radius {
-                    rewards[a] += self.hold_per_step * (1.0 - age as f64 / self.hold_window_steps as f64);
+                    rewards[a] +=
+                        self.hold_per_step * (1.0 - age as f64 / self.hold_window_steps as f64);
                 }
             }
 
@@ -196,7 +202,8 @@ impl StepReward for FlipReset {
                 let dv_scale = (dv / self.power_dv_target.max(1.0)).min(1.0);
                 let power = self.power_floor
                     + (1.0 - self.power_floor)
-                        * ((1.0 - self.power_dv_weight) * speed_scale + self.power_dv_weight * dv_scale);
+                        * ((1.0 - self.power_dv_weight) * speed_scale
+                            + self.power_dv_weight * dv_scale);
                 rewards[a] += self.p.use_weight * power;
             }
         }

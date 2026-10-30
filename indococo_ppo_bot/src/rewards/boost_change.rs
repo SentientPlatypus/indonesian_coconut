@@ -13,7 +13,11 @@ pub struct BoostChange {
 impl BoostChange {
     #[must_use]
     pub fn new(gain_weight: f64, lose_weight: f64) -> Self {
-        Self { gain_weight, lose_weight, prev: Vec::new() }
+        Self {
+            gain_weight,
+            lose_weight,
+            prev: Vec::new(),
+        }
     }
 }
 

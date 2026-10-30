@@ -91,7 +91,10 @@ impl StepReward for WallPopSetup {
                 if car.boost < self.min_follow_boost {
                     continue;
                 }
-                if !car.on_ground() && car.ball_touches > 0 && self.follow_geometry_good(car, ball_pos) {
+                if !car.on_ground()
+                    && car.ball_touches > 0
+                    && self.follow_geometry_good(car, ball_pos)
+                {
                     rewards[a] += self.follow_bonus;
                     self.pop_active[a] = false;
                 }
@@ -107,7 +110,11 @@ impl StepReward for WallPopSetup {
             }
             return rewards;
         }
-        let n_infield = if ball_pos.x > 0.0 { DVec3::NEG_X } else { DVec3::X };
+        let n_infield = if ball_pos.x > 0.0 {
+            DVec3::NEG_X
+        } else {
+            DVec3::X
+        };
         for (a, car) in state.cars.iter().enumerate() {
             if car.ball_touches > self.prev_touches[a] {
                 let up_v = ball_vel.z;
@@ -116,7 +123,8 @@ impl StepReward for WallPopSetup {
                 if up_v >= self.min_up_v && infield_v >= self.min_infield_v {
                     let up_term = (up_v / BALL_MAX_SPEED).clamp(0.0, 1.0);
                     let infield_term = (infield_v / BALL_MAX_SPEED).clamp(0.0, 1.0);
-                    let mut payout = self.base + self.up_scale * up_term + self.infield_scale * infield_term;
+                    let mut payout =
+                        self.base + self.up_scale * up_term + self.infield_scale * infield_term;
                     if parallel_v <= self.max_parallel_v && ball_speed <= self.max_total_v {
                         payout += self.clean_pop_bonus;
                     }

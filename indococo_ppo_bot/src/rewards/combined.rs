@@ -26,7 +26,10 @@ pub struct CombinedReward {
 impl CombinedReward {
     #[must_use]
     pub fn new(terms: Vec<Term>) -> Self {
-        Self { terms, last: Vec::new() }
+        Self {
+            terms,
+            last: Vec::new(),
+        }
     }
 
     pub fn reset_view(&mut self, initial: &StateView) {

@@ -10,6 +10,10 @@ impl StepReward for InAir {
     fn reset(&mut self, _initial: &StateView) {}
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
-        state.cars.iter().map(|c| if c.on_ground() { 0.0 } else { 1.0 }).collect()
+        state
+            .cars
+            .iter()
+            .map(|c| if c.on_ground() { 0.0 } else { 1.0 })
+            .collect()
     }
 }

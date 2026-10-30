@@ -56,13 +56,21 @@ pub struct PossessionRangeCarry {
 impl PossessionRangeCarry {
     #[must_use]
     pub fn new(t: TakeoffParams) -> Self {
-        Self { control_radius: 550.0, per_tick: 1.0 / TICKS_PER_SECOND, t, prev_ball_y: HashMap::new(), last_touch: None }
+        Self {
+            control_radius: 550.0,
+            per_tick: 1.0 / TICKS_PER_SECOND,
+            t,
+            prev_ball_y: HashMap::new(),
+            last_touch: None,
+        }
     }
 }
 
 impl StepReward for PossessionRangeCarry {
     fn reset(&mut self, initial: &StateView) {
-        self.prev_ball_y = (0..initial.cars.len()).map(|a| (a, initial.ball.pos.y)).collect();
+        self.prev_ball_y = (0..initial.cars.len())
+            .map(|a| (a, initial.ball.pos.y))
+            .collect();
         self.last_touch = None;
     }
 
@@ -105,7 +113,12 @@ impl StepReward for PossessionRangeCarry {
             let under = !car.on_ground() && ball.z > 220.0 && dist < 520.0;
             let popping = bvel.z > 250.0 && ball.z > 180.0 && dist < 600.0;
             let have = takeoff_have_speed(car, bvel);
-            let need = takeoff_need_speed(dist_to_opp_goal_y(car, ball), self.t.speed_near, self.t.speed_far, self.t.dist_ref);
+            let need = takeoff_need_speed(
+                dist_to_opp_goal_y(car, ball),
+                self.t.speed_near,
+                self.t.speed_far,
+                self.t.dist_ref,
+            );
             let speed_ok = have >= self.t.ok_frac * need;
             let committed = !car.on_ground() && ball.z >= 380.0 && have >= 700.0;
             let under_pressure = opp_d < self.t.pressure_dist && !committed;

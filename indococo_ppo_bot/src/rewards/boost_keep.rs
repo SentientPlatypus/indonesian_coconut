@@ -12,7 +12,10 @@ pub struct BoostKeep {
 
 impl Default for BoostKeep {
     fn default() -> Self {
-        Self { reward_per_tick: 1.0 / TICKS_PER_SECOND, prev_ticks: 0 }
+        Self {
+            reward_per_tick: 1.0 / TICKS_PER_SECOND,
+            prev_ticks: 0,
+        }
     }
 }
 
@@ -25,6 +28,10 @@ impl StepReward for BoostKeep {
         let ticks = state.tick_count as f64 - self.prev_ticks as f64;
         let mul = self.reward_per_tick * ticks;
         self.prev_ticks = state.tick_count;
-        state.cars.iter().map(|c| (0.01 * c.boost).sqrt() * mul).collect()
+        state
+            .cars
+            .iter()
+            .map(|c| (0.01 * c.boost).sqrt() * mul)
+            .collect()
     }
 }

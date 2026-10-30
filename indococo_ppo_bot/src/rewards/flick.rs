@@ -43,7 +43,11 @@ fn time_to_point(pos: DVec3, vel: DVec3, target: DVec3) -> f64 {
     let d = (target - pos).length();
     let v_along = vel.dot((target - pos) / (d + 1e-6));
     let eff = v_along.clamp(0.0, CAR_MAX_SPEED);
-    if eff < 0.2 * CAR_MAX_SPEED { d / CAR_MAX_SPEED.max(1e-6) } else { d / eff }
+    if eff < 0.2 * CAR_MAX_SPEED {
+        d / CAR_MAX_SPEED.max(1e-6)
+    } else {
+        d / eff
+    }
 }
 
 impl StepReward for Flick {
@@ -61,11 +65,18 @@ impl StepReward for Flick {
         self.last_ball_height = ball_pos.z;
         self.last_ball_vel = ball_vel;
 
-        if let Some(agent) = self.last_touch.filter(|_| delta_v > self.velocity_threshold) {
+        if let Some(agent) = self
+            .last_touch
+            .filter(|_| delta_v > self.velocity_threshold)
+        {
             let car = &state.cars[agent];
             let dist = (ball_pos - car.pos).length();
-            if dist < self.dribble_distance_threshold && ball_pos.z >= self.min_ball_height && !car.on_ground() {
-                let mut reward = (delta_v / BALL_MAX_SPEED + delta_h / (2.5 * GOAL_HEIGHT)).min(1.0);
+            if dist < self.dribble_distance_threshold
+                && ball_pos.z >= self.min_ball_height
+                && !car.on_ground()
+            {
+                let mut reward =
+                    (delta_v / BALL_MAX_SPEED + delta_h / (2.5 * GOAL_HEIGHT)).min(1.0);
                 let under_pressure = state.cars.iter().any(|o| {
                     if o.team == car.team {
                         return false;
@@ -73,7 +84,8 @@ impl StepReward for Flick {
                     let rel_pos = ball_pos - o.pos;
                     let rel_vel = o.vel - car.vel;
                     let d = rel_pos.length();
-                    d < self.challenge_distance && rel_vel.dot(rel_pos / (d + 1e-6)) > self.challenge_closing_speed
+                    d < self.challenge_distance
+                        && rel_vel.dot(rel_pos / (d + 1e-6)) > self.challenge_closing_speed
                 });
                 if under_pressure {
                     reward *= self.challenge_bonus;

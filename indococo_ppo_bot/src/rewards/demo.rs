@@ -85,10 +85,19 @@ pub struct Demo {
 impl Demo {
     #[must_use]
     pub fn new(p: DemoParams) -> Self {
-        Self { p, prev: Vec::new() }
+        Self {
+            p,
+            prev: Vec::new(),
+        }
     }
 
-    fn extra(&self, agent: usize, state: &StateView, victim_pos: DVec3, car_ball: f64) -> (f64, f64) {
+    fn extra(
+        &self,
+        agent: usize,
+        state: &StateView,
+        victim_pos: DVec3,
+        car_ball: f64,
+    ) -> (f64, f64) {
         let p = &self.p;
         let car = &state.cars[agent];
         let ball = state.ball.pos;
@@ -96,7 +105,8 @@ impl Demo {
         let nose_hit = nose_into_not_wheels(car, victim_pos);
         let nose_ok = nose_g >= p.aerial_nose_goal_min && nose_hit >= p.aerial_nose_hit_min;
         let mut extra = 0.0;
-        if p.aerial_attack_extra > 0.0 && !car.on_ground() && car.boost >= p.aerial_attack_min_boost {
+        if p.aerial_attack_extra > 0.0 && !car.on_ground() && car.boost >= p.aerial_attack_min_boost
+        {
             if car.attack_sign() * car.pos.y > 0.0 {
                 let in_air_play = ball.z >= p.aerial_ball_min_z
                     && car_ball <= p.aerial_ball_max_dist
@@ -128,7 +138,9 @@ impl StepReward for Demo {
         let p = &self.p;
         let mut rewards = vec![0.0; state.cars.len()];
         for (agent, car) in state.cars.iter().enumerate() {
-            let Some(victim) = car.bump_victim else { continue };
+            let Some(victim) = car.bump_victim else {
+                continue;
+            };
             let victim_car = &state.cars[victim];
             if victim_car.is_demoed() {
                 if !self.prev[victim].is_demoed() {
@@ -144,7 +156,9 @@ impl StepReward for Demo {
             let (extra, nose_g) = self.extra(agent, state, victim_car.pos, car_ball);
             let mut bump_scale = p.bump_acceleration_reward;
             if extra > 0.0 {
-                let hardness = (acceleration / p.aerial_hard_target.max(1.0)).min(1.0).powf(p.aerial_hard_power);
+                let hardness = (acceleration / p.aerial_hard_target.max(1.0))
+                    .min(1.0)
+                    .powf(p.aerial_hard_power);
                 let mut away = 0.0;
                 if acceleration > 1e-6 {
                     let to_ball = ball - victim_car.pos;
@@ -153,13 +167,21 @@ impl StepReward for Demo {
                         away = (-(dv / acceleration).dot(to_ball / n)).max(0.0);
                     }
                 }
-                bump_scale += extra * hardness * (1.0 - p.aerial_away_weight + p.aerial_away_weight * away) * nose_g;
+                bump_scale += extra
+                    * hardness
+                    * (1.0 - p.aerial_away_weight + p.aerial_away_weight * away)
+                    * nose_g;
             }
             let mut reward = bump_scale * acceleration / CAR_MAX_SPEED;
-            if p.wheel_scale != 1.0 && bump_contact_part(car, victim_car.pos) == ContactPart::Wheels {
+            if p.wheel_scale != 1.0 && bump_contact_part(car, victim_car.pos) == ContactPart::Wheels
+            {
                 reward *= p.wheel_scale;
             }
-            rewards[agent] += if car.team == victim_car.team { -reward } else { reward };
+            rewards[agent] += if car.team == victim_car.team {
+                -reward
+            } else {
+                reward
+            };
         }
         self.prev = state.cars.clone();
         rewards

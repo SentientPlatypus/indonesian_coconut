@@ -18,6 +18,10 @@ impl StepReward for AngVel {
     fn reset(&mut self, _initial: &StateView) {}
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
-        state.cars.iter().map(|c| -self.penalty * c.ang_vel.length() / CAR_MAX_ANG_VEL).collect()
+        state
+            .cars
+            .iter()
+            .map(|c| -self.penalty * c.ang_vel.length() / CAR_MAX_ANG_VEL)
+            .collect()
     }
 }

@@ -26,7 +26,11 @@ impl StepReward for ZeroSum {
         (0..state.cars.len())
             .map(|i| {
                 let opp: Vec<f64> = state.opponents(i).map(|j| raw[j]).collect();
-                let mean = if opp.is_empty() { 0.0 } else { opp.iter().sum::<f64>() / opp.len() as f64 };
+                let mean = if opp.is_empty() {
+                    0.0
+                } else {
+                    opp.iter().sum::<f64>() / opp.len() as f64
+                };
                 raw[i] - self.opp_scale * mean
             })
             .collect()

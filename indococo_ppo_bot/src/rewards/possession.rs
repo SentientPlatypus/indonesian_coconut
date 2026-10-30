@@ -46,7 +46,9 @@ impl Possession {
     }
 
     fn possessor(&self, state: &StateView) -> Option<usize> {
-        let controls: Vec<usize> = (0..state.cars.len()).filter(|&a| self.in_control(a, state)).collect();
+        let controls: Vec<usize> = (0..state.cars.len())
+            .filter(|&a| self.in_control(a, state))
+            .collect();
         let first_team = state.cars[*controls.first()?].team;
         if controls.iter().any(|&a| state.cars[a].team != first_team) {
             return None;

@@ -35,7 +35,11 @@ impl StepReward for Energy {
                     energy += JUMP_POTENTIAL;
                 }
                 if c.has_flip() {
-                    let impulse = if speed <= 1700.0 { 500.0 + speed / 17.0 } else { 600.0 - (speed - 1700.0) };
+                    let impulse = if speed <= 1700.0 {
+                        500.0 + speed / 17.0
+                    } else {
+                        600.0 - (speed - 1700.0)
+                    };
                     let impulse = (impulse - 25.0).max(0.0);
                     energy += 0.9 * 0.5 * CAR_MASS * impulse * impulse;
                 }

@@ -18,7 +18,10 @@ pub struct GoalProb {
 
 impl Default for GoalProb {
     fn default() -> Self {
-        Self { gamma: 1.0, prob: 0.5 }
+        Self {
+            gamma: 1.0,
+            prob: 0.5,
+        }
     }
 }
 
@@ -67,7 +70,11 @@ impl StepReward for GoalProb {
         };
         let reward = 2.0 * (self.gamma * prob - self.prob);
         self.prob = prob;
-        state.cars.iter().map(|c| if c.is_blue() { reward } else { -reward }).collect()
+        state
+            .cars
+            .iter()
+            .map(|c| if c.is_blue() { reward } else { -reward })
+            .collect()
     }
 }
 
