@@ -18,10 +18,6 @@ The Python policy beat Nexto 42–11 and Element 47–3 in RLBot matches
 | [`indococo_ppo_bot/`](indococo_ppo_bot/README.md) | The Rust bot: rewards (one module each, with parity tests against Python), obs/actions, the trainer (`train`, `import`, `export`, `record`) and the RLBot client. **Start here.** |
 | `rlbot_indococo_ppo/` | RLBot v5 package: `bot.toml`, Linux and Windows binaries, `weights/actor.bpk`. |
 | `collision_meshes/` | RocketSim soccar meshes. The trainer loads them from the repo root; the RLBot binary embeds them. |
-| `v4_env.py`, `loop_config.py`, `rewards/`, `rl_math/` | Python reference reward, obs and config code. `indococo_ppo_bot/tools/parity.py` uses it to produce the expected rewards for the parity tests. |
-| `eval_match.py` | Headless RocketSim evaluator used by the head-to-head evals against `1v1.pt`. |
-| `rlbot_submission/` | The current Python championship submission. `policies/1v1.pt` is the warm-start and h2h reference. Left untouched. |
-| `tools/` | RLBot server/GUI binaries and RLArenaCollisionDumper (for regenerating meshes). |
 | `assets/` | README images. |
 
 ## Quick start
@@ -35,5 +31,25 @@ cargo build --release --features torch,cuda --bin indococo-train
 Training, warm start, critic warm-up, evals and deploy are covered in
 [`indococo_ppo_bot/README.md`](indococo_ppo_bot/README.md).
 
-The Python training stack (rlgym-ppo trainer, curriculum, A/B checkpoints, old
-RLBot v4 bot) was removed from this branch. It is still on `master`.
+## What lives on `master`
+
+This branch holds only the Rust bot. Everything else is still on `master`:
+
+- the Python training stack (rlgym-ppo trainer, curriculum, A/B checkpoints, old RLBot v4 bot);
+- the Python reference rewards and evaluator (`v4_env.py`, `loop_config.py`,
+  `eval_match.py`, `rewards/`, `rl_math/`), needed only to regenerate the
+  parity fixture or run h2h evals;
+- `rlbot_submission/`, the live Python submission. Its `policies/1v1.pt` is
+  the warm-start and h2h reference:
+  `git show master:rlbot_submission/policies/1v1.pt > 1v1.pt`.
+
+## External tools
+
+- **RLBot v5 server and GUI**, to run `rlbot_indococo_ppo/` in matches:
+  <https://rlbot.org> (download page) or
+  <https://github.com/RLBot/core/releases> and
+  <https://github.com/RLBot/gui/releases>.
+- **RLArenaCollisionDumper**, only to regenerate `collision_meshes/` (for
+  example after a Rocket League map update):
+  <https://github.com/ZealanL/RLArenaCollisionDumper>. Run it with Rocket
+  League open and copy the `.cmf` files into `collision_meshes/soccar/`.
