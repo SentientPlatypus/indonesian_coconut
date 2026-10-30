@@ -1,0 +1,30 @@
+# ADB: air dribble touches + gated air dribble bump / demo reward.
+#
+# air_touch_height: 0.0078 per step at weight 1 in the 430M dry run against a
+# dense positive total of ~3.8 per step, so weight 30 targets ~6% (0.23/step).
+# aerial_distance (weight 40, the unfarmable base) is already in E8B2.
+#
+# air_dribble_bump is zero-sum and victim-gated. Weight 40: a ground bump pays
+# 12, an air dribble bump 36 (x up to 2 with the ball going at goal), a demo
+# 40-120 plus 4/s while the opponent is demoed (~+30% over a 3 s respawn).
+# At the dry-run rates (1.6 bumps, 0.4 demos per car-minute) that is ~1.5% of
+# the per-step reward, growing as the behavior is learned. It adds to the
+# base demo term (50). The wall_air_dribble setter takes 25% of resets.
+extends = "common_rewards.toml"
+
+[weights]
+air_touch_height = 30.0
+air_dribble_bump = 40.0
+
+[air_touch_height]
+min_ball_height = 250.0
+decay = 0.8
+goal_bonus = 1.0
+
+[air_dribble_bump]
+bump = 0.3
+demo = 1.0
+demoed_per_second = 0.1
+air_dribble_bonus = 2.0
+goal_bonus = 1.0
+possession_s = 1.25

@@ -1,0 +1,7 @@
+# FR after 150M steps: the ramp-down. High reset weights were reported to
+# farm resets at the cost of play (one bot dropped to Nexto level); a low
+# weight kept about half the resets with better play. 40 pays 20-40 per reset.
+extends = "fr_ramp.toml"
+
+[weights]
+flip_reset_gated = 40.0

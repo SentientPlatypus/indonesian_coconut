@@ -1,0 +1,21 @@
+# FR, first 150M steps: gated flip reset reward at the high ramp weight.
+#
+# Scale: the reset is sparse (0.007/min per car in the 430M dry run), so
+# matching a per-step share is meaningless; it is sized per event instead.
+# Weight 100 pays 50-100 per reset (by ball height and how squarely the
+# wheels face the ball) and 50-100 for the follow-up flip touch, i.e. 4-8% of
+# a goal (1200) each. The base FlipResetReward (weight 70, dense approach and
+# hold) stays on. The air_near_ball setter (25% of resets) supplies the
+# practice; Discord reports a sparse reset reward alone wasn't learned.
+extends = "common_rewards.toml"
+
+[weights]
+flip_reset_gated = 100.0
+
+[flip_reset_gated]
+obtain_weight = 1.0
+hit_weight = 1.0
+min_ball_height = 300.0
+min_car_z = 150.0
+max_distance = 220.0
+use_window_s = 2.5

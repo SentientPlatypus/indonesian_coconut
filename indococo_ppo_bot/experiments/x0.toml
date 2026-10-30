@@ -1,0 +1,3 @@
+# X0 control: base rewards only. Same reset mix, opponent pool and LR
+# schedule as the treatment arms, so any difference comes from the rewards.
+extends = "common_rewards.toml"

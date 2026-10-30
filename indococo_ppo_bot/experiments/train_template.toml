@@ -1,0 +1,66 @@
+# Experiment learner settings. run_experiments.sh fills in @RUN@, @REWARDS@
+# and @ITERATIONS@ per arm and stage.
+reward_config = "@RUN@/cfg/experiments/@REWARDS@"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = 100_000
+mini_batch_size = 50_000
+epochs = 2
+policy_lr = 1e-4
+critic_lr = 1e-4
+entropy = 0.01
+gamma = 0.995
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 20
+iterations = @ITERATIONS@
+critic_warmup_steps = 0      # warm start from the full 430.8M checkpoint (critic included)
+self_play_old_versions = true
+skill_tracker = false
+
+# Flat until 150M steps into the run (430.8M + 150M), then cosine to 0.2x by
+# the end of the 450M-step run.
+[lr_schedule]
+kind = "cosine"
+hold_steps = 580_000_000
+decay_steps = 300_000_000
+min_scale = 0.2
+
+[opponents]
+chance = 0.25
+past_versions_weight = 1.0
+[[opponents.fixed]]
+name = "1v1.pt"
+checkpoint = "@RUN@/opponents/1v1"
+weight = 1.0
+[[opponents.fixed]]
+name = "ppo_430M"
+checkpoint = "@RUN@/opponents/ppo_430M"
+weight = 1.0
+
+# One reset mix for every arm: 25% flip reset setups and 25% wall air dribble
+# setups, so X0 sees the same states as FR and ADB.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.3
+[[state_setters]]
+kind = "random"
+weight = 0.1
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.1
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.25
+[[state_setters]]
+kind = "wall_air_dribble"
+weight = 0.25

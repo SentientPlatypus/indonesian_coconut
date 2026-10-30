@@ -1,0 +1,6 @@
+# Shared by every experiment arm: the E8B2 rewards with victim-gated bumps
+# (the knocked car is never paid for a bump; see DemoParams.victim_gate).
+extends = "../config/e8b2_1v1.toml"
+
+[demo]
+victim_gate = true
