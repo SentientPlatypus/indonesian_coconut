@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# Head-to-head evals of a training run against a reference policy.
+# Pool evals and keep-best for a training run.
 # Polls the checkpoint dir; each time the newest checkpoint passes the next
-# multiple of EVERY steps, exports it and runs h2h_1v1.py at low priority.
-# Appends one JSON line per eval to $OUT.
+# multiple of EVERY steps, exports it and runs tools/pool_eval/keep_best.py at
+# low priority: GAMES games against every bot in the pool (1v1.pt, the saved
+# PPO checkpoints, Nexto, Necto, Element, Immortal), one JSON line per eval in
+# $OUT, and promotion to $BEST when it beats the current best (pool score and
+# head-to-head). $BEST is outside the checkpoint dir, so rotation never removes it.
 #
-#   tools/eval_loop.sh <checkpoints> <out.jsonl> <reference.pt>
-# env: TRAIN_BIN, H2H (path to h2h_1v1.py), PY, EVERY (100000000), GAMES (400), PROCS (8)
-# h2h_1v1.py imports eval_match/v4_env/loop_config from $INDOCOCO_REPO; those
-# Python files are on master only (e.g. git worktree add /tmp/ic_master master).
+#   tools/eval_loop.sh <checkpoints> <out.jsonl> <best dir>
+# env: TRAIN_BIN, PY (python with rlgym 2 + torch), POOL (pool.toml), EVERY (100000000),
+#      GAMES (200), PROCS (8)
 set -euo pipefail
-CKPTS=$1 OUT=$2 REF=$3
-EVERY=${EVERY:-100000000} GAMES=${GAMES:-400} PROCS=${PROCS:-8}
+CKPTS=$1 OUT=$2 BEST=$3
+HERE=$(cd "$(dirname "$0")" && pwd)
+EVERY=${EVERY:-100000000} GAMES=${GAMES:-200} PROCS=${PROCS:-8}
+POOL=${POOL:-$HERE/pool_eval/pool.toml}
 WORK=$(dirname "$OUT")/eval_tmp
 mkdir -p "$WORK"
 next=$EVERY
 if [[ -s $OUT ]]; then
-  last=$(tail -1 "$OUT" | sed -E 's/.*"steps": ([0-9]+).*/\1/')
+  last=$(tail -1 "$OUT" | "$PY" -c 'import json,sys; print(json.loads(sys.stdin.read())["steps"])')
   next=$(( (last / EVERY + 1) * EVERY ))
 fi
 while true; do
@@ -24,14 +28,17 @@ while true; do
     steps=$(sed -nE 's/^cumulative_timesteps = ([0-9]+)/\1/p' "$CKPTS/$newest/stats.toml")
     if (( steps >= next )); then
       sleep 30   # let the save finish
+      snap=$WORK/ckpt_$steps
+      rm -rf "$snap" && cp -r "$CKPTS/$newest" "$snap"   # rotation may delete the original
       st=$WORK/policy_$steps.safetensors
-      nice -n 19 "$TRAIN_BIN" export "$CKPTS/$newest" "$st" > /dev/null
-      res=$WORK/h2h_$steps.json
-      (cd "$(dirname "$H2H")" && nice -n 19 "$PY" "$(basename "$H2H")" --candidate "$st" --opponent "$REF" \
-          --games "$GAMES" --procs "$PROCS" --out "$res" > "$WORK/h2h_$steps.log" 2>&1)
-      printf '{"time": "%s", "steps": %s, "checkpoint": "%s", "h2h": %s}\n' \
-          "$(TZ=America/New_York date -Iseconds)" "$steps" "$newest" "$("$PY" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$res")" >> "$OUT"
-      rm -f "$st"
+      nice -n 19 "$TRAIN_BIN" export "$snap" "$st" > /dev/null
+      log=$WORK/keep_best_$steps.jsonl
+      nice -n 19 "$PY" "$HERE/pool_eval/keep_best.py" --checkpoint "$snap" --policy "$st" \
+          --best "$BEST" --pool "$POOL" --games "$GAMES" --procs "$PROCS" --log "$log" \
+          > "$WORK/keep_best_$steps.log" 2>&1
+      "$PY" -c 'import json,sys; r=json.load(open(sys.argv[1])); r["steps"]=int(sys.argv[2]); print(json.dumps(r))' \
+          "$log" "$steps" >> "$OUT"
+      rm -rf "$snap" "$st" "$log"
       next=$(( (steps / EVERY + 1) * EVERY ))
     fi
   fi

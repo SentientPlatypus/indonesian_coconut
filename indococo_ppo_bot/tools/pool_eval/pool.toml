@@ -1,0 +1,33 @@
+# Opponent pool for pool_eval.py. Paths are on the eval box; see fetch_bots.sh.
+# kind: indococo (DiscreteFF .pt / .safetensors / checkpoint dir), nexto, necto,
+#       element, immortal, zero, random.
+
+[[opponent]]
+name = "1v1.pt"
+kind = "indococo"
+path = "~/eval_bots/indococo_1v1/1v1.pt"
+
+[[opponent]]
+name = "ppo_430M"
+kind = "indococo"
+path = "~/eval_bots/indococo_430M/policy.safetensors"
+
+[[opponent]]
+name = "nexto"
+kind = "nexto"
+path = "~/eval_bots/nexto"
+
+[[opponent]]
+name = "necto"
+kind = "necto"
+path = "~/eval_bots/necto"
+
+[[opponent]]
+name = "element"
+kind = "element"
+path = "~/eval_bots/element"
+
+[[opponent]]
+name = "immortal"
+kind = "immortal"
+path = "~/eval_bots/immortal"
