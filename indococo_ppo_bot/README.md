@@ -30,7 +30,9 @@ indococo_ppo_bot/
     state.rs              StateView: f64 mirror of rlgym GameState/Car (+ derived props)
     obs.rs                V2DefaultObs (92)
     action.rs             90-action lookup table
-    env.rs                state setters, terminals, metrics -> BotEnv
+    env.rs                arena, terminals, metrics (incl. Events/*) -> BotEnv
+    setters.rs            configurable state setters and their weighted mix
+    events.rs             flip reset / bump / demo / has_flip counters
     rewards/
       mod.rs              StepReward trait (reset / get_rewards on StateView)
       combined.rs         weighted sum, implements rlgym_rs Reward, logs Reward/<term>
@@ -44,7 +46,8 @@ indococo_ppo_bot/
     reward_parity.rs      one test per reward term vs. Python on recorded states
     fixtures/e8b2_rewards.jsonl
   tools/parity.py         regenerates the fixture with the Python classes (needs master)
-  tools/eval_loop.sh      h2h evals vs 1v1.pt during training
+  tools/eval_loop.sh      pool evals + keep-best during training
+  tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal
   config/E8b_shell_contact_strong.json  E8B2 experiment config (input to parity.py)
 ```
 
@@ -77,7 +80,7 @@ git show master:rlbot_submission/policies/1v1.pt > 1v1.pt
 indococo-train import 1v1.pt runs/e8b2/checkpoints
 # 2. Train. Set paths in a copy of config/train.toml; resumes from the latest checkpoint.
 TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 indococo-train train runs/e8b2/train.toml
-# 3. Export the policy to safetensors for the Python h2h tools.
+# 3. Export the policy to safetensors for the Python eval tools.
 indococo-train export runs/e8b2/checkpoints/<n> policy.safetensors
 ```
 
@@ -85,6 +88,68 @@ After an `import`, the critic is untrained. Set `critic_warmup_steps` (e.g. 30M)
 to train only the critic first: the policy learning rate is 0 until the
 checkpoint reaches that step count, then normal PPO continues in the same
 process. A resumed run skips the finished part of the warm-up.
+
+### Experiment config
+
+Everything below is optional in `train.toml`; leaving it out keeps the
+behavior of earlier runs (constant LR, 15% of iterations against past
+versions, the kickoff/random reset mix).
+
+```toml
+[lr_schedule]          # constant | linear | cosine; steps are cumulative
+kind = "cosine"
+hold_steps = 300_000_000
+decay_steps = 300_000_000
+min_scale = 0.1        # floor, x policy_lr and critic_lr
+
+[opponents]            # chance per iteration of playing a frozen opponent
+chance = 0.3
+past_versions_weight = 1.0   # saved policy versions (needs self_play_old_versions)
+[[opponents.fixed]]          # checkpoint dirs with actor.bpk; never rotate out
+name = "1v1.pt"
+checkpoint = "opponents/1v1" # indococo-train import 1v1.pt opponents/x, then use x/1
+weight = 1.0
+
+[[state_setters]]      # weighted reset mix (src/setters.rs)
+kind = "kickoff"
+weight = 0.4
+[[state_setters]]
+kind = "random"        # ball_speed / car_speed / cars_on_ground flags
+weight = 0.2
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "air_near_ball" # car under the ball, wheels toward it, flip used
+weight = 0.2
+ball_height = [600.0, 1600.0]
+[[state_setters]]
+kind = "wall_air_dribble"
+weight = 0.2
+```
+
+Reward files compose with `extends`: an experiment file names a base file and
+lists only what it changes. Tables merge key by key:
+
+```toml
+extends = "e8b2_1v1.toml"
+[weights]
+flip_reset = 120.0
+[zero_sum]
+demo = 1.0
+[flip_reset]
+min_wheels_cos = 0.7
+```
+
+A new reward term is one module under `src/rewards/`, a weight field in
+`RewardWeights`, and one line in `RewardConfig::build`. A new reset setup is a
+`SetterKind` variant. The opponent pool trains only against our own policies:
+the Python pool bots run in `tools/pool_eval`, not in the Rust collector.
+
+`metrics.jsonl` gets `Events/Has Flip Ratio` (share of car-steps with the
+flip available) and `Events/Flip Resets per min`, `Events/Bumps per min`,
+`Events/Demos per min` (per car per minute of game time). A flip reset is an
+airborne touch that gives the flip back with the ball within 45 degrees of
+straight under the wheels.
 
 The defaults use LibTorch CUDA with a bf16 critic and an f32 policy. On the
 L4 box, a warm-started run reaches about 78k sps.
@@ -116,13 +181,20 @@ single 2.1k-step episode that triggers every weighted term.
 Doc comments that name Python modules (`v4_env._reward_fn`,
 `rewards/zero_sum.py`, and so on) refer to files on `master`.
 
-## Head-to-head evals
+## Evals
 
-`tools/eval_loop.sh` exports each new checkpoint past every 100M steps and
-runs a 400-game h2h against `1v1.pt` with `h2h_1v1.py`. That script and the
-evaluator it imports (`eval_match.py`, `v4_env.py`, `loop_config.py`) aren't on
-this branch. Point `H2H` at an `h2h_1v1.py`, and `INDOCOCO_REPO` at a
-directory holding those modules, e.g. the `/tmp/ic_master` worktree above.
+`tools/pool_eval/` plays a checkpoint against a pool of bots headless:
+1v1.pt, saved PPO checkpoints, Nexto, Necto, Element and Immortal. See its
+README for the protocol and per-bot details.
+
+```bash
+python tools/pool_eval/pool_eval.py --candidate checkpoints/<n> --games 400 --procs 32
+```
+
+`tools/eval_loop.sh <checkpoints> <evals.jsonl> <best dir>` runs that every
+100M steps during training and keeps the best checkpoint (by pool score and
+a head-to-head against the previous best) in `<best dir>`, outside checkpoint
+rotation. It only needs Python with `rlgym` 2.x and `torch`, no master files.
 
 ## Deploy (RLBot v5)
 
@@ -135,8 +207,8 @@ set `INDOCOCO_WEIGHTS`.
 ## Not ported or differences
 
 - **Curriculum:** the Python curriculum (`curriculum_mutators.py` on master) is not
-  ported. State setting is a fixed mix: kickoff 0.34, random 0.33, and
-  random-on-ground 0.33.
+  ported. The default reset mix is kickoff 0.34, random 0.33 and
+  random-on-ground 0.33; `[[state_setters]]` changes it.
 - **`double_tap` and team rewards:** `double_tap` has weight 0 in E8B2 and
   is omitted. The team rewards don't apply to 1v1.
 - **FlipReset:** only the configuration E8B2 uses is ported

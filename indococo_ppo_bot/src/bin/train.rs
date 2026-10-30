@@ -18,13 +18,14 @@ use indococo_bot::action::N_ACTIONS;
 use indococo_bot::env::create_env;
 use indococo_bot::obs::OBS_SIZE;
 use indococo_bot::rewards::RewardConfig;
+use indococo_bot::setters::{WeightedSetter, default_mix};
 use indococo_bot::state::StateView;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use rlgymppo::rlgym::rocketsim::init_from_default;
 use rlgymppo::{
-    Actic, ComputePrecision, LearnerConfig, PpoLearnerConfig, SelfPlayConfig, SkillTrackerConfig,
-    TrainPrecision, default_adamw_optimizer,
+    Actic, ComputePrecision, DecayShape, FixedOpponent, LearnerConfig, LrSchedule,
+    PpoLearnerConfig, SelfPlayConfig, SkillTrackerConfig, TrainPrecision, default_adamw_optimizer,
 };
 use serde::Deserialize;
 
@@ -57,6 +58,112 @@ struct TrainConfig {
     /// the critic learns. Use after `import`, whose critic is untrained.
     #[serde(default)]
     critic_warmup_steps: u64,
+    /// Learning-rate schedule for policy and critic (default: constant).
+    #[serde(default)]
+    lr_schedule: LrScheduleConfig,
+    /// Frozen opponents mixed into self-play.
+    #[serde(default)]
+    opponents: OpponentsConfig,
+    /// Weighted reset mix, see `indococo_bot::setters`.
+    #[serde(default = "default_mix")]
+    state_setters: Vec<WeightedSetter>,
+}
+
+/// `[lr_schedule]`: constant, or flat until `hold_steps` cumulative steps and
+/// then a linear or cosine decay to `min_scale` x the base rates over
+/// `decay_steps`. Steps include the critic warm-up.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum LrScheduleConfig {
+    #[default]
+    Constant,
+    Linear {
+        hold_steps: u64,
+        decay_steps: u64,
+        min_scale: f32,
+    },
+    Cosine {
+        hold_steps: u64,
+        decay_steps: u64,
+        min_scale: f32,
+    },
+}
+
+impl LrScheduleConfig {
+    /// The framework schedule counts PPO updates: one per iteration.
+    fn schedule(self, timesteps_per_iteration: u64) -> LrSchedule {
+        let (hold_steps, decay_steps, min_scale, shape) = match self {
+            Self::Constant => return LrSchedule::Constant,
+            Self::Linear {
+                hold_steps,
+                decay_steps,
+                min_scale,
+            } => (hold_steps, decay_steps, min_scale, DecayShape::Linear),
+            Self::Cosine {
+                hold_steps,
+                decay_steps,
+                min_scale,
+            } => (hold_steps, decay_steps, min_scale, DecayShape::Cosine),
+        };
+        LrSchedule::HoldThenDecay {
+            hold_iterations: hold_steps / timesteps_per_iteration,
+            decay_iterations: decay_steps.div_ceil(timesteps_per_iteration),
+            min_scale,
+            shape,
+        }
+    }
+}
+
+/// `[opponents]`: with probability `chance` an iteration is played against
+/// a frozen opponent instead of the current policy (on a random side). The
+/// opponent is drawn by weight from the saved past versions (as one group,
+/// only with `self_play_old_versions`) and the `[[opponents.fixed]]`
+/// checkpoints, e.g. the imported `1v1.pt` and kept-best checkpoints.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct OpponentsConfig {
+    chance: f32,
+    past_versions_weight: f32,
+    fixed: Vec<FixedOpponentConfig>,
+}
+
+impl Default for OpponentsConfig {
+    fn default() -> Self {
+        Self {
+            chance: 0.15,
+            past_versions_weight: 1.0,
+            fixed: Vec::new(),
+        }
+    }
+}
+
+/// A frozen checkpoint directory (`actor.bpk`) in the training pool.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixedOpponentConfig {
+    name: String,
+    checkpoint: PathBuf,
+    weight: f32,
+}
+
+/// Loads the fixed opponents' actors onto `dev` (the critic is unused).
+fn load_fixed_opponents(cfg: &OpponentsConfig, dev: &Device) -> Vec<FixedOpponent> {
+    cfg.fixed
+        .iter()
+        .map(|o| {
+            let mut model = new_model(dev);
+            let path = o.checkpoint.join("actor.bpk");
+            model.actor = model
+                .actor
+                .try_load_file(&path)
+                .unwrap_or_else(|e| panic!("opponent {}: {}: {e:?}", o.name, path.display()));
+            FixedOpponent {
+                name: o.name.clone(),
+                model,
+                weight: o.weight,
+            }
+        })
+        .collect()
 }
 
 /// One learner run: the policy learning rate and how many iterations to run (`None` = until stopped).
@@ -124,12 +231,15 @@ fn device(backend: &str) -> Device {
 }
 
 fn read_rewards(path: &Path) -> RewardConfig {
-    let text =
-        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    RewardConfig::from_toml(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+    RewardConfig::from_file(path).unwrap_or_else(|e| panic!("reward config: {e}"))
 }
 
-fn learner_config(cfg: &TrainConfig, phase: Phase, device: Device) -> LearnerConfig {
+fn learner_config(
+    cfg: &TrainConfig,
+    phase: Phase,
+    device: Device,
+    fixed_opponents: Vec<FixedOpponent>,
+) -> LearnerConfig {
     let ts = cfg.timesteps_per_iteration;
     LearnerConfig {
         render: false,
@@ -150,6 +260,7 @@ fn learner_config(cfg: &TrainConfig, phase: Phase, device: Device) -> LearnerCon
             epochs: cfg.epochs,
             learning_rate: phase.policy_lr,
             critic_learning_rate: Some(cfg.critic_lr),
+            lr_schedule: cfg.lr_schedule.schedule(ts as u64),
             entropy_scale: cfg.entropy,
             normalize_entropy: false,
             standardize_returns: true,
@@ -167,7 +278,9 @@ fn learner_config(cfg: &TrainConfig, phase: Phase, device: Device) -> LearnerCon
             max_old_versions: 10,
             max_saved_versions: Some(20),
             train_against_old_versions: cfg.self_play_old_versions,
-            train_against_old_chance: 0.15,
+            train_against_old_chance: cfg.opponents.chance,
+            past_versions_weight: cfg.opponents.past_versions_weight,
+            fixed_opponents,
         },
         skill_tracker: SkillTrackerConfig {
             enabled: cfg.skill_tracker,
@@ -193,14 +306,18 @@ fn train(config: &Path) {
     let cfg: TrainConfig = toml::from_str(&text).expect("parse train config");
     let rewards = read_rewards(&cfg.reward_config);
     init_from_default(true).expect("load collision meshes");
+    let dev = device(&cfg.backend);
+    let fixed = load_fixed_opponents(&cfg.opponents, &dev);
     for phase in plan_phases(&cfg, checkpoint_steps(&cfg.checkpoints)) {
         println!(
             "PHASE policy_lr={} iterations={:?}",
             phase.policy_lr, phase.iterations
         );
-        let rewards = rewards.clone();
-        let mut learner = learner_config(&cfg, phase, device(&cfg.backend))
-            .init(move |_| create_env(&rewards), default_adamw_optimizer());
+        let (rewards, setters) = (rewards.clone(), cfg.state_setters.clone());
+        let mut learner = learner_config(&cfg, phase, dev.clone(), fixed.clone()).init(
+            move |_| create_env(&rewards, &setters),
+            default_adamw_optimizer(),
+        );
         learner.load();
         learner.learn();
     }
@@ -313,7 +430,7 @@ fn record(reward_toml: &Path, out: &Path, steps: usize, ckpt: Option<&Path>) {
             .try_load_file(c.join("actor.bpk"))
             .expect("load actor")
     });
-    let mut env = create_env(&cfg);
+    let mut env = create_env(&cfg, &default_mix());
     let mut rng = SmallRng::seed_from_u64(7);
     let mut lines = Vec::with_capacity(steps);
 
@@ -446,5 +563,64 @@ mod tests {
             }]
         );
         assert_eq!(plan_phases(&cfg(0, 0), 0).len(), 1);
+    }
+
+    fn parse(extra: &str) -> TrainConfig {
+        let text = format!("{}\n{extra}", include_str!("../../config/train.toml"));
+        toml::from_str(&text).expect("train config")
+    }
+
+    #[test]
+    fn defaults_keep_the_previous_behavior() {
+        let c = parse("");
+        assert_eq!(c.lr_schedule.schedule(100_000), LrSchedule::Constant);
+        assert_eq!(c.opponents.chance, 0.15);
+        assert!(c.opponents.fixed.is_empty());
+        assert_eq!(c.state_setters, default_mix());
+    }
+
+    #[test]
+    fn lr_schedule_converts_steps_to_iterations() {
+        let c = parse(
+            "[lr_schedule]\nkind = \"cosine\"\nhold_steps = 300_000_000\ndecay_steps = 250_000_000\nmin_scale = 0.1",
+        );
+        let s = c.lr_schedule.schedule(100_000);
+        assert_eq!(
+            s,
+            LrSchedule::HoldThenDecay {
+                hold_iterations: 3000,
+                decay_iterations: 2500,
+                min_scale: 0.1,
+                shape: DecayShape::Cosine
+            }
+        );
+        assert_eq!(s.scale(3000), 1.0);
+        assert!((s.scale(5500) - 0.1).abs() < 1e-6);
+        assert!(toml::from_str::<LrScheduleConfig>("kind = \"step\"").is_err());
+    }
+
+    #[test]
+    fn opponents_and_state_setters_parse() {
+        let c = parse(
+            r#"
+            [opponents]
+            chance = 0.3
+            past_versions_weight = 2.0
+            [[opponents.fixed]]
+            name = "1v1.pt"
+            checkpoint = "opponents/1v1"
+            weight = 1.0
+
+            [[state_setters]]
+            kind = "kickoff"
+            weight = 1.0
+            [[state_setters]]
+            kind = "air_near_ball"
+            weight = 1.0
+            "#,
+        );
+        assert_eq!(c.opponents.chance, 0.3);
+        assert_eq!(c.opponents.fixed[0].checkpoint, Path::new("opponents/1v1"));
+        assert_eq!(c.state_setters.len(), 2);
     }
 }

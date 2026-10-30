@@ -2,6 +2,7 @@
 //! Field names follow the keys of the Python experiment JSON.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,43 @@ use super::velocity_ball_to_goal::VelocityBallToGoal;
 use super::wall_pop_setup::WallPopSetup;
 use super::zero_sum::ZeroSum;
 use super::{CombinedReward, StepReward, Term};
+
+/// Reads `path` as a TOML table with its `extends` chain merged in.
+fn load_extended(path: &Path, seen: &mut Vec<PathBuf>) -> Result<toml::Table, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if seen.contains(&canonical) {
+        return Err(format!("extends cycle at {}", path.display()));
+    }
+    seen.push(canonical);
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut table: toml::Table = text
+        .parse()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let Some(parent) = table.remove("extends") else {
+        return Ok(table);
+    };
+    let parent = parent
+        .as_str()
+        .ok_or_else(|| format!("{}: extends must be a path", path.display()))?;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut base = load_extended(&dir.join(parent), seen)?;
+    merge(&mut base, table);
+    Ok(base)
+}
+
+/// Overlays `top` on `base`: nested tables merge, everything else replaces.
+fn merge(base: &mut toml::Table, top: toml::Table) {
+    for (key, value) in top {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(b)), toml::Value::Table(t)) => merge(b, t),
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
+    }
+}
 
 /// `reward_weights` of the experiment config.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -149,6 +187,20 @@ impl RewardConfig {
     /// Invalid TOML or unknown keys.
     pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(text)
+    }
+
+    /// Loads a config file. A file may start from another one with
+    /// `extends = "base.toml"` (relative to its own directory) and override
+    /// any keys: tables merge key by key, other values replace. An experiment
+    /// file then holds only what it changes, e.g. one new weight and its
+    /// parameters on top of `e8b2_1v1.toml`.
+    ///
+    /// # Errors
+    /// Unreadable file, invalid TOML, an `extends` cycle, or unknown keys.
+    pub fn from_file(path: &Path) -> Result<Self, String> {
+        load_extended(path, &mut Vec::new())?
+            .try_into()
+            .map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Builds the combined reward in `v4_env._reward_fn` order. Terms with
@@ -300,5 +352,47 @@ impl RewardConfig {
                 })
                 .collect(),
         )
+    }
+}
+
+#[cfg(test)]
+mod extends_tests {
+    use super::*;
+
+    #[test]
+    fn experiment_file_overrides_its_base() {
+        let dir = std::env::temp_dir().join(format!("indococo_extends_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("base.toml"),
+            "[weights]\ngoal = 10.0\ntouch = 2.0\n[flip_reset]\nmin_wheels_cos = 0.5\nuse_weight = 3.0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("exp.toml"),
+            "extends = \"base.toml\"\n[weights]\ntouch = 5.0\nflip_reset = 70.0\n[flip_reset]\nmin_wheels_cos = 0.7\n",
+        )
+        .unwrap();
+        let cfg = RewardConfig::from_file(&dir.join("exp.toml")).unwrap();
+        assert_eq!(cfg.weights.goal, 10.0);
+        assert_eq!(cfg.weights.touch, 5.0);
+        assert_eq!(cfg.weights.flip_reset, 70.0);
+        assert_eq!(cfg.flip_reset.min_wheels_cos, 0.7);
+        assert_eq!(cfg.flip_reset.use_weight, 3.0);
+
+        std::fs::write(dir.join("a.toml"), "extends = \"b.toml\"\n").unwrap();
+        std::fs::write(dir.join("b.toml"), "extends = \"a.toml\"\n").unwrap();
+        assert!(
+            RewardConfig::from_file(&dir.join("a.toml"))
+                .unwrap_err()
+                .contains("cycle")
+        );
+        std::fs::write(
+            dir.join("bad.toml"),
+            "extends = \"base.toml\"\n[weights]\nnope = 1.0\n",
+        )
+        .unwrap();
+        assert!(RewardConfig::from_file(&dir.join("bad.toml")).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

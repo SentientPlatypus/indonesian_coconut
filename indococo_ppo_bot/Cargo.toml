@@ -22,19 +22,19 @@ required-features = ["rlbot"]
 [dependencies]
 glam = { version = "0.34", features = ["serde"] }
 rand = "0.10.1"
-rlgymppo-utils = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "11e58c9e7369885a2c37f9df87a907dbe0d5dd42" }
+rlgymppo-utils = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "416a0978663949bc348a4d3358488de76c9ab874" }
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 
 # training
 burn = { version = "0.22.0", optional = true, default-features = false, features = ["std"] }
 burn-store = { version = "0.22.1", optional = true, features = ["pytorch"] }
-rlgymppo = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "11e58c9e7369885a2c37f9df87a907dbe0d5dd42", optional = true, default-features = false }
+rlgymppo = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "416a0978663949bc348a4d3358488de76c9ab874", optional = true, default-features = false }
 serde_json = { version = "1", optional = true }
 
 # deploy
-rlgymppo-model = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "11e58c9e7369885a2c37f9df87a907dbe0d5dd42", optional = true }
-rlgymppo-rlbot = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "11e58c9e7369885a2c37f9df87a907dbe0d5dd42", optional = true }
+rlgymppo-model = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "416a0978663949bc348a4d3358488de76c9ab874", optional = true }
+rlgymppo-rlbot = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "416a0978663949bc348a4d3358488de76c9ab874", optional = true }
 rlbot-rocketsim = { version = "0.2.0", optional = true }
 rustc-hash = { version = "2.1.1", optional = true }
 
