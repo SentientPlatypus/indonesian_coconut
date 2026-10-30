@@ -20,3 +20,8 @@ wandb/
 
 # Stray Windows %APPDATA% dump (created by accident on WSL)
 %APPDATA%/
+
+# Rust build output
+target/
+indococo_ppo_bot/checkpoints/
+indococo_ppo_bot/runs/

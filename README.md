@@ -1,97 +1,39 @@
-# Indonesian Coconut: PPO Rocket League Bot
+# Indonesian Coconut: Rocket League PPO bot (Rust)
 
-![alt text](assets/cover.png)
+![Indonesian Coconut](assets/cover.png)
 
-Indonesian Coconut is a reinforcement-learning–driven Rocket League bot built using RLGym and a discrete lookup-table action space. Unlike continuous-control agents that rely on large action vectors and dense motor precision, Indonesian Coconut operates with a compact, interpretable discrete action representation while still achieving high-level mechanical behaviors such as controlled air-dribbles, flip resets, pressure-aware flicks, possession-safe dribbling, and adaptive defensive rotations.
+Indonesian Coconut is a 1v1 Rocket League bot trained with PPO on a discrete
+90-action lookup table. On this branch it runs on
+[indococo-ppo](https://github.com/SentientPlatypus/indococo-ppo), a Rust stack
+built on RocketSim and Burn. Its reward set, observations and actions match
+the E8B2 Python policy (`1v1.pt`), which it warm-starts from.
 
-The bot is trained using a specialized multi-component reward architecture designed to optimize not only for raw shot power or ball velocity, but for decision quality and possession stability. The reward system embeds concepts such as challenge anticipation, dribble retention, controlled aerial touches, boost-energy budgeting, and goal-probability shaping. This allows Indonesian Coconut to behave more like a human competitive player—with deliberate buildup, safe dispossession, and well-timed mechanical execution—rather than a purely greedy offense-maximizer.
+The Python policy beat Nexto 42–11 and Element 47–3 in RLBot matches
+([replay](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30)).
 
-## Performance Evaluation
+## Repository layout
 
-| Opponent | Opponent rank | Checkpoint | Score (goals) | p-value | Replay |
-|---|---|---|---:|---:|---|
-| **Nexto** | Grand Champion | `PPO_POLICY_V4_E2G1.pt` | **42–11** | 1.1 × 10⁻⁵ | [ballchasing](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30) |
-| **Element** | Champion | earlier V3 checkpoint | **47–3** | 1.9 × 10⁻¹¹ | [ballchasing](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b) |
+| Path | What it is |
+|---|---|
+| [`indococo_ppo_bot/`](indococo_ppo_bot/README.md) | The Rust bot: rewards (one module each, with parity tests against Python), obs/actions, the trainer (`train`, `import`, `export`, `record`) and the RLBot client. **Start here.** |
+| `rlbot_indococo_ppo/` | RLBot v5 package: `bot.toml`, Linux and Windows binaries, `weights/actor.bpk`. |
+| `collision_meshes/` | RocketSim soccar meshes. The trainer loads them from the repo root; the RLBot binary embeds them. |
+| `v4_env.py`, `loop_config.py`, `rewards/`, `rl_math/` | Python reference reward, obs and config code. `indococo_ppo_bot/tools/parity.py` uses it to produce the expected rewards for the parity tests. |
+| `eval_match.py` | Headless RocketSim evaluator used by the head-to-head evals against `1v1.pt`. |
+| `rlbot_submission/` | The current Python championship submission. `policies/1v1.pt` is the warm-start and h2h reference. Left untouched. |
+| `tools/` | RLBot server/GUI binaries and RLArenaCollisionDumper (for regenerating meshes). |
+| `assets/` | README images. |
 
-p-values are exact one-sided binomial tests on goals (each goal an independent
-50/50 trial under the null hypothesis that the two bots are equally strong).
-Against Nexto, E2G1 also out-shot it 65–16. In headless RocketSim evaluation,
-E2G1 beats Element 567–33 over 600 kickoff games.
+## Quick start
 
-To benchmark policy quality, Indonesian Coconut was evaluated against Element, an established S-tier bot in the RLBot competitive scene. Using a binomial scoring model to assess statistical significance:
-
-The RLGYM community requires a score of 42-28 or better to determine statistical significance (p < 0.05) where each goal is treated as an independent Bernoulli trial.
-
-Indonesian Coconut achieved a decisive result of: **47–3**
-
-This exceeds the statistical significance threshold by a wide margin, providing strong evidence that Indonesian Coconut’s learned policy is overwhelmingly stronger across the full distribution of 1v1 play. See match statistics [here](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b)
-![alt text](assets/score.png)
-
-### Clips: (Embeds may not show, see the `docs/highlights` folder.)
-
-
-
-
-
-
-
-https://github.com/user-attachments/assets/57cf83a8-4c07-4a37-a772-93fef701ebf2
-
-
-
-
-
-https://github.com/user-attachments/assets/49f86ce6-2b4b-4267-82a7-db21556acf5b
-
-
-
-
-
-https://github.com/user-attachments/assets/cefad133-b74c-486b-b30f-dd77667ad50c
-
-
-
-https://github.com/user-attachments/assets/b92510e0-8aa3-4cf7-b44c-de3fc798cf06
-
-
-
-https://github.com/user-attachments/assets/4e93f69f-e207-4752-bf58-08e614870379
-
-
-
-
-https://github.com/user-attachments/assets/cb4de19f-d744-4262-949c-cc7a6b2d71c8
-
-
-
-https://github.com/user-attachments/assets/51c9a929-da8c-4328-8bf6-856f14cc8c4f
-
-
-
-## Project layout
-
-```
-freestyler.py            Current training entry point (loads data/checkpoints/V3/17.9B)
-train_template.py        Clean starting point for a new run (fresh rewards, no checkpoint)
-rsv_renderer.py          RocketSimVis renderer (rlgym v2), used by the trainers
-rewards/                 Reward functions
-    customRewardsGYM.py    Core shaping rewards
-    freestyleMechs.py      Freestyle-mechanic rewards (flicks, pogo, wall dash, ...)
-rl_math/                 Geometry helpers (ball trajectory, goal solid-angle)
-collision_meshes/        RocketSim arena collision data (required at runtime)
-assets/                  README images
-docs/highlights/         Highlight clips
-tools/                   RLBot binaries (rlbotgui, RLBotServer, ...)
-archive/                 Older/unused scripts kept for reference
-data/                    Checkpoints & training data (gitignored; not in the repo)
-Rlgym-v2-to-rlbot-v5/    Submodule: deploy a trained policy as an RLBot v5 bot
-RocketSimVis/            Submodule: the visualizer
+```sh
+cd indococo_ppo_bot
+cargo test --release                       # unit + 33 reward parity tests
+cargo build --release --features torch,cuda --bin indococo-train
 ```
 
-## EC2 instance (in the works)
-`ssh -i ~/.ssh/indococo.pem ubuntu@54.167.88.183`
-`claude --resume f32d1785-1247-4ed7-b147-94f6b080671f`
+Training, warm start, critic warm-up, evals and deploy are covered in
+[`indococo_ppo_bot/README.md`](indococo_ppo_bot/README.md).
 
-`tmux new -s indococo`
-`tmux attach -t indococo`
-
+The Python training stack (rlgym-ppo trainer, curriculum, A/B checkpoints, old
+RLBot v4 bot) was removed from this branch. It is still on `master`.
