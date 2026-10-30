@@ -28,7 +28,7 @@ while true; do
       (cd "$(dirname "$H2H")" && nice -n 19 "$PY" "$(basename "$H2H")" --candidate "$st" --opponent "$REF" \
           --games "$GAMES" --procs "$PROCS" --out "$res" > "$WORK/h2h_$steps.log" 2>&1)
       printf '{"time": "%s", "steps": %s, "checkpoint": "%s", "h2h": %s}\n' \
-          "$(TZ=America/New_York date -Iseconds)" "$steps" "$newest" "$(cat "$res")" >> "$OUT"
+          "$(TZ=America/New_York date -Iseconds)" "$steps" "$newest" "$("$PY" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$res")" >> "$OUT"
       rm -f "$st"
       next=$(( (steps / EVERY + 1) * EVERY ))
     fi
