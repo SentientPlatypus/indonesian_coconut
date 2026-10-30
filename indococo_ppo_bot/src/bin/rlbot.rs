@@ -83,11 +83,7 @@ where
         self.0.parse_actions(actions, state, si)
     }
 
-    fn get_action_masks(
-        &mut self,
-        state: &rlgymppo_utils::rlgym::GameState,
-        si: &mut SI,
-    ) -> Vec<Vec<bool>> {
+    fn get_action_masks(&mut self, state: &rlgymppo_utils::rlgym::GameState, si: &mut SI) -> Vec<Vec<bool>> {
         self.0.get_action_masks(state, si)
     }
 }
@@ -100,20 +96,12 @@ macro_rules! meshes {
     };
 }
 
-const SOCCAR_MESHES: [&[u8]; 16] = meshes!(
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"
-);
+const SOCCAR_MESHES: [&[u8]; 16] = meshes!("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15");
 
 fn main() {
-    let meshes = FxHashMap::from_iter([(
-        GameMode::Soccar,
-        SOCCAR_MESHES.iter().map(|m| m.to_vec()).collect::<Vec<_>>(),
-    )]);
+    let meshes = FxHashMap::from_iter([(GameMode::Soccar, SOCCAR_MESHES.iter().map(|m| m.to_vec()).collect::<Vec<_>>())]);
     init_from_mem(meshes, true).expect("load embedded collision meshes");
-    let AgentEnvironment {
-        server_addr,
-        agent_id,
-    } = AgentEnvironment::from_env();
+    let AgentEnvironment { server_addr, agent_id } = AgentEnvironment::from_env();
     let agent_id = agent_id.unwrap_or_else(|| "indonesian_coconut/indococo-ppo".into());
     let connection = RLBotConnection::new(&server_addr).expect("connect to RLBot");
     run_bot_agents::<Bot>(agent_id, false, false, connection).expect("run RLBot agent");

@@ -87,10 +87,7 @@ pub struct ContactQualityParams {
 
 impl Default for ContactQualityParams {
     fn default() -> Self {
-        Self {
-            hard_target: 900.0,
-            wheel_penalty: 0.3,
-        }
+        Self { hard_target: 900.0, wheel_penalty: 0.3 }
     }
 }
 
@@ -103,10 +100,7 @@ pub struct SafeBoostParams {
 
 impl Default for SafeBoostParams {
     fn default() -> Self {
-        Self {
-            target: 80.0,
-            min_ball_dist: 1400.0,
-        }
+        Self { target: 80.0, min_ball_dist: 1400.0 }
     }
 }
 
@@ -119,10 +113,7 @@ pub struct ClearPathParams {
 
 impl Default for ClearPathParams {
     fn default() -> Self {
-        Self {
-            min_lead: 900.0,
-            lane_radius: 1100.0,
-        }
+        Self { min_lead: 900.0, lane_radius: 1100.0 }
     }
 }
 
@@ -167,138 +158,49 @@ impl RewardConfig {
         let terms: Vec<(&'static str, f64, Box<dyn StepReward>)> = vec![
             ("goal", w.goal, Box::new(Goal)),
             ("goal_prob", w.goal_prob, Box::new(GoalProb::default())),
-            (
-                "ball_travel",
-                w.ball_travel,
-                Box::new(BallTravel::default()),
-            ),
-            (
-                "vel_ball_to_goal",
-                w.vel_ball_to_goal,
-                zs("vel_ball_to_goal", Box::new(VelocityBallToGoal)),
-            ),
-            (
-                "goal_dist",
-                w.goal_dist,
-                zs("goal_dist", Box::new(GoalDist)),
-            ),
-            (
-                "speed_to_ball",
-                w.speed_to_ball,
-                zs("speed_to_ball", Box::new(SpeedTowardBall)),
-            ),
-            (
-                "face_ball",
-                w.face_ball,
-                zs("face_ball", Box::new(FaceBall)),
-            ),
+            ("ball_travel", w.ball_travel, Box::new(BallTravel::default())),
+            ("vel_ball_to_goal", w.vel_ball_to_goal, zs("vel_ball_to_goal", Box::new(VelocityBallToGoal))),
+            ("goal_dist", w.goal_dist, zs("goal_dist", Box::new(GoalDist))),
+            ("speed_to_ball", w.speed_to_ball, zs("speed_to_ball", Box::new(SpeedTowardBall))),
+            ("face_ball", w.face_ball, zs("face_ball", Box::new(FaceBall))),
             ("touch", w.touch, zs("touch", Box::new(Touch))),
             ("possession", w.possession, Box::new(Possession::default())),
             ("energy", w.energy, zs("energy", Box::new(Energy))),
             ("boost_keep", w.boost_keep, Box::new(BoostKeep::default())),
-            (
-                "boost_change",
-                w.boost_change,
-                Box::new(BoostChange::new(1.0, 0.8)),
-            ),
-            (
-                "aerial_boost",
-                w.aerial_boost,
-                Box::new(AerialBoostTowardBall::new(0.96)),
-            ),
-            (
-                "aerial_distance",
-                w.aerial_distance,
-                Box::new(AerialDistance::default()),
-            ),
+            ("boost_change", w.boost_change, Box::new(BoostChange::new(1.0, 0.8))),
+            ("aerial_boost", w.aerial_boost, Box::new(AerialBoostTowardBall::new(0.96))),
+            ("aerial_distance", w.aerial_distance, Box::new(AerialDistance::default())),
             ("in_air", w.in_air, Box::new(InAir)),
-            (
-                "airdribble",
-                w.airdribble,
-                Box::new(AirDribble::new(self.airdribble.clone(), t.clone())),
-            ),
-            (
-                "airdribble_seq",
-                w.airdribble_seq,
-                Box::new(AirDribbleSequence::new(t.clone())),
-            ),
+            ("airdribble", w.airdribble, Box::new(AirDribble::new(self.airdribble.clone(), t.clone()))),
+            ("airdribble_seq", w.airdribble_seq, Box::new(AirDribbleSequence::new(t.clone()))),
             ("wall_pop", w.wall_pop, Box::new(WallPopSetup::default())),
             ("flick", w.flick, Box::new(Flick::default())),
-            (
-                "flip_reset",
-                w.flip_reset,
-                zs(
-                    "flip_reset",
-                    Box::new(FlipReset::new(self.flip_reset.clone())),
-                ),
-            ),
+            ("flip_reset", w.flip_reset, zs("flip_reset", Box::new(FlipReset::new(self.flip_reset.clone())))),
             ("recover", w.recover, Box::new(OneVOneRecover::default())),
             ("demo", w.demo, Box::new(Demo::new(self.demo.clone()))),
             (
                 "contact_quality",
                 w.contact_quality,
-                Box::new(ContactQuality::new(
-                    self.contact_quality.hard_target,
-                    self.contact_quality.wheel_penalty,
-                )),
+                Box::new(ContactQuality::new(self.contact_quality.hard_target, self.contact_quality.wheel_penalty)),
             ),
-            (
-                "front_bump_setup",
-                w.front_bump_setup,
-                Box::new(AerialFrontBumpSetup::default()),
-            ),
-            (
-                "overextend",
-                w.overextend,
-                Box::new(NoBoostOverextend::default()),
-            ),
+            ("front_bump_setup", w.front_bump_setup, Box::new(AerialFrontBumpSetup::default())),
+            ("overextend", w.overextend, Box::new(NoBoostOverextend::default())),
             (
                 "safe_boost",
                 w.safe_boost,
-                Box::new(SafeBoostCollect::new(
-                    self.safe_boost.target,
-                    self.safe_boost.min_ball_dist,
-                )),
+                Box::new(SafeBoostCollect::new(self.safe_boost.target, self.safe_boost.min_ball_dist)),
             ),
-            (
-                "shadow_space",
-                w.shadow_space,
-                Box::new(OpponentPossessionSpace::default()),
-            ),
-            (
-                "pressure_flick",
-                w.pressure_flick,
-                Box::new(PressureFlick::default()),
-            ),
-            (
-                "high_ball",
-                w.high_ball,
-                Box::new(ContestHighBall::default()),
-            ),
-            (
-                "range_carry",
-                w.range_carry,
-                Box::new(PossessionRangeCarry::new(t)),
-            ),
+            ("shadow_space", w.shadow_space, Box::new(OpponentPossessionSpace::default())),
+            ("pressure_flick", w.pressure_flick, Box::new(PressureFlick::default())),
+            ("high_ball", w.high_ball, Box::new(ContestHighBall::default())),
+            ("range_carry", w.range_carry, Box::new(PossessionRangeCarry::new(t))),
             (
                 "clear_path",
                 w.clear_path,
-                Box::new(ClearPathFinish::new(
-                    self.clear_path.min_lead,
-                    self.clear_path.lane_radius,
-                )),
+                Box::new(ClearPathFinish::new(self.clear_path.min_lead, self.clear_path.lane_radius)),
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        CombinedReward::new(
-            terms
-                .into_iter()
-                .map(|(name, weight, reward)| Term {
-                    name,
-                    weight,
-                    reward,
-                })
-                .collect(),
-        )
+        CombinedReward::new(terms.into_iter().map(|(name, weight, reward)| Term { name, weight, reward }).collect())
     }
 }

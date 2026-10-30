@@ -74,15 +74,8 @@ impl StepReward for AerialBoostTowardBall {
             if align < self.align_cos_min {
                 continue;
             }
-            let dist_factor = if self.dist_scale > 0.0 {
-                (1.0 - dist / self.max_dist.max(1.0)).max(0.0)
-            } else {
-                1.0
-            };
-            rewards[a] += self.per_tick
-                * (align * self.boost_scale)
-                * (1.0 + self.dist_scale * dist_factor)
-                * used;
+            let dist_factor = if self.dist_scale > 0.0 { (1.0 - dist / self.max_dist.max(1.0)).max(0.0) } else { 1.0 };
+            rewards[a] += self.per_tick * (align * self.boost_scale) * (1.0 + self.dist_scale * dist_factor) * used;
         }
         rewards
     }

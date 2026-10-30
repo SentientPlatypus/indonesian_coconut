@@ -42,12 +42,7 @@ impl StepReward for OpponentPossessionSpace {
             return rewards;
         }
         for (a, me) in state.cars.iter().enumerate() {
-            let Some(opp) = state
-                .cars
-                .iter()
-                .enumerate()
-                .find(|(i, o)| *i != a && o.team != me.team)
-                .map(|(_, o)| o)
+            let Some(opp) = state.cars.iter().enumerate().find(|(i, o)| *i != a && o.team != me.team).map(|(_, o)| o)
             else {
                 continue;
             };
@@ -72,8 +67,7 @@ impl StepReward for OpponentPossessionSpace {
                 let band = (1.0 - (d_me - mid).abs() / half.max(1.0)).max(0.0);
                 rewards[a] += self.per_tick * band;
             } else if d_me < self.far_dist {
-                let fade =
-                    1.0 - (d_me - self.ideal_max) / (self.far_dist - self.ideal_max).max(1.0);
+                let fade = 1.0 - (d_me - self.ideal_max) / (self.far_dist - self.ideal_max).max(1.0);
                 rewards[a] += 0.25 * self.per_tick * fade.max(0.0);
             }
         }

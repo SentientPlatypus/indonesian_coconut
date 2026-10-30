@@ -83,9 +83,7 @@ impl CarView {
 
     #[must_use]
     pub fn has_flip(&self) -> bool {
-        !self.has_double_jumped
-            && !self.has_flipped
-            && self.air_time_since_jump < DOUBLEJUMP_MAX_DELAY
+        !self.has_double_jumped && !self.has_flipped && self.air_time_since_jump < DOUBLEJUMP_MAX_DELAY
     }
 
     #[must_use]
@@ -118,11 +116,8 @@ impl StateView {
     /// Team that scored, if a goal was scored.
     #[must_use]
     pub fn scoring_team(&self) -> Option<u8> {
-        self.goal_scored().then_some(if self.ball.pos.y > 0.0 {
-            BLUE_TEAM
-        } else {
-            ORANGE_TEAM
-        })
+        self.goal_scored()
+            .then_some(if self.ball.pos.y > 0.0 { BLUE_TEAM } else { ORANGE_TEAM })
     }
 
     /// Indices of the cars on the other team.
@@ -150,11 +145,7 @@ impl StateView {
                     .filter(|_| car.bump_cooldown_timer > 0.0)
                     .and_then(|idx| state.cars.iter().position(|(i, _)| i.idx == idx));
                 CarView {
-                    team: if info.team == Team::Blue {
-                        BLUE_TEAM
-                    } else {
-                        ORANGE_TEAM
-                    },
+                    team: if info.team == Team::Blue { BLUE_TEAM } else { ORANGE_TEAM },
                     pos: car.phys.pos.as_dvec3(),
                     vel: car.phys.vel.as_dvec3(),
                     ang_vel: car.phys.ang_vel.as_dvec3(),

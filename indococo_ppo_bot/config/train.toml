@@ -18,5 +18,6 @@ critic_bf16 = true
 save_every = 50_000_000
 keep_checkpoints = 6
 iterations = 0           # 0 = run until stopped
+critic_warmup_steps = 0  # >0: policy lr 0 (critic-only) until the run reaches this many steps
 self_play_old_versions = true
 skill_tracker = true

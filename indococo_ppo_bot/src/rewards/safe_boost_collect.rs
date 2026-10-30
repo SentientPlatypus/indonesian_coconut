@@ -18,18 +18,12 @@ pub struct SafeBoostCollect {
 impl SafeBoostCollect {
     #[must_use]
     pub fn new(target_boost: f64, min_ball_dist: f64) -> Self {
-        Self {
-            target_boost,
-            min_ball_dist,
-            prev_boost: Vec::new(),
-        }
+        Self { target_boost, min_ball_dist, prev_boost: Vec::new() }
     }
 
     /// `_corner_peel_unsafe`: grabbing boost now is the last-man corner leak.
     fn corner_peel_unsafe(car: &CarView, state: &StateView) -> bool {
-        let Some(opp) = state.cars.iter().find(|o| o.team != car.team) else {
-            return false;
-        };
+        let Some(opp) = state.cars.iter().find(|o| o.team != car.team) else { return false };
         if opp.is_demoed() {
             return false;
         }
@@ -43,11 +37,7 @@ impl SafeBoostCollect {
         let own_goal = glam::DVec3::new(0.0, -attack * BACK_NET_Y, 0.0);
         let to_goal = own_goal - ball;
         let goal_dist = to_goal.length();
-        let toward_net = if goal_dist > 1e-6 {
-            state.ball.vel.dot(to_goal / goal_dist)
-        } else {
-            0.0
-        };
+        let toward_net = if goal_dist > 1e-6 { state.ball.vel.dot(to_goal / goal_dist) } else { 0.0 };
         if !(attack * ball.y < 800.0 || toward_net > 200.0) {
             return false;
         }

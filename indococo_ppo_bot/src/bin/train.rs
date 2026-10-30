@@ -52,14 +52,49 @@ struct TrainConfig {
     iterations: u64,
     self_play_old_versions: bool,
     skill_tracker: bool,
+    /// Critic-only warm-up: until the run has this many cumulative steps, the
+    /// policy learning rate is 0, so AdamW leaves the actor unchanged and only
+    /// the critic learns. Use after `import`, whose critic is untrained.
+    #[serde(default)]
+    critic_warmup_steps: u64,
+}
+
+/// One learner run: the policy learning rate and how many iterations to run (`None` = until stopped).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Phase {
+    policy_lr: f32,
+    iterations: Option<u64>,
+}
+
+/// Splits training into an optional critic-only warm-up and the main PPO phase,
+/// given the cumulative steps already in the checkpoint being resumed.
+fn plan_phases(cfg: &TrainConfig, done_steps: u64) -> Vec<Phase> {
+    let main = Phase { policy_lr: cfg.policy_lr, iterations: (cfg.iterations > 0).then_some(cfg.iterations) };
+    if done_steps >= cfg.critic_warmup_steps {
+        return vec![main];
+    }
+    let ts = cfg.timesteps_per_iteration as u64;
+    let warmup = Phase { policy_lr: 0.0, iterations: Some((cfg.critic_warmup_steps - done_steps).div_ceil(ts)) };
+    vec![warmup, main]
+}
+
+/// `cumulative_timesteps` of the newest (highest-numbered) checkpoint, or 0.
+fn checkpoint_steps(dir: &Path) -> u64 {
+    let newest = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u64>().ok().map(|n| (n, e.path())))
+        .max_by_key(|(n, _)| *n);
+    newest
+        .and_then(|(_, p)| std::fs::read_to_string(p.join("stats.toml")).ok())
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("cumulative_timesteps")?.as_integer())
+        .map_or(0, |n| n as u64)
 }
 
 fn precision(bf16: bool) -> ComputePrecision {
-    if bf16 {
-        ComputePrecision::Bf16
-    } else {
-        ComputePrecision::F32
-    }
+    if bf16 { ComputePrecision::Bf16 } else { ComputePrecision::F32 }
 }
 
 fn device(backend: &str) -> Device {
@@ -73,12 +108,11 @@ fn device(backend: &str) -> Device {
 }
 
 fn read_rewards(path: &Path) -> RewardConfig {
-    let text =
-        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     RewardConfig::from_toml(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
-fn learner_config(cfg: &TrainConfig, device: Device) -> LearnerConfig {
+fn learner_config(cfg: &TrainConfig, phase: Phase, device: Device) -> LearnerConfig {
     let ts = cfg.timesteps_per_iteration;
     LearnerConfig {
         render: false,
@@ -88,7 +122,7 @@ fn learner_config(cfg: &TrainConfig, device: Device) -> LearnerConfig {
         timesteps_per_save: cfg.save_every,
         checkpoints_limit: Some(cfg.keep_checkpoints),
         checkpoints_folder: cfg.checkpoints.clone(),
-        num_additional_iterations: (cfg.iterations > 0).then_some(cfg.iterations),
+        num_additional_iterations: phase.iterations,
         metrics_jsonl: std::env::var("INDOCOCO_METRICS").ok().map(PathBuf::from),
         ppo: PpoLearnerConfig {
             timesteps_per_iteration: ts,
@@ -97,17 +131,14 @@ fn learner_config(cfg: &TrainConfig, device: Device) -> LearnerConfig {
             gpu_timestep_buffer_size: ts,
             truncation_value_batch_size: ts,
             epochs: cfg.epochs,
-            learning_rate: cfg.policy_lr,
+            learning_rate: phase.policy_lr,
             critic_learning_rate: Some(cfg.critic_lr),
             entropy_scale: cfg.entropy,
             normalize_entropy: false,
             standardize_returns: true,
             gamma: cfg.gamma,
             lambda: cfg.lambda,
-            precision: TrainPrecision {
-                policy: precision(cfg.policy_bf16),
-                critic: precision(cfg.critic_bf16),
-            },
+            precision: TrainPrecision { policy: precision(cfg.policy_bf16), critic: precision(cfg.critic_bf16) },
             ..Default::default()
         },
         self_play: SelfPlayConfig {
@@ -142,29 +173,23 @@ fn train(config: &Path) {
     let cfg: TrainConfig = toml::from_str(&text).expect("parse train config");
     let rewards = read_rewards(&cfg.reward_config);
     init_from_default(true).expect("load collision meshes");
-    let mut learner = learner_config(&cfg, device(&cfg.backend))
-        .init(move |_| create_env(&rewards), default_adamw_optimizer());
-    learner.load();
-    learner.learn();
+    for phase in plan_phases(&cfg, checkpoint_steps(&cfg.checkpoints)) {
+        println!("PHASE policy_lr={} iterations={:?}", phase.policy_lr, phase.iterations);
+        let rewards = rewards.clone();
+        let mut learner = learner_config(&cfg, phase, device(&cfg.backend))
+            .init(move |_| create_env(&rewards), default_adamw_optimizer());
+        learner.load();
+        learner.learn();
+    }
 }
 
 /// Fixed probe input used to compare logits across PyTorch and Burn.
 fn probe_input() -> Vec<f32> {
-    (0..OBS_SIZE)
-        .map(|i| ((i as f32) * 0.37).sin() * 0.8)
-        .collect()
+    (0..OBS_SIZE).map(|i| ((i as f32) * 0.37).sin() * 0.8).collect()
 }
 
 fn new_model(dev: &Device) -> Actic {
-    Actic::new(
-        OBS_SIZE,
-        N_ACTIONS,
-        LAYERS.to_vec(),
-        LAYERS.to_vec(),
-        &[],
-        dev,
-        None,
-    )
+    Actic::new(OBS_SIZE, N_ACTIONS, LAYERS.to_vec(), LAYERS.to_vec(), &[], dev, None)
 }
 
 /// Python `DiscreteFF` keys `model.{0,2,4,6,8}` <-> Burn `linear_layers.{0..4}`.
@@ -178,15 +203,8 @@ const KEY_MAP: [(&str, &str); 5] = [
 
 fn print_probe_logits(actor: &rlgymppo::Net, dev: &Device) {
     let x = Tensor::<2>::from_data(TensorData::new(probe_input(), [1, OBS_SIZE]), dev);
-    let logits = actor
-        .forward(x)
-        .into_data()
-        .try_to_vec::<f32>()
-        .expect("logits");
-    println!(
-        "PROBE_LOGITS {}",
-        serde_json::to_string(&logits).expect("json")
-    );
+    let logits = actor.forward(x).into_data().try_to_vec::<f32>().expect("logits");
+    println!("PROBE_LOGITS {}", serde_json::to_string(&logits).expect("json"));
 }
 
 /// Writes checkpoint `<out>/1` with the Python actor and a fresh critic.
@@ -203,16 +221,8 @@ fn import(pt: &Path, out: &Path) {
     let result = model.actor.load_from(&mut store).expect("load .pt");
     println!("import: {result:?}");
     print_probe_logits(&model.actor, &dev);
-    model
-        .actor
-        .clone()
-        .save_file(out.join("actor.bpk"))
-        .expect("save actor");
-    model
-        .critic
-        .clone()
-        .save_file(out.join("critic.bpk"))
-        .expect("save critic");
+    model.actor.clone().save_file(out.join("actor.bpk")).expect("save actor");
+    model.critic.clone().save_file(out.join("critic.bpk")).expect("save critic");
     std::fs::write(
         out.join("stats.toml"),
         "cumulative_timesteps = 0\ncumulative_model_updates = 0\ncumulative_epochs = 0\ntransfer_rounds = 0\n\n[return_stat]\nmean = 0.0\nmean_sqr = 0.0\ncount = 0\n",
@@ -228,10 +238,7 @@ fn regex_escape(s: &str) -> String {
 /// Exports an actor to PyTorch-layout safetensors (`model.{0,2,4,6,8}`).
 fn export(ckpt: &Path, out: &Path) {
     let dev = Device::flex();
-    let actor = new_model(&dev)
-        .actor
-        .try_load_file(ckpt.join("actor.bpk"))
-        .expect("load actor");
+    let actor = new_model(&dev).actor.try_load_file(ckpt.join("actor.bpk")).expect("load actor");
     let mut store = SafetensorsStore::from_file(out).with_to_adapter(BurnToPyTorchAdapter);
     for (to, from) in KEY_MAP {
         store = store.with_key_remapping(format!("^{}", regex_escape(from)), to);
@@ -249,12 +256,7 @@ fn record(reward_toml: &Path, out: &Path, steps: usize, ckpt: Option<&Path>) {
     init_from_default(true).expect("load collision meshes");
     let cfg = read_rewards(reward_toml);
     let dev = Device::flex();
-    let actor = ckpt.map(|c| {
-        new_model(&dev)
-            .actor
-            .try_load_file(c.join("actor.bpk"))
-            .expect("load actor")
-    });
+    let actor = ckpt.map(|c| new_model(&dev).actor.try_load_file(c.join("actor.bpk")).expect("load actor"));
     let mut env = create_env(&cfg);
     let mut rng = SmallRng::seed_from_u64(7);
     let mut lines = Vec::with_capacity(steps);
@@ -268,14 +270,8 @@ fn record(reward_toml: &Path, out: &Path, steps: usize, ckpt: Option<&Path>) {
             .map(|o| match &actor {
                 Some(a) if rng.random_range(0.0..1.0) > 0.2 => {
                     let x = Tensor::<2>::from_data(TensorData::new(o.clone(), [1, OBS_SIZE]), &dev);
-                    let logits = a
-                        .forward(x)
-                        .into_data()
-                        .try_to_vec::<f32>()
-                        .expect("logits");
-                    (0..N_ACTIONS)
-                        .max_by(|&i, &j| logits[i].total_cmp(&logits[j]))
-                        .expect("actions")
+                    let logits = a.forward(x).into_data().try_to_vec::<f32>().expect("logits");
+                    (0..N_ACTIONS).max_by(|&i, &j| logits[i].total_cmp(&logits[j])).expect("actions")
                 }
                 _ => rng.random_range(0..N_ACTIONS),
             })
@@ -299,10 +295,7 @@ fn record(reward_toml: &Path, out: &Path, steps: usize, ckpt: Option<&Path>) {
 /// beyond it (pad timers in `BOOST_LOCATIONS` order, a few car flags).
 fn record_line(state: &rlgymppo::rlgym::GameState, obs: &[Vec<f32>], reset: bool) -> String {
     let order = indococo_bot::obs::pad_order(state);
-    let pads: Vec<f32> = order
-        .iter()
-        .map(|&k| state.boost_pads[k].1.cooldown)
-        .collect();
+    let pads: Vec<f32> = order.iter().map(|&k| state.boost_pads[k].1.cooldown).collect();
     let extra: Vec<_> = state
         .cars
         .iter()
@@ -327,10 +320,7 @@ fn record_line(state: &rlgymppo::rlgym::GameState, obs: &[Vec<f32>], reset: bool
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let arg = |i: usize| -> &str {
-        args.get(i)
-            .map_or_else(|| panic!("missing argument {i}"), String::as_str)
-    };
+    let arg = |i: usize| -> &str { args.get(i).map_or_else(|| panic!("missing argument {i}"), String::as_str) };
     match arg(0) {
         "train" => train(Path::new(arg(1))),
         "import" => import(Path::new(arg(1)), Path::new(arg(2))),
@@ -342,5 +332,36 @@ fn main() {
             args.get(4).map(Path::new),
         ),
         other => panic!("unknown mode {other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(warmup: u64, iterations: u64) -> TrainConfig {
+        let text = include_str!("../../config/train.toml");
+        let mut c: TrainConfig = toml::from_str(text).expect("train.toml");
+        c.critic_warmup_steps = warmup;
+        c.iterations = iterations;
+        c
+    }
+
+    #[test]
+    fn warmup_freezes_policy_then_trains() {
+        let c = cfg(30_000_000, 0);
+        let p = plan_phases(&c, 0);
+        assert_eq!(p, vec![
+            Phase { policy_lr: 0.0, iterations: Some(300) },
+            Phase { policy_lr: c.policy_lr, iterations: None },
+        ]);
+    }
+
+    #[test]
+    fn warmup_resumes_partially_and_is_skipped_when_done() {
+        let c = cfg(30_000_000, 50);
+        assert_eq!(plan_phases(&c, 29_950_000)[0].iterations, Some(1));
+        assert_eq!(plan_phases(&c, 30_000_000), vec![Phase { policy_lr: c.policy_lr, iterations: Some(50) }]);
+        assert_eq!(plan_phases(&cfg(0, 0), 0).len(), 1);
     }
 }

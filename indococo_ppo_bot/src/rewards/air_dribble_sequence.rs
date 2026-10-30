@@ -12,7 +12,8 @@ use glam::DVec3;
 use super::StepReward;
 use super::mech::{
     LANE_RADIUS, MIN_LEAD, advantage_ad_mult, advantage_clear_lane, dist_to_opp_goal_y,
-    min_opp_car_dist, pressure_ad_mult, takeoff_have_speed, takeoff_need_speed, takeoff_speed_mult,
+    min_opp_car_dist, pressure_ad_mult, takeoff_have_speed, takeoff_need_speed,
+    takeoff_speed_mult,
 };
 use super::possession_range_carry::TakeoffParams;
 use crate::consts::{BACK_WALL_Y, BALL_MAX_SPEED};
@@ -111,12 +112,7 @@ impl StepReward for AirDribbleSequence {
                 }
                 self.chain_touches[a] = 0;
                 self.carry[a] = 0.0;
-                let need = takeoff_need_speed(
-                    dist_to_opp_goal_y(car, bpos),
-                    self.t.speed_near,
-                    self.t.speed_far,
-                    self.t.dist_ref,
-                );
+                let need = takeoff_need_speed(dist_to_opp_goal_y(car, bpos), self.t.speed_near, self.t.speed_far, self.t.dist_ref);
                 let have = takeoff_have_speed(car, bvel);
                 let (clear, lead) = advantage_clear_lane(a, state, bpos, LANE_RADIUS, MIN_LEAD);
                 self.takeoff_mult[a] = takeoff_speed_mult(have, need, self.t.floor)
@@ -125,11 +121,9 @@ impl StepReward for AirDribbleSequence {
             self.chain_touches[a] += 1;
             self.alive_until[a] = tick + self.chain_ticks;
 
-            let goal_term =
-                (bvel.dot(unit(opp_net(car.attack_sign()) - bpos)) / BALL_MAX_SPEED).max(0.0);
+            let goal_term = (bvel.dot(unit(opp_net(car.attack_sign()) - bpos)) / BALL_MAX_SPEED).max(0.0);
             let car_term = (bvel.dot(unit(car.forward)) / BALL_MAX_SPEED).max(0.0);
-            let mut payout =
-                self.touch_bonus + self.forward_goal_w * goal_term + self.forward_car_w * car_term;
+            let mut payout = self.touch_bonus + self.forward_goal_w * goal_term + self.forward_car_w * car_term;
             payout += self.carry[a] * self.carry_scale;
             if self.chain_touches[a] >= 2 {
                 payout += self.chain_bonus;

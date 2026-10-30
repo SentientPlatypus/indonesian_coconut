@@ -21,11 +21,7 @@ pub const FLIP_TORQUE_TIME: f32 = 0.65;
 
 #[inline]
 fn inv(v: Vec3A, invert: bool) -> Vec3A {
-    if invert {
-        Vec3A::new(-v.x, -v.y, v.z)
-    } else {
-        v
-    }
+    if invert { Vec3A::new(-v.x, -v.y, v.z) } else { v }
 }
 #[inline]
 fn push_pos(o: &mut Vec<f32>, p: Vec3A) {
@@ -52,14 +48,8 @@ pub struct CarFlags {
 }
 pub fn flags(c: &CarState) -> CarFlags {
     // RLGym v2 `Car.on_ground`: at least three wheels in contact (not RocketSim's `is_on_ground`).
-    let on_ground = c
-        .wheels_with_contact()
-        .iter()
-        .filter(|w| w.is_some())
-        .count()
-        >= 3;
-    let has_flip =
-        !c.has_double_jumped && !c.has_flipped && c.air_time_since_jump < DOUBLEJUMP_MAX_DELAY;
+    let on_ground = c.wheels_with_contact().iter().filter(|w| w.is_some()).count() >= 3;
+    let has_flip = !c.has_double_jumped && !c.has_flipped && c.air_time_since_jump < DOUBLEJUMP_MAX_DELAY;
     let is_holding_jump = c.controls.jump;
     CarFlags {
         on_ground,
@@ -89,40 +79,13 @@ fn car_obs(o: &mut Vec<f32>, c: &CarState, invert: bool) {
 
 /// rlgym `common_values.BOOST_LOCATIONS` (x, y) order; RocketSim pads are matched by nearest position.
 pub const BOOST_LOCATIONS: [(f32, f32); 34] = [
-    (0.0, -4240.0),
-    (-1792.0, -4184.0),
-    (1792.0, -4184.0),
-    (-3072.0, -4096.0),
-    (3072.0, -4096.0),
-    (-940.0, -3308.0),
-    (940.0, -3308.0),
-    (0.0, -2816.0),
-    (-3584.0, -2484.0),
-    (3584.0, -2484.0),
-    (-1788.0, -2300.0),
-    (1788.0, -2300.0),
-    (-2048.0, -1036.0),
-    (0.0, -1024.0),
-    (2048.0, -1036.0),
-    (-3584.0, 0.0),
-    (-1024.0, 0.0),
-    (1024.0, 0.0),
-    (3584.0, 0.0),
-    (-2048.0, 1036.0),
-    (0.0, 1024.0),
-    (2048.0, 1036.0),
-    (-1788.0, 2300.0),
-    (1788.0, 2300.0),
-    (-3584.0, 2484.0),
-    (3584.0, 2484.0),
-    (0.0, 2816.0),
-    (-940.0, 3310.0),
-    (940.0, 3308.0),
-    (-3072.0, 4096.0),
-    (3072.0, 4096.0),
-    (-1792.0, 4184.0),
-    (1792.0, 4184.0),
-    (0.0, 4240.0),
+    (0.0, -4240.0), (-1792.0, -4184.0), (1792.0, -4184.0), (-3072.0, -4096.0), (3072.0, -4096.0),
+    (-940.0, -3308.0), (940.0, -3308.0), (0.0, -2816.0), (-3584.0, -2484.0), (3584.0, -2484.0),
+    (-1788.0, -2300.0), (1788.0, -2300.0), (-2048.0, -1036.0), (0.0, -1024.0), (2048.0, -1036.0),
+    (-3584.0, 0.0), (-1024.0, 0.0), (1024.0, 0.0), (3584.0, 0.0), (-2048.0, 1036.0), (0.0, 1024.0),
+    (2048.0, 1036.0), (-1788.0, 2300.0), (1788.0, 2300.0), (-3584.0, 2484.0), (3584.0, 2484.0),
+    (0.0, 2816.0), (-940.0, 3310.0), (940.0, 3308.0), (-3072.0, 4096.0), (3072.0, 4096.0),
+    (-1792.0, 4184.0), (1792.0, 4184.0), (0.0, 4240.0),
 ];
 
 /// RocketSim pad index for each rlgym BOOST_LOCATIONS entry.
@@ -151,10 +114,7 @@ pub fn build_one(state: &GameState, i: usize, order: &[usize]) -> Vec<f32> {
     push_pos(&mut o, inv(b.pos, invert));
     push_scaled(&mut o, inv(b.vel, invert), LIN_VEL_COEF);
     push_scaled(&mut o, inv(b.ang_vel, invert), ANG_VEL_COEF);
-    let timers: Vec<f32> = order
-        .iter()
-        .map(|&k| state.boost_pads[k].1.cooldown)
-        .collect();
+    let timers: Vec<f32> = order.iter().map(|&k| state.boost_pads[k].1.cooldown).collect();
     if invert {
         o.extend(timers.iter().rev().map(|t| t * PAD_TIMER_COEF));
     } else {
@@ -175,14 +135,10 @@ pub fn build_one(state: &GameState, i: usize, order: &[usize]) -> Vec<f32> {
     car_obs(&mut o, car, invert);
     // allies then enemies, in state order (python iterates state.cars dict order)
     for (j, (oi, oc)) in state.cars.iter().enumerate() {
-        if j != i && oi.team == info.team {
-            car_obs(&mut o, oc, invert);
-        }
+        if j != i && oi.team == info.team { car_obs(&mut o, oc, invert); }
     }
     for (j, (oi, oc)) in state.cars.iter().enumerate() {
-        if j != i && oi.team != info.team {
-            car_obs(&mut o, oc, invert);
-        }
+        if j != i && oi.team != info.team { car_obs(&mut o, oc, invert); }
     }
     o
 }
@@ -193,14 +149,10 @@ pub struct V2DefaultObs;
 /// Observation size for 1v1.
 pub const OBS_SIZE: usize = 92;
 impl<SI> Obs<SI> for V2DefaultObs {
-    fn get_obs_space(&self, _si: &SI) -> usize {
-        OBS_SIZE
-    }
+    fn get_obs_space(&self, _si: &SI) -> usize { OBS_SIZE }
     fn reset(&mut self, _s: &GameState, _si: &mut SI) {}
     fn build_obs(&mut self, state: &GameState, _si: &mut SI) -> FullObs {
         let order = pad_order(state);
-        (0..state.cars.len())
-            .map(|i| build_one(state, i, &order))
-            .collect()
+        (0..state.cars.len()).map(|i| build_one(state, i, &order)).collect()
     }
 }

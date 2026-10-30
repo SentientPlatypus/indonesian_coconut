@@ -77,6 +77,11 @@ TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 indococo-train train runs/e8b2/train.toml
 indococo-train export runs/e8b2/checkpoints/<n> policy.safetensors
 ```
 
+After an `import`, the critic is untrained. Set `critic_warmup_steps` (e.g. 30M)
+to train only the critic first: the policy learning rate is 0 until the
+checkpoint reaches that step count, then normal PPO continues in the same
+process. A resumed run skips the finished part of the warm-up.
+
 The defaults use LibTorch CUDA with a bf16 critic and an f32 policy. On the
 L4 box, a warm-started run reaches about 78k sps.
 

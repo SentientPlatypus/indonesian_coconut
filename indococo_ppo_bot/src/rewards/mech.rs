@@ -126,11 +126,7 @@ pub fn bump_contact_part(car: &CarView, target: DVec3) -> ContactPart {
     // label, i.e. "u" > "r" > "f".
     let (af, au, ar) = (f.abs(), u.abs(), r.abs());
     if au >= af && au >= ar {
-        if u > 0.0 {
-            ContactPart::Roof
-        } else {
-            ContactPart::Wheels
-        }
+        if u > 0.0 { ContactPart::Roof } else { ContactPart::Wheels }
     } else if ar >= af {
         ContactPart::Side
     } else if f > 0.0 {
@@ -257,18 +253,9 @@ mod tests {
     #[test]
     fn contact_part_uses_dominant_axis() {
         let c = car(0, DVec3::ZERO);
-        assert_eq!(
-            bump_contact_part(&c, DVec3::new(100.0, 0.0, 0.0)),
-            ContactPart::Nose
-        );
-        assert_eq!(
-            bump_contact_part(&c, DVec3::new(0.0, 0.0, -100.0)),
-            ContactPart::Wheels
-        );
-        assert_eq!(
-            bump_contact_part(&c, DVec3::new(0.0, -100.0, 0.0)),
-            ContactPart::Side
-        );
+        assert_eq!(bump_contact_part(&c, DVec3::new(100.0, 0.0, 0.0)), ContactPart::Nose);
+        assert_eq!(bump_contact_part(&c, DVec3::new(0.0, 0.0, -100.0)), ContactPart::Wheels);
+        assert_eq!(bump_contact_part(&c, DVec3::new(0.0, -100.0, 0.0)), ContactPart::Side);
     }
 
     #[test]
@@ -276,13 +263,10 @@ mod tests {
         let mut s = StateView::default();
         s.cars.push(car(0, DVec3::new(0.0, 2000.0, 17.0)));
         s.cars.push(car(1, DVec3::new(0.0, -2000.0, 17.0)));
-        let (clear, lead) =
-            advantage_clear_lane(0, &s, DVec3::new(0.0, 2100.0, 93.0), LANE_RADIUS, MIN_LEAD);
+        let (clear, lead) = advantage_clear_lane(0, &s, DVec3::new(0.0, 2100.0, 93.0), LANE_RADIUS, MIN_LEAD);
         assert!(clear);
         assert_eq!(lead, 4000.0);
         s.cars[1].pos.y = 4000.0;
-        assert!(
-            !advantage_clear_lane(0, &s, DVec3::new(0.0, 2100.0, 93.0), LANE_RADIUS, MIN_LEAD).0
-        );
+        assert!(!advantage_clear_lane(0, &s, DVec3::new(0.0, 2100.0, 93.0), LANE_RADIUS, MIN_LEAD).0);
     }
 }

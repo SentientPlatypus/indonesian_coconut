@@ -105,9 +105,7 @@ impl StepReward for ContactQuality {
             if safe_norm(state.ball.pos - state.cars[agent].pos) > self.ball_max_dist {
                 continue;
             }
-            let hardness = (dv / self.hard_target.max(1.0))
-                .min(1.0)
-                .powf(self.hard_power);
+            let hardness = (dv / self.hard_target.max(1.0)).min(1.0).powf(self.hard_power);
             if part == ContactPart::Wheels {
                 rewards[agent] -= self.wheel_penalty * hardness;
             } else {

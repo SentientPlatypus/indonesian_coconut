@@ -43,15 +43,7 @@ impl StepReward for OneVOneRecover {
             .cars
             .iter()
             .map(|me| {
-                let own_goal = DVec3::new(
-                    0.0,
-                    if me.is_blue() {
-                        -BACK_NET_Y
-                    } else {
-                        BACK_NET_Y
-                    },
-                    0.0,
-                );
+                let own_goal = DVec3::new(0.0, if me.is_blue() { -BACK_NET_Y } else { BACK_NET_Y }, 0.0);
                 let d_me = safe_norm(me.pos - own_goal);
                 let d_ball = safe_norm(ball - own_goal);
                 let threatening = ball_vel.dot(unit(own_goal - ball)) > self.threat_speed_min;

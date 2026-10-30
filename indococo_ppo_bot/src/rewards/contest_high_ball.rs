@@ -36,12 +36,7 @@ impl Default for ContestHighBall {
 
 impl StepReward for ContestHighBall {
     fn reset(&mut self, initial: &StateView) {
-        self.prev_dist = initial
-            .cars
-            .iter()
-            .enumerate()
-            .map(|(a, c)| (a, (initial.ball.pos - c.pos).length()))
-            .collect();
+        self.prev_dist = initial.cars.iter().enumerate().map(|(a, c)| (a, (initial.ball.pos - c.pos).length())).collect();
     }
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
@@ -53,8 +48,7 @@ impl StepReward for ContestHighBall {
             }
             return rewards;
         }
-        let height_scale =
-            ((ball.z - self.ball_z_min) / (CEILING_Z - self.ball_z_min).max(1.0)).min(1.0);
+        let height_scale = ((ball.z - self.ball_z_min) / (CEILING_Z - self.ball_z_min).max(1.0)).min(1.0);
         let height_scale = 0.45 + 0.55 * height_scale;
         for (a, car) in state.cars.iter().enumerate() {
             if car.is_demoed() {
@@ -69,14 +63,9 @@ impl StepReward for ContestHighBall {
                 continue;
             }
             let climb = car.vel.z.max(0.0) / CAR_MAX_SPEED;
-            let closed =
-                ((prev - dist).max(0.0) / (CAR_MAX_SPEED / TICKS_PER_SECOND).max(1e-6)).min(1.0);
+            let closed = ((prev - dist).max(0.0) / (CAR_MAX_SPEED / TICKS_PER_SECOND).max(1e-6)).min(1.0);
             let speed = car.vel.length();
-            let align = if speed > 50.0 && dist > 1e-3 {
-                (car.vel.dot(to_ball) / (speed * dist)).max(0.0)
-            } else {
-                0.0
-            };
+            let align = if speed > 50.0 && dist > 1e-3 { (car.vel.dot(to_ball) / (speed * dist)).max(0.0) } else { 0.0 };
             let mut r = (self.climb_w * climb + self.close_w * closed) * (0.5 + 0.5 * align);
             if !car.on_ground() {
                 r *= 1.0 + self.air_bonus;

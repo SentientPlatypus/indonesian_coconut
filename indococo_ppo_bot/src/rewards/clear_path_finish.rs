@@ -44,12 +44,10 @@ impl StepReward for ClearPathFinish {
         for (a, car) in state.cars.iter().enumerate() {
             let just_touched = car.ball_touches > self.prev_touches[a];
             self.prev_touches[a] = car.ball_touches;
-            if car.is_demoed() || !just_touched || (ball_pos - car.pos).length() > self.touch_radius
-            {
+            if car.is_demoed() || !just_touched || (ball_pos - car.pos).length() > self.touch_radius {
                 continue;
             }
-            let (clear, _) =
-                advantage_clear_lane(a, state, ball_pos, self.lane_radius, self.min_lead);
+            let (clear, _) = advantage_clear_lane(a, state, ball_pos, self.lane_radius, self.min_lead);
             let goalward = ball_vel.y * car.attack_sign();
             if !clear || goalward < self.min_goalward {
                 continue;

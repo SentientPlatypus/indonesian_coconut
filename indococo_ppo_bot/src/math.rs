@@ -20,3 +20,4 @@ pub fn unit(v: DVec3) -> DVec3 {
 pub fn opp_net(attack_sign: f64) -> DVec3 {
     DVec3::new(0.0, attack_sign * crate::consts::BACK_NET_Y, 0.0)
 }
+

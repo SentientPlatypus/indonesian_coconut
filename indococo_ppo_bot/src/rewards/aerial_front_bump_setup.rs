@@ -65,11 +65,7 @@ impl StepReward for AerialFrontBumpSetup {
             let front = attack * (car.pos.y - ball.y);
             let front_frac = (front / (self.front_margin + 120.0).max(1.0)).clamp(0.0, 1.0);
             let boosting = car.is_boosting();
-            let to_front = DVec3::new(
-                ball.x - car.pos.x,
-                (ball.y + attack * 220.0) - car.pos.y,
-                ball.z - car.pos.z,
-            );
+            let to_front = DVec3::new(ball.x - car.pos.x, (ball.y + attack * 220.0) - car.pos.y, ball.z - car.pos.z);
             let n = to_front.length();
             let mut approach = 0.0;
             if n > 1e-6 {

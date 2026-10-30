@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use super::StepReward;
 use super::mech::{
     LANE_RADIUS, MIN_LEAD, advantage_ad_mult, advantage_clear_lane, dist_to_opp_goal_y,
-    min_opp_car_dist, pressure_ad_mult, takeoff_have_speed, takeoff_need_speed, takeoff_speed_mult,
+    min_opp_car_dist, pressure_ad_mult, takeoff_have_speed, takeoff_need_speed,
+    takeoff_speed_mult,
 };
 use super::possession_range_carry::TakeoffParams;
 use crate::consts::{BACK_NET_Y, GOAL_HEIGHT, STEPS_PER_SECOND};
@@ -33,12 +34,7 @@ pub struct AirDribbleParams {
 
 impl Default for AirDribbleParams {
     fn default() -> Self {
-        Self {
-            w_goal_align: 0.25,
-            goal_speed_target: 900.0,
-            push_floor: 0.35,
-            finish_floor: 0.40,
-        }
+        Self { w_goal_align: 0.25, goal_speed_target: 900.0, push_floor: 0.35, finish_floor: 0.40 }
     }
 }
 
@@ -131,17 +127,13 @@ impl StepReward for AirDribble {
         let mut rewards = vec![0.0; state.cars.len()];
         let (bpos, bvel) = (state.ball.pos, state.ball.vel);
 
-        let touching: Vec<usize> = (0..state.cars.len())
-            .filter(|&a| state.cars[a].ball_touches > 0)
-            .collect();
+        let touching: Vec<usize> = (0..state.cars.len()).filter(|&a| state.cars[a].ball_touches > 0).collect();
         if touching.len() == 1 {
             self.last_touch = Some(touching[0]);
         } else if touching.len() > 1 {
             self.last_touch = super::ball_travel::closest_to(state, &touching, bpos);
         }
-        let Some(a) = self.last_touch else {
-            return rewards;
-        };
+        let Some(a) = self.last_touch else { return rewards };
         let car = &state.cars[a];
 
         if car.on_ground() || bpos.z < self.min_height {
@@ -179,28 +171,16 @@ impl StepReward for AirDribble {
         };
         let rel = (1.0 - (bvel - car.vel).length() / (self.max_rel_speed + 1e-6)).max(0.0);
         let under_cos = unit(diff).dot(unit(car.up));
-        let under = ((under_cos - self.under_cos_min)
-            / (self.under_cos_soft - self.under_cos_min + 1e-6))
-            .clamp(0.0, 1.0);
+        let under = ((under_cos - self.under_cos_min) / (self.under_cos_soft - self.under_cos_min + 1e-6)).clamp(0.0, 1.0);
 
         let goal_y = car.attack_sign() * BACK_NET_Y;
         let goal_dir = unit(DVec3::new(0.0, goal_y, 0.0) - bpos);
         let ball_speed = bvel.length();
-        let goal_term = if ball_speed < 1e-6 {
-            0.0
-        } else {
-            (bvel / (ball_speed + 1e-6)).dot(goal_dir).max(0.0)
-        };
+        let goal_term = if ball_speed < 1e-6 { 0.0 } else { (bvel / (ball_speed + 1e-6)).dot(goal_dir).max(0.0) };
 
         let terms = [roof, center, forward, rel, under, goal_term];
         let total_w: f64 = self.weights.iter().sum();
-        let mut score = self
-            .weights
-            .iter()
-            .zip(terms)
-            .map(|(w, t)| w * t)
-            .sum::<f64>()
-            / (total_w + 1e-6);
+        let mut score = self.weights.iter().zip(terms).map(|(w, t)| w * t).sum::<f64>() / (total_w + 1e-6);
 
         score *= self.goal_progress_floor + (1.0 - self.goal_progress_floor) * goal_term;
         let push = (bvel.dot(goal_dir) / (self.p.goal_speed_target + 1e-6)).clamp(0.0, 1.0);
@@ -220,20 +200,14 @@ impl StepReward for AirDribble {
 
         let prev_streak = self.sustain_streak[a];
         self.sustain_streak[a] = prev_streak + 1;
-        let sustain =
-            1.0 + self.sustain_ramp * f64::from(self.sustain_streak[a].min(self.sustain_cap));
+        let sustain = 1.0 + self.sustain_ramp * f64::from(self.sustain_streak[a].min(self.sustain_cap));
 
         if prev_streak == 0 && self.t.speed_far > 1.0 {
-            let need = takeoff_need_speed(
-                dist_to_opp_goal_y(car, bpos),
-                self.t.speed_near,
-                self.t.speed_far,
-                self.t.dist_ref,
-            );
+            let need = takeoff_need_speed(dist_to_opp_goal_y(car, bpos), self.t.speed_near, self.t.speed_far, self.t.dist_ref);
             let have = takeoff_have_speed(car, bvel);
             let (clear, lead) = advantage_clear_lane(a, state, bpos, LANE_RADIUS, MIN_LEAD);
-            self.takeoff_mult[a] = takeoff_speed_mult(have, need, self.t.floor)
-                * advantage_ad_mult(clear, lead, self.t.advantage_floor);
+            self.takeoff_mult[a] =
+                takeoff_speed_mult(have, need, self.t.floor) * advantage_ad_mult(clear, lead, self.t.advantage_floor);
         }
         score *= self.takeoff_mult[a];
         score *= pressure_ad_mult(

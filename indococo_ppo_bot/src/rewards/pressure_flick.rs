@@ -49,10 +49,7 @@ impl StepReward for PressureFlick {
         let mut rewards = vec![0.0; state.cars.len()];
         let (ball_pos, ball_vel) = (state.ball.pos, state.ball.vel);
         let delta_v = (ball_vel - self.last_ball_vel).length();
-        if let Some(agent) = self
-            .last_touch
-            .filter(|_| delta_v > self.velocity_threshold)
-        {
+        if let Some(agent) = self.last_touch.filter(|_| delta_v > self.velocity_threshold) {
             let car = &state.cars[agent];
             let dist = (ball_pos - car.pos).length();
             let cradling = dist < self.dribble_radius
@@ -60,10 +57,7 @@ impl StepReward for PressureFlick {
             let on_wall = car.pos.x.abs() >= self.wall_x_thresh || car.pos.z >= self.wall_z_thresh;
             if cradling && !on_wall {
                 let opp_near = state.cars.iter().enumerate().any(|(i, o)| {
-                    i != agent
-                        && o.team != car.team
-                        && !o.is_demoed()
-                        && (o.pos - ball_pos).length() < self.opp_near_dist
+                    i != agent && o.team != car.team && !o.is_demoed() && (o.pos - ball_pos).length() < self.opp_near_dist
                 });
                 let goalward = ball_vel.y * car.attack_sign();
                 if opp_near && goalward >= self.min_goalward {
