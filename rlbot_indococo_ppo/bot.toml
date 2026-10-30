@@ -1,0 +1,18 @@
+#:schema https://rlbot.org/schemas/agent.json
+[settings]
+name = "Indonesian Coconut (indococo-ppo)"
+loadout_file = "loadout.toml"
+root_dir = ""
+run_command = "indococo-rlbot.exe"
+run_command_linux = "./indococo-rlbot"
+agent_id = "indonesian_coconut/indococo_ppo"
+
+[details]
+description = """
+1v1 PPO bot on the indococo-ppo Rust framework (RocketSim + Burn).
+Native binary with Burn CPU inference; no Python. Weights in weights/actor.bpk.
+"""
+source_link = "https://github.com/SentientPlatypus/indonesian_coconut/tree/indococo-ppo"
+developer = "SentientPlatypus"
+language = "Rust"
+tags = ["1v1"]
