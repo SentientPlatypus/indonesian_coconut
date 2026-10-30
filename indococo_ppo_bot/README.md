@@ -43,7 +43,9 @@ indococo_ppo_bot/
   tests/
     reward_parity.rs      one test per reward term vs. Python on recorded states
     fixtures/e8b2_rewards.jsonl
-  tools/parity.py         builds expected per-term rewards with the Python classes
+  tools/parity.py         regenerates the fixture with the Python classes (needs master)
+  tools/eval_loop.sh      h2h evals vs 1v1.pt during training
+  config/E8b_shell_contact_strong.json  E8B2 experiment config (input to parity.py)
 ```
 
 Each reward module carries a doc comment naming its Python class and
@@ -70,7 +72,9 @@ binary embeds the meshes.
 ```sh
 # 1. Warm start: import the Python policy (read-only) as checkpoint 1.
 #    Prints PROBE_LOGITS, which match PyTorch's output on the same input.
-indococo-train import rlbot_submission/policies/1v1.pt runs/e8b2/checkpoints
+#    1v1.pt lives on master (rlbot_submission/ is not on this branch):
+git show master:rlbot_submission/policies/1v1.pt > 1v1.pt
+indococo-train import 1v1.pt runs/e8b2/checkpoints
 # 2. Train. Set paths in a copy of config/train.toml; resumes from the latest checkpoint.
 TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 indococo-train train runs/e8b2/train.toml
 # 3. Export the policy to safetensors for the Python h2h tools.
@@ -87,17 +91,38 @@ L4 box, a warm-started run reaches about 78k sps.
 
 ## Reward parity
 
+`cargo test` checks every reward term against the committed fixture
+`tests/fixtures/e8b2_rewards.jsonl`, which holds recorded states plus the
+expected per-term rewards from the Python classes. The tests need no Python.
+
+Regenerating the fixture needs the Python reference stack (`v4_env.py`,
+`loop_config.py`, `rewards/`, `rl_math/`), which is only on `master`, plus a
+Python env with `rlgym` (v2) and `numpy`:
+
 ```sh
+git worktree add /tmp/ic_master master
 indococo-train record config/e8b2_1v1.toml rec.jsonl 30000 <checkpoint>   # from repo root
-python tools/parity.py <repo_root> <experiment.json> rec.jsonl expected.jsonl \
+python tools/parity.py /tmp/ic_master config/E8b_shell_contact_strong.json rec.jsonl expected.jsonl \
     --fixture tests/fixtures/e8b2_rewards.jsonl
 INDOCOCO_PARITY=expected.jsonl cargo test --release --test reward_parity -- --nocapture
 ```
 
 `record` plays the policy with 20% random actions. `parity.py` rebuilds each
 `GameState`, checks the Rust observations against `DefaultObs`, and runs the
-Python reward classes. The committed fixture is a single 2.1k-step episode
-that triggers every weighted term.
+Python reward classes. `config/E8b_shell_contact_strong.json` is the E8B2
+experiment config those classes are built from. The committed fixture is a
+single 2.1k-step episode that triggers every weighted term.
+
+Doc comments that name Python modules (`v4_env._reward_fn`,
+`rewards/zero_sum.py`, and so on) refer to files on `master`.
+
+## Head-to-head evals
+
+`tools/eval_loop.sh` exports each new checkpoint past every 100M steps and
+runs a 400-game h2h against `1v1.pt` with `h2h_1v1.py`. That script and the
+evaluator it imports (`eval_match.py`, `v4_env.py`, `loop_config.py`) aren't on
+this branch. Point `H2H` at an `h2h_1v1.py`, and `INDOCOCO_REPO` at a
+directory holding those modules, e.g. the `/tmp/ic_master` worktree above.
 
 ## Deploy (RLBot v5)
 
@@ -109,7 +134,7 @@ set `INDOCOCO_WEIGHTS`.
 
 ## Not ported or differences
 
-- **Curriculum:** the Python curriculum (`curriculum_mutators.py`) is not
+- **Curriculum:** the Python curriculum (`curriculum_mutators.py` on master) is not
   ported. State setting is a fixed mix: kickoff 0.34, random 0.33, and
   random-on-ground 0.33.
 - **`double_tap` and team rewards:** `double_tap` has weight 0 in E8B2 and

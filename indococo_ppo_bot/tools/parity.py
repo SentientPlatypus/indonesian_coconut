@@ -4,6 +4,7 @@ Replays a recording made by `indococo-train record` through the real Python
 reward classes (built by `v4_env._reward_fn` from the experiment config) and
 the real `DefaultObs`, and writes the expected per-term weighted rewards.
 
+    # <repo_root>: a checkout of master (the Python reference is not on indococo-ppo)
     python tools/parity.py <repo_root> <experiment.json> <recording.jsonl> <expected.jsonl> \
         [--fixture <out.jsonl> --max-lines N]
 

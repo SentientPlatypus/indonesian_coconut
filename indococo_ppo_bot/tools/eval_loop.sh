@@ -6,6 +6,8 @@
 #
 #   tools/eval_loop.sh <checkpoints> <out.jsonl> <reference.pt>
 # env: TRAIN_BIN, H2H (path to h2h_1v1.py), PY, EVERY (100000000), GAMES (400), PROCS (8)
+# h2h_1v1.py imports eval_match/v4_env/loop_config from $INDOCOCO_REPO; those
+# Python files are on master only (e.g. git worktree add /tmp/ic_master master).
 set -euo pipefail
 CKPTS=$1 OUT=$2 REF=$3
 EVERY=${EVERY:-100000000} GAMES=${GAMES:-400} PROCS=${PROCS:-8}
