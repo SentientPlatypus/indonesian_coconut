@@ -12,7 +12,7 @@ use rlgymppo_utils::terminal::{
 use rlgymppo_utils::{AvgTracker, Report, any_terminal};
 
 use crate::action::LookupNoMask;
-use crate::events::StepEvents;
+use crate::events::EventTracker;
 use crate::obs::V2DefaultObs;
 use crate::rewards::{CombinedReward, RewardConfig};
 use crate::setters::{WeightedSetter, build_mix};
@@ -30,8 +30,7 @@ const STEPS_PER_MINUTE: f64 = 120.0 / 8.0 * 60.0;
 pub struct SharedInfo {
     rng: SmallRng,
     metrics: Report,
-    /// Previous step, for the event counters.
-    prev: Option<StateView>,
+    events: EventTracker,
 }
 
 impl Default for SharedInfo {
@@ -45,14 +44,14 @@ impl From<u64> for SharedInfo {
         Self {
             rng: SmallRng::seed_from_u64(seed),
             metrics: Report::default(),
-            prev: None,
+            events: EventTracker::default(),
         }
     }
 }
 
 impl SharedInfoProvider for SharedInfo {
     fn reset(&mut self, state: &GameState) {
-        self.prev = Some(StateView::from_game_state(state));
+        self.events.reset(StateView::from_game_state(state));
     }
 
     fn update(&mut self, gs: &GameState) {
@@ -74,23 +73,16 @@ impl SharedInfoProvider for SharedInfo {
 
 impl SharedInfo {
     /// `Events/*`: share of car-steps with the flip available, and flip
-    /// resets, bumps and demos per car per minute of game time.
+    /// resets, bumps, demos and air dribble bumps per car per minute.
     fn count_events(&mut self, gs: &GameState) {
-        let cur = StateView::from_game_state(gs);
-        if let Some(prev) = self
-            .prev
-            .as_ref()
-            .filter(|p| p.cars.len() == cur.cars.len())
-        {
-            let per_min = |hit: bool| AvgTracker::from(if hit { STEPS_PER_MINUTE } else { 0.0 });
-            for e in StepEvents::between(prev, &cur) {
-                self.metrics["Events/Has Flip Ratio"] += AvgTracker::from(e.has_flip);
-                self.metrics["Events/Flip Resets per min"] += per_min(e.flip_reset);
-                self.metrics["Events/Bumps per min"] += per_min(e.bump);
-                self.metrics["Events/Demos per min"] += per_min(e.demo);
-            }
+        let per_min = |hit: bool| AvgTracker::from(if hit { STEPS_PER_MINUTE } else { 0.0 });
+        for e in self.events.step(StateView::from_game_state(gs)) {
+            self.metrics["Events/Has Flip Ratio"] += AvgTracker::from(e.has_flip);
+            self.metrics["Events/Flip Resets per min"] += per_min(e.flip_reset);
+            self.metrics["Events/Bumps per min"] += per_min(e.bump);
+            self.metrics["Events/Demos per min"] += per_min(e.demo);
+            self.metrics["Events/Air Dribble Bumps per min"] += per_min(e.air_dribble_bump);
         }
-        self.prev = Some(cur);
     }
 }
 

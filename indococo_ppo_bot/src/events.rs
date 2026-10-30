@@ -4,6 +4,8 @@
 //! These are counters for tracking how often a behavior happens, not rewards.
 //! [`StepEvents::between`] compares two consecutive [`StateView`]s.
 
+use crate::consts::TICKS_PER_SECOND;
+use crate::rewards::air_dribble_bump::in_air_dribble;
 use crate::state::{CarView, StateView};
 
 /// cos(45 deg): the ball must be within 45 deg of straight under the wheels
@@ -23,6 +25,9 @@ pub struct StepEvents {
     pub demo: bool,
     /// Got demolished this step.
     pub demoed: bool,
+    /// A bump or demo by a car in the middle of an air dribble (see
+    /// [`in_air_dribble`]). Only set by [`EventTracker`].
+    pub air_dribble_bump: bool,
 }
 
 impl StepEvents {
@@ -47,9 +52,51 @@ impl StepEvents {
                     bump: new_victim.is_some() && !victim_demoed,
                     demo: victim_demoed,
                     demoed: car.is_demoed() && !before.is_demoed(),
+                    air_dribble_bump: false,
                 }
             })
             .collect()
+    }
+}
+
+/// Seconds after an airborne touch during which a car still "has" the air dribble.
+pub const AIR_DRIBBLE_POSSESSION_S: f64 = 1.25;
+
+/// Step-to-step event detection with the history air dribble bumps need.
+#[derive(Default)]
+pub struct EventTracker {
+    prev: Option<StateView>,
+    last_air_touch: Vec<Option<u64>>,
+}
+
+impl EventTracker {
+    /// Starts a new episode.
+    pub fn reset(&mut self, initial: StateView) {
+        self.last_air_touch = vec![None; initial.cars.len()];
+        self.prev = Some(initial);
+    }
+
+    /// Events between the previous state and `cur` (empty on the first call
+    /// or if the car count changed).
+    pub fn step(&mut self, cur: StateView) -> Vec<StepEvents> {
+        let window = (AIR_DRIBBLE_POSSESSION_S * TICKS_PER_SECOND) as u64;
+        let mut events = match &self.prev {
+            Some(prev) if prev.cars.len() == cur.cars.len() => StepEvents::between(prev, &cur),
+            _ => Vec::new(),
+        };
+        self.last_air_touch.resize(cur.cars.len(), None);
+        for (i, e) in events.iter_mut().enumerate() {
+            let in_dribble =
+                in_air_dribble(&cur.cars[i], self.last_air_touch[i], cur.tick_count, window);
+            e.air_dribble_bump = in_dribble && (e.bump || e.demo);
+        }
+        for (i, car) in cur.cars.iter().enumerate() {
+            if car.ball_touches > 0 && car.is_airborne() {
+                self.last_air_touch[i] = Some(cur.tick_count);
+            }
+        }
+        self.prev = Some(cur);
+        events
     }
 }
 
@@ -155,5 +202,30 @@ mod tests {
         cur.cars[1].demo_respawn_timer = 3.0;
         let e = StepEvents::between(&prev, &cur);
         assert!(e[0].demo && !e[0].bump && e[1].demoed);
+    }
+
+    #[test]
+    fn tracker_flags_bumps_shortly_after_an_air_touch() {
+        let mut s = air_state();
+        s.cars[1].pos.z = 900.0;
+        let mut t = EventTracker::default();
+        t.reset(s.clone());
+        s.tick_count = 8;
+        s.cars[0].ball_touches = 1;
+        assert!(t.step(s.clone()).iter().all(|e| !e.air_dribble_bump));
+        s.tick_count = 80;
+        s.cars[0].ball_touches = 0;
+        s.cars[0].bump_victim = Some(1);
+        let e = t.step(s.clone());
+        assert!(e[0].bump && e[0].air_dribble_bump);
+
+        let mut late = s.clone();
+        late.cars[0].bump_victim = None;
+        late.tick_count = 400;
+        t.step(late.clone());
+        late.tick_count = 408;
+        late.cars[0].bump_victim = Some(1);
+        let e = t.step(late);
+        assert!(e[0].bump && !e[0].air_dribble_bump, "touch too long ago");
     }
 }

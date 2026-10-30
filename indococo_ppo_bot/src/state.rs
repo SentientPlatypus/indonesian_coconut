@@ -16,6 +16,9 @@ use crate::consts::{
     BLUE_TEAM, DOUBLEJUMP_MAX_DELAY, FLIP_TORQUE_TIME, GOAL_THRESHOLD, ORANGE_TEAM,
 };
 
+/// Height above which a car without ground contact counts as airborne.
+pub const AIRBORNE_MIN_Z: f64 = 150.0;
+
 /// Ball physics.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BallView {
@@ -69,6 +72,14 @@ impl CarView {
     #[must_use]
     pub fn on_ground(&self) -> bool {
         self.wheels_with_contact.iter().filter(|&&w| w).count() >= 3
+    }
+
+    /// Really in the air: no ground contact and above `AIRBORNE_MIN_Z`.
+    /// (RocketSim counts wheels touching the ball as contact, so a car with
+    /// its wheels on the ball is not airborne by this test.)
+    #[must_use]
+    pub fn is_airborne(&self) -> bool {
+        !self.on_ground() && self.pos.z > AIRBORNE_MIN_Z
     }
 
     #[must_use]

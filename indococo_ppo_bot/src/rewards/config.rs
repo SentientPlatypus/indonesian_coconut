@@ -10,7 +10,9 @@ use super::aerial_boost_toward_ball::AerialBoostTowardBall;
 use super::aerial_distance::AerialDistance;
 use super::aerial_front_bump_setup::AerialFrontBumpSetup;
 use super::air_dribble::{AirDribble, AirDribbleParams};
+use super::air_dribble_bump::{AirDribbleBump, AirDribbleBumpParams};
 use super::air_dribble_sequence::AirDribbleSequence;
+use super::air_touch_height::{AirTouchHeight, AirTouchHeightParams};
 use super::ang_vel::AngVel;
 use super::ball_travel::BallTravel;
 use super::boost_change::BoostChange;
@@ -23,6 +25,7 @@ use super::energy::Energy;
 use super::face_ball::FaceBall;
 use super::flick::Flick;
 use super::flip_reset::{FlipReset, FlipResetParams};
+use super::flip_reset_gated::{FlipResetGated, FlipResetGatedParams};
 use super::goal::Goal;
 use super::goal_dist::GoalDist;
 use super::goal_prob::GoalProb;
@@ -114,6 +117,10 @@ pub struct RewardWeights {
     pub range_carry: f64,
     pub clear_path: f64,
     pub ang_vel: f64,
+    // Experiment terms (built only when non-zero).
+    pub flip_reset_gated: f64,
+    pub air_touch_height: f64,
+    pub air_dribble_bump: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -178,6 +185,9 @@ pub struct RewardConfig {
     pub contact_quality: ContactQualityParams,
     pub safe_boost: SafeBoostParams,
     pub clear_path: ClearPathParams,
+    pub flip_reset_gated: FlipResetGatedParams,
+    pub air_touch_height: AirTouchHeightParams,
+    pub air_dribble_bump: AirDribbleBumpParams,
 }
 
 impl RewardConfig {
@@ -216,7 +226,7 @@ impl RewardConfig {
             }
         };
         let t = self.takeoff.clone();
-        let terms: Vec<(&'static str, f64, Box<dyn StepReward>)> = vec![
+        let mut terms: Vec<(&'static str, f64, Box<dyn StepReward>)> = vec![
             ("goal", w.goal, Box::new(Goal)),
             ("goal_prob", w.goal_prob, Box::new(GoalProb::default())),
             (
@@ -342,6 +352,31 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 3] = [
+            (
+                "flip_reset_gated",
+                w.flip_reset_gated,
+                zs(
+                    "flip_reset_gated",
+                    Box::new(FlipResetGated::new(self.flip_reset_gated.clone())),
+                ),
+            ),
+            (
+                "air_touch_height",
+                w.air_touch_height,
+                Box::new(AirTouchHeight::new(self.air_touch_height.clone())),
+            ),
+            (
+                "air_dribble_bump",
+                w.air_dribble_bump,
+                Box::new(AirDribbleBump::new(self.air_dribble_bump.clone())),
+            ),
+        ];
+        terms.extend(
+            experiment
+                .into_iter()
+                .filter(|(_, weight, _)| *weight != 0.0),
+        );
         CombinedReward::new(
             terms
                 .into_iter()

@@ -5,6 +5,10 @@
 //! order of `v4_env._reward_fn` with their weights and zero-sum wrappers into
 //! a [`CombinedReward`], which is what the environment uses.
 //!
+//! `flip_reset_gated`, `air_touch_height` and `air_dribble_bump` are
+//! experiment terms (not in Python); they are only built when their weight
+//! is non-zero, so the E8B2 term list and the parity tests are unchanged.
+//!
 //! Rewards are computed in `f64` (like NumPy) and summed in `f64`; only the
 //! final per-car total is narrowed to `f32` for the learner.
 
@@ -12,7 +16,9 @@ pub mod aerial_boost_toward_ball;
 pub mod aerial_distance;
 pub mod aerial_front_bump_setup;
 pub mod air_dribble;
+pub mod air_dribble_bump;
 pub mod air_dribble_sequence;
+pub mod air_touch_height;
 pub mod ang_vel;
 pub mod ball_travel;
 pub mod boost_change;
@@ -25,6 +31,7 @@ pub mod energy;
 pub mod face_ball;
 pub mod flick;
 pub mod flip_reset;
+pub mod flip_reset_gated;
 pub mod goal;
 pub mod goal_dist;
 pub mod goal_prob;

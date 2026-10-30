@@ -48,6 +48,10 @@ pub struct DemoParams {
     pub ground_ball_max_dist: f64,
     pub ground_carry_min_dist: f64,
     pub wheel_scale: f64,
+    /// Pay a bump only when the victim's velocity changed more than the
+    /// bumper's, so the car that got knocked is never paid (RocketSim can set
+    /// `bump_victim` on both cars). Off by default for Python parity.
+    pub victim_gate: bool,
 }
 
 impl Default for DemoParams {
@@ -73,6 +77,7 @@ impl Default for DemoParams {
             ground_ball_max_dist: 2200.0,
             ground_carry_min_dist: 180.0,
             wheel_scale: 1.0,
+            victim_gate: false,
         }
     }
 }
@@ -151,6 +156,9 @@ impl StepReward for Demo {
             }
             let dv = victim_car.vel - self.prev[victim].vel;
             let acceleration = dv.length();
+            if p.victim_gate && acceleration <= (car.vel - self.prev[agent].vel).length() {
+                continue;
+            }
             let ball = state.ball.pos;
             let car_ball = (ball - car.pos).length();
             let (extra, nose_g) = self.extra(agent, state, victim_car.pos, car_ball);
@@ -185,5 +193,61 @@ impl StepReward for Demo {
         }
         self.prev = state.cars.clone();
         rewards
+    }
+}
+
+#[cfg(test)]
+mod victim_gate_tests {
+    use glam::DVec3;
+
+    use super::*;
+
+    /// Orange (car 1) got knocked but also reports blue as its bump victim.
+    fn knocked_reports_victim() -> (StateView, StateView) {
+        let car = |team, y| CarView {
+            team,
+            pos: DVec3::new(0.0, y, 17.0),
+            up: DVec3::Z,
+            ..CarView::default()
+        };
+        let s0 = StateView {
+            cars: vec![car(0, 0.0), car(1, 200.0)],
+            ..StateView::default()
+        };
+        let mut s1 = s0.clone();
+        s1.cars[0].bump_victim = Some(1);
+        s1.cars[1].bump_victim = Some(0);
+        s1.cars[1].vel = DVec3::new(0.0, 1500.0, 0.0);
+        (s0, s1)
+    }
+
+    #[test]
+    fn victim_gate_pays_only_the_bumper() {
+        let (s0, s1) = knocked_reports_victim();
+        let mut ungated = Demo::new(DemoParams::default());
+        ungated.reset(&s0);
+        let r = ungated.get_rewards(&s1);
+        assert!(r[0] > 0.0);
+        assert_eq!(
+            r[1], 0.0,
+            "blue did not move, so orange's bump pays nothing either way"
+        );
+
+        let (s0, mut s1) = knocked_reports_victim();
+        s1.cars[0].vel = DVec3::new(0.0, 900.0, 0.0); // blue slowed too
+        let mut ungated = Demo::new(DemoParams::default());
+        ungated.reset(&s0);
+        assert!(
+            ungated.get_rewards(&s1)[1] > 0.0,
+            "ungated: the knocked car is paid"
+        );
+        let mut gated = Demo::new(DemoParams {
+            victim_gate: true,
+            ..DemoParams::default()
+        });
+        gated.reset(&s0);
+        let r = gated.get_rewards(&s1);
+        assert!(r[0] > 0.0);
+        assert_eq!(r[1], 0.0, "gated: the knocked car is not paid");
     }
 }
