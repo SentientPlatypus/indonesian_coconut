@@ -1,7 +1,7 @@
 """Headless 1v1 games in RocketSim (RLGym v2 engine), first goal wins.
 
 Follows the `h2h_1v1.py` protocol: RLGym kickoff positions from the seeded
-numpy RNG, actions applied on the tick they are chosen, a game ends at the
+numpy RNG (plus a small seeded spawn jitter, see SPAWN_JITTER_UU), actions applied on the tick they are chosen, a game ends at the
 first goal, or as a timeout after 30 s without a touch or 300 s total. Each
 seed is played twice, the candidate on blue then on orange.
 """
@@ -18,12 +18,29 @@ from rlgym.rocket_league.state_mutators import FixedTeamSizeMutator, KickoffMuta
 from .agent import Agent
 from .view import AgentView
 
+# Kickoff spawn jitter. RLGym has 5 kickoff spawns, so two deterministic bots
+# would only ever play 10 distinct games; a small seeded offset of each car's
+# spawn (the ball stays at the center) makes every seed a different game.
+SPAWN_JITTER_UU = 60.0
+SPAWN_JITTER_YAW = np.radians(4.0)
+
 NO_TOUCH_TIMEOUT_TICKS = 30 * TICKS_PER_SECOND
 GAME_TIMEOUT_TICKS = 300 * TICKS_PER_SECOND
 
 
+def jitter_spawns(state, rng: np.random.Generator) -> None:
+    """Shifts each car's spawn by up to SPAWN_JITTER_UU and turns it by up to SPAWN_JITTER_YAW."""
+    for car in state.cars.values():
+        p = car.physics
+        p.position = p.position + np.array([*rng.uniform(-SPAWN_JITTER_UU, SPAWN_JITTER_UU, 2), 0.0])
+        a = rng.uniform(-SPAWN_JITTER_YAW, SPAWN_JITTER_YAW)
+        rz = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+        p.rotation_mtx = rz @ p.rotation_mtx
+
+
 class Arena:
-    def __init__(self) -> None:
+    def __init__(self, jitter: bool = True) -> None:
+        self.jitter = jitter
         self.engine = RocketSimEngine()
         self.mutator = MutatorSequence(FixedTeamSizeMutator(blue_size=1, orange_size=1), KickoffMutator())
 
@@ -41,6 +58,8 @@ class Arena:
         shared: dict = {}
         state = self.engine.create_base_state()
         self.mutator.apply(state, shared)
+        if self.jitter:
+            jitter_spawns(state, np.random.default_rng(seed))
         state = self.engine.set_state(state, shared)
         agents = {
             cid: (blue if car.team_num == BLUE_TEAM else orange) for cid, car in state.cars.items()

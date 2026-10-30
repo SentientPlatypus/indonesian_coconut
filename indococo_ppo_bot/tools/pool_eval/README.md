@@ -22,8 +22,10 @@ decisive win rate over the opponents.
 - 1v1 Octane, RLGym `KickoffMutator` spawn from the seeded numpy RNG. A game
   ends at the first goal, or as a timeout after 30 s without a touch or 300 s.
 - Each seed is played twice, candidate blue then orange. Every game uses a
-  fresh engine, so the same seed replays the same game and two identical
-  deterministic policies come out at exactly 50%.
+  fresh engine, so the same seed replays the same game. Each car's spawn gets
+  a seeded jitter (up to 60 uu, 4 degrees; ball stays centered): with only 5
+  kickoff spawns, two deterministic bots would otherwise play just 10
+  distinct games.
 - The engine advances to the next tick any agent has to decide on: every
   8 ticks for our policy, 6 for Immortal, every tick during a scripted kickoff.
   Actions apply on the tick they are chosen (RLBot runs them a few ticks late).
@@ -56,7 +58,9 @@ weights stay in `~/eval_bots`, not in this repo, because the Necto family and
 Element repos state no license.
 
 Adapter checks: every public bot beats `zero` and `random` in all test games,
-and 1v1.pt against itself comes out at exactly 50%.
+1v1.pt against itself is 18-22 over 40 jittered games, and the public bots
+rank sensibly among themselves (Necto beats Element 33-7, Immortal beats
+Element 31-9).
 
 ## Keep-best and the eval loop
 
