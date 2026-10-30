@@ -13,6 +13,7 @@ the real `DefaultObs`, and writes the expected per-term weighted rewards.
 episodes covering every term's non-zero events is written for the repo.
 """
 import argparse
+import collections
 import json
 import sys
 
@@ -98,6 +99,7 @@ def main():
 
     out = []
     max_obs = 0.0
+    obs_bad = collections.Counter()
     episodes = []
     with open(args.recording) as f:
         for line in f:
@@ -108,8 +110,12 @@ def main():
             obs_builder.reset(agents, gs, shared)
             obs = obs_builder.build_obs(agents, gs, shared)
             for a in agents:
-                diff = np.abs(np.asarray(obs[a], np.float32) - np.asarray(d["obs"][a], np.float32)).max()
-                max_obs = max(max_obs, float(diff))
+                delta = np.abs(np.asarray(obs[a], np.float32) - np.asarray(d["obs"][a], np.float32))
+                for i in np.nonzero(delta > 1e-4)[0]:
+                    obs_bad[int(i)] += 1
+                    if obs_bad[int(i)] == 1:
+                        print(f"obs[{i}] reset={d['reset']}: python {obs[a][i]} rust {d['obs'][a][i]}")
+                max_obs = max(max_obs, float(delta.max()))
             if d["reset"]:
                 for _, fn, _ in fns:
                     fn.reset(agents, gs, shared)
@@ -134,6 +140,7 @@ def main():
     for r in out:
         for n, vals in zip(names, r["expected"]):
             nonzero[n] += any(abs(v) > 1e-12 for v in vals)
+    print("obs indices off by >1e-4 (index: count):", dict(sorted(obs_bad.items())))
     print(f"steps {len(out)}  episodes {len(episodes)}  max |obs diff| {max_obs:.3e}")
     print("non-zero steps per term:", json.dumps(nonzero))
 

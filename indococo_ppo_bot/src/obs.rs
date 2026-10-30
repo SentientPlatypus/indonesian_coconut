@@ -51,7 +51,13 @@ pub struct CarFlags {
     pub is_flipping: bool,
 }
 pub fn flags(c: &CarState) -> CarFlags {
-    let on_ground = c.is_on_ground();
+    // RLGym v2 `Car.on_ground`: at least three wheels in contact (not RocketSim's `is_on_ground`).
+    let on_ground = c
+        .wheels_with_contact()
+        .iter()
+        .filter(|w| w.is_some())
+        .count()
+        >= 3;
     let has_flip =
         !c.has_double_jumped && !c.has_flipped && c.air_time_since_jump < DOUBLEJUMP_MAX_DELAY;
     let is_holding_jump = c.controls.jump;
