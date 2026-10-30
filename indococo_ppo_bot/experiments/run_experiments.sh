@@ -19,6 +19,7 @@ CRATE=$(dirname "$HERE")
 : "${RUNS:?}" "${BIN:?}" "${WARM:?}" "${OPP_1V1:?}" "${OPP_430M:?}" "${MESHES:?}" "${LIBTORCH_LIB:?}" "${PY:?}"
 EVERY=${EVERY:-100000000} GAMES=${GAMES:-100} PROCS=${PROCS:-8}
 TS=100000   # timesteps per iteration (train_template.toml)
+export LD_LIBRARY_PATH=$LIBTORCH_LIB   # indococo-train export needs LibTorch too
 
 # arm -> "rewards:iterations ..." stages
 declare -A STAGES=(
@@ -66,8 +67,9 @@ write_arm_script() {  # train script for arm $1: runs each unfinished stage
       echo "fi"
     done
     echo "touch '$run/TRAIN_DONE'"
-  } > "$run/train.sh"
-  chmod +x "$run/train.sh"
+  } > "$run/train.sh.new"
+  chmod +x "$run/train.sh.new"
+  mv "$run/train.sh.new" "$run/train.sh"   # atomic: a running train.sh keeps its copy
 }
 
 final_eval() {  # pool eval + keep-best of the newest checkpoint, if not yet logged
@@ -93,7 +95,9 @@ for arm in $ARMS; do
   session=ippo_$arm
   if ! tmux has-session -t "$session" 2>/dev/null; then
     tmux new-session -d -s "$session" -n train "$run/train.sh"
-    tmux new-window -t "$session" -n eval "env TRAIN_BIN='$run/indococo-train' PY='$PY' EVERY=$EVERY GAMES=$GAMES PROCS=$PROCS '$CRATE/tools/eval_loop.sh' '$run/checkpoints' '$run/logs/evals.jsonl' '$run/bots/best'; sleep infinity"
+  fi
+  if ! tmux list-windows -t "$session" -F '#W' | grep -qx eval; then
+    tmux new-window -d -t "$session" -n eval "env TRAIN_BIN='$run/indococo-train' PY='$PY' EVERY=$EVERY GAMES=$GAMES PROCS=$PROCS '$CRATE/tools/eval_loop.sh' '$run/checkpoints' '$run/logs/evals.jsonl' '$run/bots/best' 2>&1 | tee -a '$run/logs/eval_loop.log'; sleep infinity"
   fi
   until [[ -f $run/TRAIN_DONE ]]; do
     status
