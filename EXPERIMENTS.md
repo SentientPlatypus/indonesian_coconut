@@ -170,7 +170,7 @@ the reward to have much to learn from.
   rather than spend 7 more hours. Tag `exp-E6-revert`.
 - User (2026-09-28) dropped double-tap work; no follow-up planned.
 
-## E7 — flip-reset fix — RUNNING (started 2026-09-28 20:37Z)
+## E7 — flip-reset fix — SUPERSEDED by E7b (at check 2)
 
 - **Change:** `fr_on_ball_contact=true` (the reset's obtain / hold / use
   payouts can finally fire), flip-reset curriculum 0.10 -> 0.15, easy-stage
@@ -181,8 +181,435 @@ the reward to have much to learn from.
 
 | check | base | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | resets/g |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.483 | 0.933 | 0.938 | 0.852 | 0.848 | 0.937 | 0.943 | 0.93 | 0.0029 |
 
-## E8 — shell contact, not wheels — QUEUED (next after E7)
+Check 1: strength held (even with E2G1, NG119 0.848 is the best yet). Resets
+in games are still at baseline, but on its own flip-reset training spawns
+(160 episodes) E7 gets 3 real resets and uses all 3, vs 0 for E2G1: the
+fixed reward is being learned, slowly. If check 2 is still near baseline,
+the next step (E7b) is a near-guaranteed reset spawn stage (ball just above
+an upside-down car, closing) so the obtain/use payouts fire in most
+episodes instead of ~2%.
+
+| 2 | 0.486 | 0.922 | 0.917 | 0.865 | 0.798 | 0.910 | 0.900 | 0.97 | 0.0017 |
+
+Check 2: resets still at baseline, strength even with E2G1 but slipping a
+little. Test of a new **assisted** spawn (upside-down car rising into a ball
+just above its wheels): a car with no input resets in 59/100 episodes, E7
+check 2 in 25/100 and uses the flip every time, vs 3/160 on the normal
+flip-reset spawns. So training was starved of successes, not broken.
+
+## E7b — assisted flip-reset spawns — REVERTED 2026-09-29 (early, at check 2)
+
+- **Change:** E7 config + `fr_assist_frac 0.5`: half of the flip-reset
+  training spawns are the assisted stage, so the reset happens in a large
+  share of them and the reward can teach keeping and using the flip.
+  Config `E7b_fr_assist.json`, resumed from E7 check 2
+  (`expE7_53427385724`). Benchmark base stays **E2G1**, so any drift from
+  the champion shows up directly.
+- **Keep rule:** resets/game >= 0.005 (2x+ baseline), vs E2G1 >= 0.47,
+  V10 >= 0.90, style >= 0.75; else back to E2G1 + E2 config.
+
+| check | base (E2G1) | V10 | EL | NG54 | NG119 | GD6 | BS34 | style | resets/g |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 (53.52B) | 0.500 | 0.941 | 0.930 | 0.862 | 0.798 | 0.963 | 0.937 | 0.95 | 0.0029 |
+
+Check 1 FR probes: assisted spawn 9/100 resets (E7 check 2: 25/100, no-op
+car: 59/100), normal FR spawns 3 resets — the policy steers away from the
+reset rather than into it. Strength has recovered to parity with E2G1.
+| 2 (53.62B) | 0.511 | 0.934 | 0.920 | 0.848 | 0.823 | 0.933 | 0.927 | 0.95 | 0.0029 |
+
+Check 2 FR probes: assisted 9/100, normal 2. **Decision: early revert.**
+Resets stuck at 0.0029/game (target 0.005) over 4 checks of E7+E7b, and on
+the assisted spawn the policy resets less often than a car with no input.
+Strength is even with E2G1, so no gain to keep. Training goes back to E2G1
+with the E2 config. Flip-reset idea for later: reward only keeping the flip
+alive (no stage chain), or an imitation start from scripted resets.
+
+Contact baseline for E8 (E7 check 1 panel, 4800 games): 2.05 contacts/game, 14.8%
+on the wheels, 0.45 hard shell contacts/game, 0.042 goals/game within 3 s of
+a hard shell contact.
+
+## TEAM MODES (RLBot Championship 2026) — started 2026-09-30 15:40Z
+
+User (2026-09-30): championship needs 1v1 + 2v2 + 3v3 (series go 3v3,
+1v1, 2v2), submission due Oct 1 AoE (~Oct 2 12:00 UTC). ML policies may be
+updated until 12 h before each stream (first ML stream Oct 24). 1v1 loop
+PAUSED (E8c stopped at 53.617B, checkpoint in data/checkpoints/V4).
+
+- **Transfer:** `tools/expand_obs.py` widens E2G1's first layer 92 -> 132
+  (2v2) / 172 (3v3) inputs (DefaultObs = [52 shared][self][allies][enemies]);
+  old columns copied, new ally / extra-enemy columns 0, Adam moments padded.
+  Verified: identical action probabilities to E2G1 at step 0.
+- **Rewards (config `T2_team.json`, `T3_team.json`, both = E2 config +):**
+  `team_size` 2/3; `TeamSpacingReward` weight 12 (-(1 - d/1500) per
+  teammate closer than 1500 uu (1300 in 3v3), plus -1 when two teammates are
+  both within 900 of the ball); `PassReward` weight 150 (touch then a
+  teammate's touch within 4 s after >= 800 uu of ball travel; receiver half;
+  x2 if the ball is moving at their net); `team_spirit` 0.3 (blend each
+  car's reward with its team mean); PossessionReward now team-aware (a
+  teammate taking over is not a steal and does not penalise the passer);
+  kickoff share 0.5.
+- **Runs:** both at once, 14 collector procs each, ~5.6k steps/s each.
+  Logs `train_T2.log` / `train_T3.log`, checkpoints `data/checkpoints/T2|T3`.
+- **Eval:** `tools/team_check.sh <n>` = 200 NvN kickoff games vs the
+  E2G1-transfer start. Start baseline (init vs itself, 20 games): 2v2 crowd
+  (2+ teammates within 900 of ball) 18.7% of the time, 0.4 passes/game,
+  nearest mate 1763 uu; 3v3 crowd 22.2%, 0.5 passes/game, nearest mate 910 uu.
+- **Submission bot:** `rlbot_submission/` (RLBot v5, Python): counts players
+  per team each tick and uses `policies/1v1.pt` (E2G1), `2v2.pt`, `3v3.pt`
+  with DefaultObs(zero_padding=team size).
+
+| check | mode | steps | score vs init | crowd | passes/g | nearest mate |
+|---|---|---:|---:|---:|---:|---:|
+| 1 | 2v2 | 31M | **0.545** | 0.021 | 0.135 | 3945 |
+| 1 | 3v3 (T3a) | 32M | 0.185 | 0.026 | 0.115 | 2299 |
+
+Check 1: 2v2 works (beats its start, crowding 19% -> 2%); promoted to
+`rlbot_submission/policies/2v2.pt`. 3v3 over-corrected: spacing (two mates
+x weight 12) plus the ball-crowd term charging even the challenger made the
+cars avoid the ball (37-163). **T3b:** restarted from the E2G1 transfer with
+spacing weight 12 -> 4, distance 1300 -> 1100, and the ball-crowd term no
+longer charging the car nearest the ball (`team_crowd_closest_exempt`).
+Passes fell in both modes (0.4 -> ~0.13/g); revisit once spacing settles.
+
+| 2 | 2v2 | 66M | 0.525 | 0.019 | 0.195 | 4171 |
+| 2 | 3v3 (T3b) | 32M | 0.245 | 0.043 | 0.145 | 2057 |
+
+Check 2: 2v2 steady (promoted the 66M snapshot, more passes). T3b better
+than T3a at the same steps (0.245 vs 0.185) but still loses to the
+all-chase start. Measured T3b's weighted spacing penalty: -0.34/step/car
+(~-110/episode vs 1200 per goal), so it is not dominant. Suspect kickoffs
+(eval games end at the first goal; the crowd term discourages a second car
+at the kickoff). **T3c control:** 3v3 from the transfer with spacing
+weight 0 (pass + team spirit kept), 8 procs, to test whether spacing is
+what costs the goals.
+
+| 3 | 2v2 | 92M | 0.395 | 0.011 | 0.11 | 4570 |
+| 3 | 3v3 (T3b) | 62M | 0.28 | 0.044 | 0.21 | 2063 |
+| 3 | 3v3 (T3c, no spacing) | 20M | 0.32 | 0.070 | 0.245 | 1740 |
+
+Check 3: the no-spacing control also loses to the start, and 2v2 is now
+sliding (0.545 -> 0.525 -> 0.395) while its cars drift ever further apart.
+So spacing is not the main cause. Remaining shared suspects: team_spirit
+0.3 (dilutes each car's own credit) and the big pass reward (150, up to
+~450 per pass pair). All three runs stopped. New runs (10/10/8 procs):
+**T2b_mild** (from T2 31M, the best 2v2) and **T3e_mild** (from the
+transfer): team_spirit 0, pass 50, spacing 4 with the closest car exempt
+from the crowd term. **T3d_control** (from the transfer): no team rewards
+at all — if it also loses to the start, the drop is self-play dynamics or
+eval bias, not the team rewards. Submission keeps 2v2 = T2 66M, 3v3 = the
+E2G1 transfer.
+
+**2026-09-30, stopped before check 4 (T2b 38M, T3e 8M, T3d 7M).** Every team
+run, the no-team-reward control included, had its policy entropy climb from
+3.95 right after the transfer to ~4.2 (max for 90 actions is 4.50; the 1v1
+run sits at 3.86). The 0.01 entropy bonus pushes the transferred policy
+towards random actions, which fits the user's report from RLBot ("right
+idea, but wrong mechanics") and the scores falling below the start. User
+asked for 3v3 first, then carry the result over to 2v2. New runs from the
+E2G1 transfer, 14 procs each, both with the T3e_mild rewards:
+**T3f_lowent** (ent_coef 0.002) and **T3g_lowent_lowlr** (ent_coef 0.002,
+policy_lr 5e-5). By 11M entropy is falling (3.78 / 3.86). Plan: the best
+3v3 goes to `policies/3v3.pt`, then gets shrunk to 2v2
+(`tools/expand_obs.py --team-size 2` now remaps any size to any size,
+dropping the extra ally and enemy slots) and trained as its own 2v2 policy.
+
+| 4 | 3v3 (T3f, ent 0.002) | 20M | **0.80** | 0.140 | 0.975 | 1367 |
+| 4 | 3v3 (T3g, ent 0.002, lr 5e-5) | 20M | **0.825** | 0.159 | 0.81 | 1245 |
+
+Check 4: the entropy fix works — both low-entropy runs crush the start
+(165-35), with 4-8x the passes of any earlier team run; crowding is below
+the start's 22%. **T3g 20M promoted to `policies/3v3.pt`**; T3g keeps
+training, T3f stopped. 2v2 restarted with the same settings (spacing dist
+1500), 9 procs each: **T2c_from3g** = T3g 20M shrunk to 2v2 (user's idea),
+**T2d_lowent** = E2G1 widened to 2v2, as the comparison.
+
+| 5 | 2v2 (T2c, from 3v3) | 21M | **0.83** | 0.085 | 0.50 | 2572 |
+| 5 | 2v2 (T2d, from 1v1) | 21M | 0.80 | 0.118 | 0.49 | 2236 |
+| 5 | 3v3 (T3g) | 62M | **0.855** | 0.100 | 0.775 | 1601 |
+
+Head-to-head vs the policies then in the submission (200 games each):
+T2c 21M beats the old 2v2.pt (T2 66M) **167-33**; T3g 62M beats T3g 20M
+**123-77**. Both promoted (`policies/2v2.pt` = T2c 21M, `3v3.pt` = T3g
+62M). Starting 2v2 from the trained 3v3 beat starting from 1v1 (0.83 vs
+0.80, less crowding), so T2d is stopped; T2c and T3g keep training.
+
+| 6 | 2v2 (T2c) | 55M | 0.855 | 0.069 | 0.535 | 2996 |
+| 6 | 3v3 (T3g) | 110M | 0.885 | 0.110 | 1.10 | 1601 |
+
+Head-to-head vs the submission: T2c 55M vs T2c 21M **108-92 (0.54)**, under
+the 0.55 bar and within noise for 200 games, so 2v2.pt stays at 21M. T3g
+110M vs T3g 62M **115-85 (0.575)**, promoted to `3v3.pt`. Gains per check
+are shrinking; both keep training.
+
+**2026-10-01 (user): team zero-sum possession + more pass reward.**
+PossessionReward is now zero-sum by team: while a team has sole control,
+every car on it gets +r and every opponent -r (it used to pay only the
+possessor, 1 vs -N); teammates in control together count as their team's
+possession instead of contested; a teammate taking over is not a steal.
+1v1 is identical to before (checked: 0 difference over 2400 steps), and
+each team-mode step sums to 0. Pass weight 50 -> 100. Runs resumed from
+the latest checkpoints, 14 procs each: **T2e_teamposs** (from T2c 75M) and
+**T3h_teamposs** (from T3g 137M). The spacing penalty is unchanged (weight
+4; 1500 / 1100 uu; the car nearest the ball is exempt from the crowd term).
+
+| 7 | 2v2 (T2e, team poss) | 103M | **0.87** | 0.069 | 0.595 | 3268 |
+| 7 | 3v3 (T3h, team poss) | 166M | 0.84 | 0.104 | 1.045 | 1704 |
+
+Head-to-head vs the submission: T2e 103M vs T2c 21M **128-72 (0.64)**,
+promoted to `2v2.pt` (first 2v2 gain since check 5; passes 0.535 -> 0.595).
+T3h 166M vs T3g 110M **107-93 (0.535)**, under the bar; `3v3.pt` stays at
+T3g 110M. Both keep training.
+
+| 8 | 2v2 (T2e) | 141M | **0.895** | 0.077 | 0.565 | 3237 |
+| 8 | 3v3 (T3h) | 206M | 0.845 | 0.097 | 0.99 | 1727 |
+
+Head-to-head vs the submission: T2e 141M vs T2e 103M **112-88 (0.56)**,
+promoted to `2v2.pt`. T3h 206M vs T3g 110M **97-103 (0.485)**: 3v3 has not
+beaten T3g 110M in two checks (0.535, 0.485), so it is on a plateau;
+`3v3.pt` stays at T3g 110M.
+
+| 9 | 2v2 (T2e) | 181M | 0.835 | 0.064 | 0.485 | 3187 |
+| 9 | 3v3 (T3h) | 247M | 0.85 | 0.086 | 0.885 | 1764 |
+
+Head-to-head vs the submission: T2e 181M vs T2e 141M **95-105 (0.475)**,
+not promoted. T3h 247M vs T3g 110M 112-88, confirmed with 200 more games
+(104-96): **216-184 over 400 (0.54)**, under the bar; not promoted. Both
+modes on a plateau. **T2f_lr25 / T3i_lr25:** resume from T2e 187M / T3h
+254M with policy_lr 5e-5 -> 2.5e-5 (checked the new rate is applied after
+the optimizer state loads), everything else unchanged.
+
+| 10 | 2v2 (T2f, half LR) | 227M | 0.835 | 0.077 | 0.59 | 3188 |
+| 10 | 3v3 (T3i, half LR) | 295M | **0.88** | 0.088 | 0.87 | 1804 |
+
+Head-to-head vs the submission: T2f 227M vs T2e 141M 116-84, confirmed
+(119-81): **235-165 over 400 (0.588)**; T3i 295M vs T3g 110M **125-75
+(0.625)** — the first 3v3 gain since check 6. Halving the LR broke both
+plateaus. Promoted: `2v2.pt` = T2f 227M, `3v3.pt` = T3i 295M (bot smoke
+test OK in all three modes; `1v1.pt` still byte-identical to E2G1).
+Note: the vs-init score no longer tracks the head-to-head well (T2f 0.835
+vs T2e 141M's 0.895, yet T2f wins the direct match), so promotions go by
+head-to-head.
+
+| 11 | 2v2 (T2f) | 266M | 0.87 | 0.070 | 0.395 | 3187 |
+| 11 | 3v3 (T3i) | 336M | 0.88 | 0.079 | 0.895 | 1870 |
+
+Head-to-head vs the submission: T2f 266M vs T2f 227M **103-97 (0.515)**,
+T3i 336M vs T3i 295M **102-98 (0.51)**: even, nothing promoted. 2v2
+passes are slipping (0.59 -> 0.395/game). Both keep training.
+
+| 12 | 2v2 (T2f) | 306M | 0.885 | 0.074 | 0.605 | 3119 |
+| 12 | 3v3 (T3i) | 379M | 0.89 | 0.096 | 1.13 | 1812 |
+
+Head-to-head vs the submission: T2f 306M vs T2f 227M **98-102 (0.49)**;
+T3i 379M vs T3i 295M 113-87, confirmed (106-94): **219-181 over 400
+(0.548)**, just under the bar. Nothing promoted; both modes flat at half
+LR. **T2g_lr125 / T3j_lr125:** policy_lr 2.5e-5 -> 1.25e-5, resumed from
+T2f 312M / T3i 385M. The first launch (2026-10-01 16:03) died at startup
+unnoticed; relaunched detached 2026-10-02 02:59Z.
+
+**2026-10-02 (user): `policies/1v1.pt` = E8B2** (the user's in-game
+gold standard, better than E2G1; same 92-input net, byte-identical to
+`indonesiancoco/src/PPO_POLICY_V4_E8B2.pt`). All three policies load and
+act through the bot's load path. Submitted by the user.
+
+| 13 | 2v2 (T2g, quarter LR) | 351M | 0.85 | 0.066 | 0.655 | 3289 |
+| 13 | 3v3 (T3j, quarter LR) | 425M | **0.905** | 0.095 | 0.86 | 1848 |
+
+Head-to-head vs the submission: T2g 351M vs T2f 227M 111-89, confirmed
+(109-91): **220-180 over 400 (0.55)**, exactly the bar; promoted to
+`2v2.pt` (after the user's first upload, so it ships as a policy update;
+zip rebuilt). T3j 425M vs T3i 295M **102-98 (0.51)**, not promoted.
+
+| 14 | 2v2 (T2g) | 391M | 0.835 | 0.063 | 0.485 | 3247 |
+| 14 | 3v3 (T3j) | 466M | **0.91** | 0.088 | 0.87 | 1831 |
+
+Head-to-head vs the submission: T2g 391M vs T2g 351M 109-91, confirmed
+(111-89): **220-180 over 400 (0.55)**, promoted to `2v2.pt` (zip
+rebuilt). T3j 466M vs T3i 295M **101-99 (0.505)**: 3v3 flat for three
+checks at quarter LR, `3v3.pt` stays at T3i 295M.
+
+| 15 | 2v2 (T2g) | 431M | 0.845 | 0.061 | 0.38 | 3187 |
+| 15 | 3v3 (T3j) | 508M | 0.90 | 0.099 | 0.985 | 1845 |
+
+Head-to-head vs the submission: T2g 431M vs T2g 391M **99-101 (0.495)**,
+not promoted. T3j 508M vs T3i 295M 125-75, confirmed (112-88): **237-163
+over 400 (0.593)**, the first 3v3 gain since check 10; promoted to
+`3v3.pt` (zip rebuilt).
+
+| 16 | 2v2 (T2g) | 471M | 0.885 | 0.073 | 0.495 | 3073 |
+| 16 | 3v3 (T3j) | 548M | 0.915 | 0.079 | 0.815 | 1928 |
+
+Head-to-head vs the submission: T2g 471M vs T2g 391M **101-99 (0.505)**;
+T3j 548M vs T3j 508M **90-110 (0.45)**. Nothing promoted. Final
+submission for the Oct 2 deadline: 1v1 = E8B2, 2v2 = T2g 391M, 3v3 = T3j
+508M. Both runs keep training for later policy updates.
+
+| 17 | 2v2 (T2g) | 512M | 0.89 | 0.064 | 0.405 | 3230 |
+| 17 | 3v3 (T3j) | 591M | 0.88 | 0.096 | 0.91 | 1829 |
+
+Head-to-head vs the submission: T2g 512M vs T2g 391M **98-102 (0.49)**;
+T3j 591M vs T3j 508M **98-102 (0.49)**. Nothing promoted. 2v2 flat for
+three checks (0.495, 0.505, 0.49) and 3v3 for two (0.45, 0.49) at
+quarter LR: plateau again.
+
+Check 18 (head-to-head only, 2026-10-02 16:00Z): T2g 568M vs T2g 391M
+114-86, confirmation 101-99: **215-185 over 400 (0.538)**, under the bar.
+T3j 649M vs T3j 508M **101-99 (0.505)**. Nothing promoted.
+
+User (2026-10-02 16:20Z): keep training team play until told to stop.
+T2g / T3j continue unchanged; checks every ~40M steps.
+
+**2026-10-02 18:40Z (user): teammate collisions, double commits, two cars
+going for the same boost in 3v3; wants flip resets.** T2g / T3j stopped
+at 619M / 701M. New runs resume from them, 14 procs each:
+**T2h_coord_fr / T3k_coord_fr** = previous config +
+- `TeamCoordinationReward` (weight 1): -80 to BOTH cars per new teammate
+  contact; -2/step to each car committing to the ball (within 1500, closing
+  >= 500 uu/s) except the teammate with the shortest time-to-ball; -1.5/step
+  to each car heading for a big pad (within 2000, closing >= 500, boost < 80)
+  that a teammate reaches sooner. Before this, only the bumper paid for a
+  teammate bump (<= ~17, under 2% of a goal) and the car nearest the ball was
+  exempt from the crowd term.
+- Flip resets: `fr_on_ball_contact` was still **false** in every team run
+  (the E7 bug: reset-on-ball looks like ground contact, so obtain / use never
+  paid). Now true; flip-reset curriculum 0.10 -> 0.15, easy share 0.40,
+  assisted spawns 0.30.
+- Spawns: the attacker's teammates go to a support spot behind the play
+  (were placed as "active defenders" facing their own attacker), and
+  overlapping grounded cars are pushed >= 300 uu apart (2+ parked per team
+  could spawn on top of each other). 1v1 spawns unchanged.
+- policy_lr 1.25e-5 -> 2.5e-5 (new behaviour to learn).
+
+`tools/eval_team.py` now also reports teammate bumps (new contacts only),
+real flip resets and double taps. Baseline, submitted policies vs
+themselves (200 games): 2v2 0.82 mate bumps/min, 0.015 resets/g, 0.075
+dtaps/g; 3v3 1.70 bumps/min, 0.010 resets/g, 0.105 dtaps/g. (1v1 E2: 0.0021
+resets/g, so team play already resets ~5x more, as the user noticed.)
+Promotion still by head-to-head (>= 0.55) vs `2v2.pt` (T2g 391M) /
+`3v3.pt` (T3j 508M).
+
+| check | mode | steps | h2h vs submission | mate bumps/min | crowd | passes/g | resets/g | dtaps/g |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| base | 2v2 (submitted) | — | — | 0.82 | 0.080 | 0.63 | 0.015 | 0.075 |
+| base | 3v3 (submitted) | — | — | 1.70 | 0.088 | 1.035 | 0.010 | 0.105 |
+| 19 | 2v2 (T2h) | 660M | 105-95 (0.525) | 0.90 | 0.065 | 0.59 | 0.015 | 0.08 |
+| 19 | 3v3 (T3k) | 744M | 100-100 (0.50) | 1.35 | 0.070 | 1.035 | 0.015 | 0.15 |
+
+Check 19 (~40M steps in): strength held in both modes (no over-correction).
+3v3 is already cleaner: teammate bumps -21%, crowding -20%, resets +50%,
+double taps +43%. 2v2 bumps not down yet. Nothing promoted.
+
+| 20 | 2v2 (T2h) | 701M | 103-97 (0.515) | **0.60** | 0.063 | 0.57 | 0.0 | 0.035 |
+| 20 | 3v3 (T3k) | 788M | 105-95 (0.525) | 1.66 | 0.079 | 0.86 | 0.015 | 0.07 |
+
+Check 20: strength still even. 2v2 teammate bumps now -27% vs baseline;
+3v3 bumps back near baseline (1.35 -> 1.66), so check 19's drop may have
+been noise. Resets and double taps in 200 kickoff games are only 0-30
+events, too few to read; flip-reset progress needs a probe on reset spawns.
+Nothing promoted.
+
+| 21 | 2v2 (T2h) | 742M | **222-178 (0.555)** | 0.83 | 0.058 | 0.65 | 0.0 | 0.105 |
+| 21 | 3v3 (T3k) | 832M | 193-207 (0.483) | 1.62 | 0.064 | 0.79 | 0.005 | 0.075 |
+
+Check 21: T2h 742M vs T2g 391M 109-91, confirmed (113-87): **promoted to
+`2v2.pt`** (zip rebuilt; includes the user's socket-read fix). T3k 832M
+85-115 then 108-92: 0.483 over 400, not promoted.
+
+New flip-reset probe `tools/eval_team_fr.py` (flip-reset spawns only, all
+cars driven by the candidate; attacker resets / then used the flip, 100
+episodes each):
+
+| policy | normal FR spawns | assisted spawns |
+|---|---:|---:|
+| 2v2 T2h 742M | 0 / 0 | 12 / 5 |
+| 2v2 submitted (T2g 391M) | 0 / 0 | 17 / 6 |
+| 3v3 T3k 832M | 0 / 0 | 13 / 10 |
+| 3v3 submitted (T3j 508M) | 1 / 1 | 16 / 5 |
+
+Same picture as E7b in 1v1: after ~120M steps with the fixed reward, the
+policies get no more resets than before (a car with no input resets in
+~59/100 assisted spawns), though T3k uses the reset it gets more often
+(10/13). The fixed reward alone is not teaching the mechanic.
+
+| 22 | 2v2 (T2h) | 785M | 218-182 (0.545) | 0.82 | 0.069 | 0.80 | — | 0.125 |
+| 22 | 3v3 (T3k) | 876M | **220-180 (0.55)** | **1.36** | 0.075 | 0.94 | — | 0.078 |
+
+Check 22 (h2h vs `2v2.pt` = T2h 742M, `3v3.pt` = T3j 508M; 400 games each):
+2v2 107-93 then 111-89, 0.545, not promoted. 3v3 114-86 then 106-94,
+**0.55, T3k 876M promoted to `3v3.pt`** (zip rebuilt); 20% fewer teammate
+bumps than the old 3v3 (1.36 vs 1.70/min). FR probe (normal / assisted
+spawns, resets): 2v2 0 / 11, 3v3 0 / 18 — still no gain.
+
+| 23 | 2v2 (T2h) | 829M | 209-191 (0.523) | 0.84 | 0.065 | 0.63 | — | 0.065 |
+| 23 | 3v3 (T3k) | 923M | 100-100 (0.50) | **1.16** | 0.069 | 0.96 | — | 0.105 |
+
+Check 23 (vs `2v2.pt` = T2h 742M, `3v3.pt` = T3k 876M): nothing promoted.
+3v3 teammate bumps keep falling (1.70 baseline -> 1.36 -> 1.16/min, -32%).
+FR probe (normal / assisted resets): 2v2 0 / 13, 3v3 1 / 12 — no gain.
+
+| 24 | 2v2 (T2h) | 872M | 92-108 (0.46) | 0.85 | 0.058 | 0.72 | — | 0.08 |
+| 24 | 3v3 (T3k) | 969M | 209-191 (0.523) | **0.99-1.20** | 0.074 | 1.04 | — | 0.12 |
+
+Check 24: nothing promoted. 2v2 has not beaten T2h 742M in three checks
+(0.545, 0.523, 0.46) and its teammate bumps never fell (0.82-0.85), so
+**T2i_coord_lr125**: T2h 877M resumed at policy_lr 1.25e-5, rest
+unchanged. 3v3 keeps T3k (bumps 1.70 -> ~1.1/min). FR probe: 2v2 2 / 8,
+3v3 1 / 16 — no gain.
+
+| 25 | 2v2 (T2i, quarter LR) | 919M | **222-178 (0.555)** | **0.66** | **0.054** | 0.66 | — | 0.065 |
+| 25 | 3v3 (T3k) | 1019M | 205-195 (0.513) | 1.38 | 0.064 | 0.95 | — | 0.085 |
+
+Check 25: quarter LR broke the 2v2 plateau at once: T2i 919M vs T2h
+742M 113-87, confirmed (109-91), **promoted to `2v2.pt`** (zip rebuilt).
+First 2v2 policy with clearly fewer teammate bumps (0.82 -> 0.66/min,
+-20%) and less crowding (8.0% -> 5.4%). 3v3 0.513, not promoted. FR
+probe: 2v2 1 / 10, 3v3 0 / 18 (13 used) — no gain in resets.
+
+| 26 | 2v2 (T2i) | 961M | 101-99 (0.505) | 0.60 | 0.063 | 0.72 | — | 0.06 |
+| 26 | 3v3 (T3k) | 1064M | **225-175 (0.563)** | 1.21 | 0.071 | 1.08 | — | 0.095 |
+
+Check 26: T3k 1064M vs T3k 876M 110-90, confirmed (115-85), **promoted
+to `3v3.pt`** (zip rebuilt). 2v2 even with T2i 919M. FR probe: 2v2 0 / 7,
+3v3 0 / 11 — no gain.
+
+| 27 | 2v2 (T2i) | 1004M | 102-98 (0.51) | 0.71 | 0.058 | 0.76 | — | 0.05 |
+| 27 | 3v3 (T3k) | 1111M | 92-108 (0.46) | 1.44 | 0.076 | 1.04 | — | 0.11 |
+
+Check 27 (vs `2v2.pt` = T2i 919M, `3v3.pt` = T3k 1064M): nothing
+promoted. FR probe: 2v2 0 / 14, 3v3 0 / 12 — no gain.
+
+User (2026-10-03 15:30Z) checked in; cumulative gain since the
+coordination change, 200 games: 2v2 T2i 919M vs T2g 391M **114-86
+(0.57)**, 3v3 T3k 1064M vs T3j 508M **128-72 (0.64)**. "Keep improving."
+
+| 28 | 2v2 (T2i) | 1047M | 98-102 (0.49) | 0.67 | 0.061 | 0.68 | — | 0.10 |
+| 28 | 3v3 (T3k) | 1156M | 212-188 (0.53) | 1.24 | 0.071 | 1.07 | — | 0.07 |
+
+Check 28: nothing promoted. 2v2 flat three checks since T2i 919M (0.505,
+0.51, 0.49): **T2j_coord_lr0625** = T2i 1051M resumed at policy_lr
+6.25e-6. 3v3 keeps T3k. FR probe: 2v2 1 / 8, 3v3 0 / 21 — no gain.
+
+| 29 | 2v2 (T2j, LR 6.25e-6) | 1092M | 104-96 (0.52) | 0.73 | 0.067 | 0.56 | — | 0.08 |
+| 29 | 3v3 (T3k) | 1205M | 208-192 (0.52) | 1.28 | 0.069 | 0.95 | — | 0.11 |
+
+Check 29: nothing promoted. 3v3 flat three checks since T3k 1064M (0.46,
+0.53, 0.52): **T3l_coord_lr125** = T3k 1210M resumed at policy_lr
+1.25e-5. 2v2 T2j continues (one check in). FR probe: 2v2 1 / 12, 3v3
+1 / 15 — no gain.
+
+Submission bot fixes the same day (the user compared it with the
+`indonesiancoco` bot that beat Nexto 42-11): it sampled actions
+(`deterministic=False`) and bundled an old `rlgym_compat` whose boost
+feature was 100x too small and whose flip flags differed from training.
+It now uses the same obs/act/discrete/loadout/requirements and pip
+`rlgym_compat` as `indonesiancoco`, deterministic actions, and a
+byte-identical E2G1; the two gave the same controls on all 1200 ticks of a
+fake 1v1. So the team policies' in-game weakness was partly the bot, not
+just the training. `indonesiancoco/` is the user's own bot: never edit it.
+
+## E8 — shell contact, not wheels — SUPERSEDED by E8b 2026-09-29 (at check 2)
 
 User (2026-09-28): contact with the opponent should be with the shell of
 the car, not the wheels — "that would turn E2G1 from good to VERY good; we
@@ -205,6 +632,67 @@ do it sometimes, but should be more consistent."
 - **Keep rule:** wheel fraction <= 0.7x before, hard shell contacts >= 1.2x
   before, V10 >= 0.90, base >= 0.47, style >= 0.75. The in-game test vs
   Nexto is the real judge, so the best snapshot gets pushed.
+- **Run:** resumed from E2G1 on the E2 config + the contact keys (no
+  E7/E7b flip-reset keys). Benchmark base E2G1. Before (E7b checks 1-2,
+  9600 games): 2.04 contacts/game, wheel fraction 0.150, 0.453 hard shell
+  contacts/game, 0.044 goals/game after a hard shell contact. Targets:
+  wheel fraction <= 0.105, hard shell >= 0.54/game.
+
+| check | base (E2G1) | V10 | EL | NG54 | NG119 | style | contacts/g | wheel frac | hard shell/g | bump goals/g |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 (53.33B) | 0.477 | 0.910 | 0.915 | 0.828 | 0.798 | 0.96 | 1.99 | 0.140 | 0.469 | 0.041 |
+
+Check 1: contact moved the right way but only a little (wheel 0.150 -> 0.140,
+hard shell 0.453 -> 0.469/g); strength slightly below E2G1. Reward audit (60
+kickoff games): ContactQualityReward is only 1.0% of |reward| (~42/episode,
+wheel penalties ~1.4/episode), so the signal is weak. If check 2 is still
+short of the targets, E8b = contact_quality 80 -> 250 and wheel penalty
+0.3 -> 0.6.
+| 2 (53.43B) | 0.458 | 0.921 | 0.895 | 0.835 | 0.815 | 0.95 | 2.06 | 0.147 | 0.464 | 0.052 |
+
+Check 2: contact flat (wheel 0.147, hard shell 0.464/g) while strength fell
+under the 0.47 floor vs E2G1. Goals after a hard shell contact ticked up
+(0.044 -> 0.052/g) but that is within noise. **Superseded by E8b.**
+
+## E8b — shell contact, stronger signal — RUNNING (started 2026-09-29 20:15Z)
+
+- **Change:** E8 config with `contact_quality` 80 -> 250 (a hard nose hit
+  ~250, still a fifth of a goal) and `contact_wheel_penalty` 0.3 -> 0.6.
+  Config `E8b_shell_contact_strong.json`, restarted from **E2G1** (not E8,
+  which had drifted weaker). Benchmark base E2G1.
+- **Keep rule:** same as E8 (wheel <= 0.105, hard shell >= 0.54/g, V10 >=
+  0.90, base >= 0.47, style >= 0.75); early revert if base < 0.45 at any
+  check.
+
+| check | base (E2G1) | V10 | EL | NG54 | NG119 | style | contacts/g | wheel frac | hard shell/g | bump goals/g |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 (53.33B) | 0.468 | 0.924 | 0.918 | 0.832 | 0.770 | 1.00 | 2.13 | 0.145 | 0.519 | 0.039 |
+
+Check 1: hard shell contacts up 15% (0.453 -> 0.519/g, target 0.54) and
+more contacts overall (2.04 -> 2.13/g), but the wheel share barely moved
+(0.150 -> 0.145). Strength just under the 0.47 floor vs E2G1, V10 fine.
+Audit: contact reward now 3.8% of |reward| (E8: 1.0%), wheel penalties
+~15/episode.
+| 2 (53.43B) | 0.474 | 0.927 | 0.913 | 0.838 | 0.797 | 0.93 | 2.13 | 0.137 | 0.534 | 0.048 |
+
+Check 2: both contact numbers still improving (hard shell 0.534/g = +18%,
+wheel share 0.137) and strength back above the floor. Pushed as
+`checkpoints_to_test/PPO_POLICY_V4_E8B2.pt` (`AB_E8B2.md`) for the in-game
+test vs Nexto.
+| 3 (53.52B) | 0.451 | 0.918 | 0.920 | 0.818 | 0.817 | 0.95 | 2.08 | 0.128 | 0.522 | 0.045 |
+
+Check 3: wheel share keeps falling (0.150 -> 0.128) and hard shell holds
+(+15%), but strength vs E2G1 slid to 0.451 — right on the 0.45 early-revert
+line; V10/Element unchanged. Continue to check 4; revert if base < 0.45.
+Documentation clips (RocketSimVis, vs Element, 40 sim games each) recorded
+to `docs/highlights/sim/E8b_it3/` and `docs/highlights/sim/E2G1/` with
+`tools/clip_match.py` + `tools/record_clips.sh`.
+| 4 (53.61B) | 0.483 | 0.927 | 0.918 | 0.852 | 0.807 | 0.92 | 2.23 | 0.134 | 0.570 | 0.040 |
+
+Check 4: best E8b snapshot. Hard shell contacts 0.570/g (+26%, past the
+0.54 target), more contacts overall (2.23/g), wheel share 0.134, and
+strength recovered to 0.483 vs E2G1. Pushed as
+`checkpoints_to_test/PPO_POLICY_V4_E8B4.pt` (`AB_E8B4.md`), supersedes E8B2.
 
 ## Queue (in run order)
 - **E6 — double taps** (user request 2026-09-27). No double-tap reward
@@ -244,7 +732,8 @@ E2G1 quick read: ~0.1 double taps/game, ~0 real resets.
 |---|---|---|
 | E1ZS1 | expE1_52398221424 | E1 check 1 |
 | E1BSTYLE | expE1b_53146341650 | E1b check 5 (kept) |
-| **E2G1** | expE2_53240356340 | E2 check 1, **current recommendation**. User in-game: "very good", **beats Nexto 26-6** (previous recorded best: GOALDIRECTED6 7-6) |
+| **E8B2** | `checkpoints_to_test/PPO_POLICY_V4_E8B2.pt` | E8b check 2. **1v1 gold standard** (user, 2026-10-02: better than E2G1). Submitted as `rlbot_submission/policies/1v1.pt`; benchmark future 1v1 work against it |
+| E2G1 | expE2_53240356340 | E2 check 1, previous recommendation. User in-game: "very good", **beats Nexto 26-6**, then **42-11** (2026-09-29, shots 65-16, p=1.1e-5; [replay](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30)) (previous recorded best: GOALDIRECTED6 7-6) |
 
 ## Reverting
 
@@ -253,3 +742,137 @@ E2G1 quick read: ~0.1 double taps/game, ~0 real resets.
 - To E1: `expE1_52681266522` + `E1_zerosum.json` (tag `exp-E1-keep`).
 - To the pre-experiment trainer: tag `exp-base-v13goalprob`, snapshot
   `gdv13_52307206004`, config `bump_shadow_config.json`.
+
+## E9 — team flip resets (started 2026-10-20, side branch)
+
+Does not replace `2v2.pt` / `3v3.pt`. Those are T2aj_rotate 2795M and
+T3al_rotfast 3567M, not the older T2i/T3k names. E9a only: FlipResetReward
+zero-summed at opp_scale 0.5, and APPROACH is skipped when a closer teammate
+is already airborne. Weight is not raised. Obs: training air_time_since_jump
+grows past 1.25s (measured to 1.725); rlgym_compat freezes it at 1.25 once
+dodge_timeout is -1. has_flip/can_flip already agree after the window (both
+false). E9 clamps that one feature at 1.25 so training matches the bot.
+E9b/E9c wait on E9a. Keep bar: normal-spawn resets >= 3/100, assisted
+used/obtained >= 0.6, h2h >= 0.52 over 400 games twice, teammate bumps
+within +10%. Revert at 500M if normal resets are still <= 1.
+
+E9 check 2 (2026-10-22, ~145M flip-reset steps) did not beat the 99bb5f0
+policies, which are 2v2 T2ae 2563M and 3v3 T3ad 3385M. Against those:
+2v2 50.5% (202-198), 3v3 54.5% (218-182), and 0 resets in those 400 games.
+Normal-spawn probe was 0/100 and 1/100. Not promoted. Policies restored to
+99bb5f0 in 527249f. T-C (`team_mate_bump` 300→100, runs T2ap_bump100 and
+T3aq_bump100) started from those policy weights with a fresh optimizer,
+because the full training state for those steps was no longer on disk.
+Evaluation of T-C must start by 02:30 UTC Oct 23 so it finishes before the
+12:00 UTC cutoff. T-B does not fit.
+
+T-C result (2026-10-23, ~35–40M steps, penalty 300→100), two 400s against
+the restored 99bb5f0 policies. Not kept. Trainers stopped.
+
+| arm | pass A | pass B | bumps/min (base) | normal resets | assisted obtained/used |
+|---|---|---|---|---|---|
+| 2v2 T2ap | 0.480 (192-208) | 0.542 (217-183) | 0.23 / 0.26 (base 0.27) | 0/100 (submitted 0) | 4/2 (submitted 9/3) |
+| 3v3 T3aq | 0.507 (203-197) | 0.497 (199-201) | 0.44 / 0.32 (base 0.30) | 0/100 (submitted 1) | 11/5 (submitted 18/8) |
+
+Both passes needed >= 0.52. 2v2 failed the first. 3v3 failed both. The
+flip-reset probe was worse on assisted spawns. No follow-up to penalty 50.
+T-B was not started before the cutoff. Submitted policies remain the
+99bb5f0 files.
+
+T-B started 2026-10-23 after the cutoff, on the user's go-ahead. Runs
+T2aq_spirit and T3ar_spirit resume the 99bb5f0 policy weights (fresh
+optimizer, value net carried from the later run). Max over teammates:
+goals, possession, and saves 0.5; touches 0.3; mechanics and flip reset 0.
+Bump penalty stays 300. The 0.9 version waits until this arm passes.
+
+Evals from here play 400 games against the submitted policy and 100 against
+each of six older styles (kickoff, leave-it, linger or spacing, chase-first,
+shadow, and the later rotation policy). A single opponent is not enough to
+keep a run.
+
+T-B check (2026-10-24, ~50M steps). 2v2 not kept: 0.495 then 0.502 against
+99bb5f0. Older styles 0.44 to 0.56. Bumps lower than the current policy.
+3v3 kept: 0.557 (223-177) and 0.532 (213-187). Older styles 0.62 to 0.68,
+and 0.49 against the later rotation policy. Bumps 0.28 and 0.37 versus 0.36
+for the current policy. Normal flip-reset probe 2/100 versus 0/100. Assisted
+10 obtained / 3 used versus 12 / 5. Promoted as afef597. 0.9 spirit started
+for 3v3 only (T3as_spirit09) from the latest full checkpoint of that run.
+
+0.9 check (~50M steps, 2026-10-24): not kept. 0.492 (197-203) and 0.475
+(190-210) against the 0.5 policy. Older styles 0.49 to 0.66. Bumps were
+lower (0.38 vs 0.55). Normal resets 0/100 both. Assisted 14 obtained / 10
+used versus 11 / 4. Trainer stopped. 3v3.pt stays the 0.5 spirit policy.
+
+## E10 queued (not started)
+
+Disco-style aggression, then demo role, then block/save, then kickoff.
+Starts only after a training-stack upgrade (Steps 0-5, rlgym-learn) finishes
+or is stopped. That upgrade is not in this repo: no `stack-upgrade` branch
+and no step list. E10 is waiting.
+
+When it starts: newest stack that passed its gates, warm-start from that
+stack's best 2v2/3v3 checkpoint, new names `E10x_2v2` / `E10x_3v3` on
+`stack-upgrade` or a child branch. One arm at a time, cumulative only if the
+previous arm passed. Do not touch FlipResetReward, `1v1.pt`, `2v2.pt`,
+`3v3.pt`, or existing checkpoints. Do not copy a winner into
+`rlbot_submission/` without an explicit sign-off.
+
+Live facts E10 has to change, from T2aq_spirit / T3ar_spirit / T3as_spirit09
+on 2026-10-24: demo 50, retreat_bump 60, save 150, shadow_space 18,
+team_shadow_aware true, possession 68 and not zero-sum, goal 1200 and concede
+is the same 1200 (GoalReward is +1/-1), no kickoff reward, kickoff starts are
+already 49% (2v2) and 57% (3v3) so E10e would be a skip, teammate bump 300,
+both first-man flags true.
+
+Arms: E10a possession zero-sum scaled by ball position, plus an opponent
+shot/flick/dribble team penalty, plus concede at 0.8x goal. E10b skip if E10a
+already did the concede shift. E10c zero-sum demos paid only to non-first-man,
+own-goal bump penalty, anti-farm. E10d retreat_bump 15 and save 40 for
+non-first-man only, shadow 3 with team_shadow_aware, save zero-sum 0.5.
+Checks every ~45M, 300-500M per arm. Keep only if h2h >= 0.52 twice, goals
+against not worse, teammate bumps not worse, FR probe not worse, and for
+E10c the non-first-man demo share rises. A failed arm reverts to the last
+passing checkpoint.
+
+## Queued after E9 (revised 2026-10-21 19:42 UTC)
+
+Do not start while T2ao_fr / T3ap_fr are running. Do not edit FlipResetReward
+or the E9 configs. Do not overwrite 1v1.pt, 2v2.pt, or 3v3.pt. New run names
+only. Resume from the E9 winner if one is promoted, otherwise the latest full
+checkpoint of T2aj_rotate / T3al_rotfast.
+
+Hard cutoff: no arm may still be in evaluation at 12:00 UTC Oct 23 (12h
+before Oct 24 00:00 UTC). An arm that cannot finish h2h 400 twice, bumps, and
+the flip-reset probe before that time is not started. Each arm is 500M steps
+max, but 500M at the live 2v2 rate (~800 steps/s) is about 7 days, so nothing
+reaches 500M before the cutoff.
+
+Timing from 2026-10-21 19:42 UTC, 2v2 ~800 steps/s, 3v3 ~1090 steps/s, eval
+of one arm (both modes, 400 games twice, plus probe) about 8–10 hours:
+
+- E9 check 2 was started early, 2026-10-22 16:49 UTC, on the live
+  checkpoints (2v2 ~3144M, 3v3 ~3907M) instead of waiting for 3150M. Flip
+  resets stop when that check returns. T-C then takes the slots.
+- T-C (`team_mate_bump` 300 → 100) can train only until about 02:00 UTC Oct 23,
+  then must be evaluated so the games finish before 12:00 UTC. That is on the
+  order of 30 million steps, not 500 million. The follow-up at 50, and T-B,
+  do not fit before the cutoff.
+- **T-D and the pass-reward / mixed-arena ideas** are after Oct 24.
+
+Order once E9 has stopped and the cutoff still leaves a full evaluation:
+
+1. **T-C.** `team_mate_bump` 300 → 100 (the live value is 300, not 80). If
+   ~200M steps show bumps/min not worse and h2h holds, a later arm may try 50.
+   Do not go below 50 before Oct 24.
+2. **T-B, only if T-C finished with time left, which it will not before this
+   stream.** Max over teammates, not the mean. Goals, possession, and saves
+   0.5. Touches 0.3. Mechanics and flip reset 0. Try 0.9 on goals, possession,
+   and saves only after the 0.5 arm passes the keep bar.
+3. **T-A skipped.** Both first-man flags are already true.
+4. **After Oct 24:** T-D (closest-to-ball flag and shuffled order, only after
+   the bot observation code matches and a fake-match diff passes), then gate
+   the pass reward on a following goal or possession, and mixed-mode arenas.
+
+Keep bar: h2h >= 0.52 over 400 games, confirmed by a second 400; bumps/min not
+worse than the current policy (reference 2v2 0.66, 3v3 1.21); flip-reset probe
+not worse. Log every result here, including negatives.

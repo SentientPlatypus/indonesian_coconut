@@ -680,7 +680,9 @@ class OpponentPossessionSpaceReward(RewardFunction[AgentID, GameState, float]):
         far_dist: float = 2400.0,
         per_second: float = 1.0,
         crowd_penalty_per_second: float = 1.2,
+        team_aware: bool = False,
     ):
+        self.team_aware = team_aware
         self.opp_control_radius = opp_control_radius
         self.ball_max_z = ball_max_z
         self.crowd_dist = crowd_dist
@@ -700,26 +702,44 @@ class OpponentPossessionSpaceReward(RewardFunction[AgentID, GameState, float]):
         if ball_z > self.ball_max_z:
             return rewards
 
+        ball_pos = np.array(ball, dtype=float)
+
+        def ball_dist(car):
+            return float(np.linalg.norm(np.asarray(car.physics.position, dtype=float) - ball_pos))
+
         for a in agents:
             me = state.cars[a]
-            # Find the (single) opponent in 1v1.
-            opp = None
-            for oid, ocar in state.cars.items():
-                if oid != a and ocar.team_num != me.team_num:
-                    opp = ocar
-                    break
+            if self.team_aware:
+                if me.is_demoed:
+                    continue
+                opps = [c for c in state.cars.values() if c.team_num != me.team_num and not c.is_demoed]
+                opp = min(opps, key=ball_dist) if opps else None
+            else:
+                # Find the (single) opponent in 1v1.
+                opp = None
+                for oid, ocar in state.cars.items():
+                    if oid != a and ocar.team_num != me.team_num:
+                        opp = ocar
+                        break
             if opp is None or opp.is_demoed:
                 continue
 
             me_pos = np.array(me.physics.position, dtype=float)
             opp_pos = np.array(opp.physics.position, dtype=float)
-            ball_pos = np.array(ball, dtype=float)
             d_me = float(np.linalg.norm(me_pos - ball_pos))
             d_opp = float(np.linalg.norm(opp_pos - ball_pos))
 
             # Opponent has ground-ish control: closer than us and cradling the ball.
             if d_opp > self.opp_control_radius or d_opp >= d_me:
                 continue
+
+            if self.team_aware:
+                # Only our closest-to-ball car shadows; teammates just avoid flick range.
+                mates = [c for c in state.cars.values() if c.team_num == me.team_num and not c.is_demoed]
+                if min(mates, key=ball_dist) is not me:
+                    if d_me < self.crowd_dist:
+                        rewards[a] -= self.crowd_per_tick * (1.0 - d_me / max(self.crowd_dist, 1.0))
+                    continue
 
             attack = -1.0 if me.is_orange else 1.0
             # Goal-side of the ball (between ball and our net) — shadow, don't dive past.
@@ -1447,14 +1467,16 @@ class AirBoostReward(RewardFunction[AgentID, GameState, float]):
 
 class PossessionReward(RewardFunction[AgentID, GameState, float]):
     """
-    Zero-sum 1v1 possession. Exclusive control by one agent:
+    Zero-sum TEAM possession (identical to the old per-agent version in 1v1).
+    A team possesses when its cars are the only ones in control, each:
       - close to ball (possess_radius)
       - facing ball enough (face_cos_min)
       - relative ball-car speed small (rel_speed_max)
       - AND (optionally) last touched recently (touch_window)
 
-    If both satisfy control, or neither does -> 0 / 0 (contested or loose).
-    If one has it: +r to them, -r to the other. Steal is the same swap.
+    Cars of both teams in control, or nobody -> 0 / 0 (contested or loose).
+    If one team has it: +r to every car on it, -r to every opponent (team
+    sums cancel). A steal is the same swap; a teammate taking over is not.
 
     Previously this was only *partly* adversarial (retain +1 / -0.6, steal
     +1 / -1.2, and a both-lose stalemate). That is not zero-sum: you could
@@ -1536,11 +1558,13 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
         return True
 
     def _choose_possessor(self, agents: List[AgentID], state: GameState) -> Optional[AgentID]:
-        # exclusive control logic
+        """Nearest controlling car of the possessing team, or None when no
+        car / both teams are in control."""
         controls = [a for a in agents if self._is_in_control(a, state)]
-        if len(controls) == 1:
-            return controls[0]
-        return None  # none or contested => no possessor
+        if not controls or len({state.cars[a].team_num for a in controls}) > 1:
+            return None
+        bpos = np.array(state.ball.position, dtype=float)
+        return min(controls, key=lambda a: _safe_norm(bpos - np.array(state.cars[a].physics.position, dtype=float)))
 
     def get_rewards(self, agents: List[AgentID], state: GameState,
                     is_terminated: Dict[AgentID, bool], is_truncated: Dict[AgentID, bool],
@@ -1575,15 +1599,22 @@ class PossessionReward(RewardFunction[AgentID, GameState, float]):
         possessor = self._choose_possessor(agents, state)
 
         def _credit(winner: AgentID, amount: float) -> None:
-            rewards[winner] += amount
+            team = state.cars[winner].team_num
             for o in agents:
-                if o != winner:
-                    rewards[o] -= amount
+                rewards[o] += amount if state.cars[o].team_num == team else -amount
 
-        # steal / first claim — same magnitude both sides
-        if possessor is not None and self.prev_possessor is not None and possessor != self.prev_possessor:
+        def _team(a):
+            car = state.cars.get(a)
+            return None if car is None else car.team_num
+
+        # steal / first claim — same magnitude both sides (a teammate taking
+        # over is a pass, not a steal)
+        if (possessor is not None and self.prev_possessor is not None
+                and possessor != self.prev_possessor
+                and _team(possessor) != _team(self.prev_possessor)):
             _credit(possessor, self.capture_reward)
-        elif possessor is not None and self.prev_possessor is None:
+        elif (possessor is not None
+              and (self.prev_possessor is None or _team(self.prev_possessor) is None)):
             _credit(possessor, 0.5 * self.capture_reward)
 
         # retain — +r / -r

@@ -25,11 +25,14 @@ def main(tag):
         b = by.setdefault(name, {"goals": 0, "decided": 0, "games": 0, "air_dribbles": 0,
                                  "flip_resets": 0, "ball_resets": 0, "double_taps": 0,
                                  "dt_goals": 0, "contacts": 0, "wheel_contacts": 0,
-                                 "hard_shell": 0, "bump_goals": 0, "packs": []})
+                                 "hard_shell": 0, "bump_goals": 0, "ko_for": 0, "ko_against": 0,
+                                 "packs": []})
         b["contacts"] += r.get("cand_contacts", 0)
         b["wheel_contacts"] += r.get("cand_contact_parts", {}).get("wheels", 0)
         b["hard_shell"] += r.get("cand_hard_shell_contacts", 0)
         b["bump_goals"] += r.get("cand_shell_bump_goals", 0)
+        b["ko_for"] += r.get("cand_kickoff_goals", 0)
+        b["ko_against"] += r.get("opp_kickoff_goals", 0)
         b["goals"] += r["candidate_goals"]
         b["decided"] += r["decided"]
         b["games"] += r["games"]
@@ -51,6 +54,8 @@ def main(tag):
             "br_pg": round(b["ball_resets"] / max(1, b["games"]), 4),
             "dt_pg": round(b["double_taps"] / max(1, b["games"]), 4),
             "dtg_pg": round(b["dt_goals"] / max(1, b["games"]), 4),
+            # share of the goals scored within 10 s of kickoff that are ours
+            "ko_score": round(b["ko_for"] / max(1, b["ko_for"] + b["ko_against"]), 4),
             "packs": b["packs"],
         }
     # mechanic rates pooled over every matchup (rare events need all ~4200 games)

@@ -19,11 +19,11 @@ NO_TOUCH_TIMEOUT_S = 30
 GAME_TIMEOUT_S = 300
 
 
-def _obs_builder():
+def _obs_builder(clamp_air_time: bool = False):
     import numpy as np
     from rlgym.rocket_league.obs_builders import DefaultObs
     from rlgym.rocket_league import common_values
-    return DefaultObs(
+    obs = DefaultObs(
         zero_padding=None,
         pos_coef=np.asarray([1 / common_values.SIDE_WALL_X,
                              1 / common_values.BACK_NET_Y,
@@ -33,6 +33,26 @@ def _obs_builder():
         ang_vel_coef=1 / common_values.CAR_MAX_ANG_VEL,
         boost_coef=1 / 100.0,
     )
+    if not clamp_air_time:
+        return obs
+    # rlgym_compat freezes air_time_since_jump at 1.25s once dodge_timeout hits -1.
+    # RocketSim keeps counting. Clamp the training feature to what the bot sees.
+    # Layout: ball 9 + boost pads + 8 flags, then air_time.
+    n_pads = len(common_values.BOOST_LOCATIONS)
+    air_idx = 9 + n_pads + 8
+    wrapped = obs
+
+    def build_obs(agents, state, shared_info):
+        out = DefaultObs.build_obs(wrapped, agents, state, shared_info)
+        for a, v in out.items():
+            if v[air_idx] > 1.25:
+                v = np.array(v, copy=True)
+                v[air_idx] = 1.25
+                out[a] = v
+        return out
+
+    wrapped.build_obs = build_obs
+    return wrapped
 
 
 def _reward_fn(cfg: Dict[str, Any]):
@@ -59,8 +79,29 @@ def _reward_fn(cfg: Dict[str, Any]):
         s = float(zs.get(key, 0.0))
         return ZeroSumReward(fn, s) if s > 0 else fn
 
-    return CombinedReward(
-        (GoalReward(), w["goal"]),
+    from rewards.team_rewards import (TeamSpacingReward, PassReward, TeamSpiritReward,
+                                      TeamCoordinationReward, OffenseSupportReward, FirstManOnly,
+                                      TeammateProximityReward, RetreatBumpReward,
+                                      LeaveItToMateReward, FastRotateReward, LastManBackReward,
+                                      MaxTeammateSpirit,
+                                      OwnGoalTouchReward, SaveReward)
+
+    def _fm(fn):
+        return FirstManOnly(fn) if cfg.get("team_aerial_first_man_only", False) else fn
+
+    def _chase(fn):
+        return FirstManOnly(fn, ball_z_min=-1e9) if cfg.get("team_chase_first_man_only", False) else fn
+
+    # Per-reward max-teammate spirit. Absent or 0 leaves that reward unchanged.
+    # Goals, possession, saves, and touches only. Mechanics and flip reset stay 0.
+    spirit = cfg.get("max_spirit") or {}
+
+    def _ms(key, fn):
+        tau = float(spirit.get(key, 0.0))
+        return MaxTeammateSpirit(fn, tau) if tau > 0.0 else fn
+
+    combined = CombinedReward(
+        (_ms("goal", GoalReward()), w["goal"]),
         # v13 (user on V13NG65 vs Nexto): good air dribbles, finishes hit the
         # crossbar or the post. GoalProb is goal-view solid angle from the ball
         # — the mouth vs bar/post signal. 26 -> 40 in bump_shadow_config.
@@ -68,11 +109,11 @@ def _reward_fn(cfg: Dict[str, Any]):
         (BallTravelReward(), w["ball_travel"]),
         (_z("vel_ball_to_goal", VelocityBallToGoalReward()), w["vel_ball_to_goal"]),
         (_z("goal_dist", GoalDistReward()), w["goal_dist"]),
-        (_z("speed_to_ball", SpeedTowardBallReward()), w["speed_to_ball"]),
-        (_z("face_ball", FaceBallReward()), w["face_ball"]),
-        (_z("touch", TouchReward()), w["touch"]),
+        (_chase(_z("speed_to_ball", SpeedTowardBallReward())), w["speed_to_ball"]),
+        (_chase(_z("face_ball", FaceBallReward())), w["face_ball"]),
+        (_ms("touch", _z("touch", TouchReward())), w["touch"]),
         # Zero-sum exclusive possession: +r / -r on retain and steal.
-        (PossessionReward(), w["possession"]),
+        (_ms("possession", PossessionReward()), w["possession"]),
         (_z("energy", EnergyReward()), w["energy"]),
         (BoostKeepReward(), w["boost_keep"]),
         (BoostChangeReward(lose_weight=0.8), w["boost_change"]),
@@ -81,7 +122,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         # V3 trained with the diluted (~zero) value, so no critic shock — and
         # this is THE signal that must offset the boost-spend penalties
         # (BoostChange/BoostKeep/Energy) when committing to a popped ball.
-        (AerialBoostTowardBallReward(per_second_scale=0.96), w["aerial_boost"]),
+        (_fm(AerialBoostTowardBallReward(per_second_scale=0.96)), w["aerial_boost"]),
         (AerialDistanceReward(), w["aerial_distance"]),
         (InAirReward(), w["in_air"]),
         (AirdribbleReward(
@@ -139,7 +180,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         # available) -> obtain -> hold control -> USE the flip. The old version was
         # two sparse events behind a ~36deg wheel cone, so PPO had no gradient to
         # find it. Nothing here is negative: plain air dribbles are unaffected.
-        (FlipResetReward(
+        (_z("flip_reset", FlipResetReward(
             min_wheels_cos=cfg.get("fr_min_wheels_cos", 0.55),
             approach_per_second=cfg.get("fr_approach_per_second", 0.30),
             approach_radius=cfg.get("fr_approach_radius", 700.0),
@@ -150,7 +191,8 @@ def _reward_fn(cfg: Dict[str, Any]):
             hit_ball_weight=cfg.get("fr_use_weight", 2.5),
             obtain_decay=cfg.get("fr_obtain_decay", 0.55),
             on_ball_contact=cfg.get("fr_on_ball_contact", False),
-        ), w["flip_reset"]),
+            team_aware_approach=cfg.get("fr_team_approach", False),
+        )), w["flip_reset"]),
         (DoubleTapReward(
             bounce_weight=cfg.get("dt_bounce_weight", 0.2),
             goal_bonus=cfg.get("dt_goal_bonus", 1.5),
@@ -197,6 +239,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         (ContactQualityReward(
             hard_target=cfg.get("contact_hard_target", 900.0),
             wheel_penalty=cfg.get("contact_wheel_penalty", 0.3),
+            kickoff_grace_s=cfg.get("contact_kickoff_grace_s", 0.0),
         ), w.get("contact_quality", 0.0)),
         (AerialFrontBumpSetupReward(), w.get("front_bump_setup", 0.0)),
         # v5 (user): punish overextending grounded + deep + low boost. REVERTED in
@@ -219,7 +262,8 @@ def _reward_fn(cfg: Dict[str, Any]):
          w.get("safe_boost", 0.0)),
         # v9 bump_shadow (user on V10STRONG vs Nexto): "we stay close when Nexto
         # has possession, then he flicks and scores". Shadow at a gap instead.
-        (OpponentPossessionSpaceReward(), w.get("shadow_space", 0.0)),
+        (OpponentPossessionSpaceReward(team_aware=bool(cfg.get("team_shadow_aware", False))),
+         w.get("shadow_space", 0.0)),
         # v9.1 (user): when WE have possession and opp is near (not on a wall),
         # flick it away toward net. Separate from FlickReward — that channel's
         # ETA gate often zeros the exact pressure-flick we want here.
@@ -227,7 +271,7 @@ def _reward_fn(cfg: Dict[str, Any]):
         (PressureFlickToGoalReward(), w.get("pressure_flick", 0.0)),
         # v9.2 (user): Nexto beats us by jumping/aerialing high balls while we
         # wait underneath. Climb/close on elevated balls (positive-only).
-        (ContestHighBallReward(), w.get("high_ball", 0.0)),
+        (_fm(ContestHighBallReward()), w.get("high_ball", 0.0)),
         # v9.5: aerial start only when takeoff speed matches remaining
         # distance to their net; under pressure stay on the flick/shot path.
         (PossessionRangeCarryReward(
@@ -245,15 +289,58 @@ def _reward_fn(cfg: Dict[str, Any]):
             lane_radius=cfg.get("clear_path_lane_radius", 1100.0),
         ), w.get("clear_path", 0.0)),
         (AngVelReward(), w["ang_vel"]),
+        # 2v2 / 3v3 team play (0 in 1v1)
+        (TeamSpacingReward(min_dist=cfg.get("team_spacing_dist", 1500.0),
+                           ball_dist=cfg.get("team_ball_crowd_dist", 900.0),
+                           ball_crowd=cfg.get("team_ball_crowd", 1.0),
+                           closest_exempt=cfg.get("team_crowd_closest_exempt", False)),
+         w.get("team_spacing", 0.0)),
+        (PassReward(), w.get("pass", 0.0)),
+        (TeamCoordinationReward(bump_w=cfg.get("team_mate_bump", 1.0),
+                                commit_w=cfg.get("team_double_commit", 1.0),
+                                boost_w=cfg.get("team_boost_steal", 1.0),
+                                commit_dist=cfg.get("team_commit_dist", 1500.0),
+                                pad_dist=cfg.get("team_pad_dist", 2000.0)),
+         w.get("team_coord", 0.0)),
+        (OffenseSupportReward(bands=cfg.get("offense_support_bands",
+                                            [[1600.0, 3500.0], [2800.0, 5500.0]]),
+                              band_bonus=cfg.get("offense_support_bonus", 0.3),
+                              ahead_penalty=cfg.get("offense_ahead_penalty", 0.3)),
+         w.get("offense_support", 0.0)),
+        (TeammateProximityReward(close_dist=cfg.get("team_linger_dist", 1200.0),
+                                 grace_s=cfg.get("team_linger_grace_s", 1.5),
+                                 contact_dist=cfg.get("team_contact_dist", 200.0),
+                                 contact_w=cfg.get("team_contact_w", 1.0),
+                                 approach_dist=cfg.get("team_approach_dist", 800.0),
+                                 approach_w=cfg.get("team_approach_w", 0.0)),
+         w.get("team_proximity", 0.0)),
+        (RetreatBumpReward(min_retreat_speed=cfg.get("retreat_bump_min_speed", 600.0),
+                           demo_w=cfg.get("retreat_bump_demo_w", 2.0)),
+         w.get("retreat_bump", 0.0)),
+        (LeaveItToMateReward(receive_dist=cfg.get("leave_mate_receive_dist", 600.0),
+                             chase_dist=cfg.get("leave_mate_chase_dist", 3000.0)),
+         w.get("leave_to_mate", 0.0)),
+        (FastRotateReward(slot_dists=cfg.get("fast_rotate_slots", (2200.0, 3800.0)),
+                          speed_for_full=cfg.get("fast_rotate_speed_for_full", 2300.0),
+                          dawdle_below=cfg.get("fast_rotate_dawdle_below", 600.0),
+                          wall_penalize=bool(cfg.get("fast_rotate_wall_penalize", False)),
+                          wall_allow_shot=bool(cfg.get("fast_rotate_wall_allow_shot", False))),
+         w.get("fast_rotate", 0.0)),
+        (LastManBackReward(margin=cfg.get("last_man_margin", 200.0), base=cfg.get("last_man_base", 0.25)),
+         w.get("last_man", 0.0)),
+        (OwnGoalTouchReward(), w.get("own_goal_touch", 0.0)),
+        (_ms("save", SaveReward()), w.get("save", 0.0)),
     )
+    tau = float(cfg.get("team_spirit", 0.0))
+    return TeamSpiritReward(combined, tau) if tau > 0 else combined
 
 
 def _state_mutator(cfg: Dict[str, Any], for_training: bool):
     from rlgym.rocket_league.state_mutators import (
         MutatorSequence, FixedTeamSizeMutator, KickoffMutator,
     )
-    blue = TEAM_SIZE
-    orange = TEAM_SIZE if SPAWN_OPPONENTS else 0
+    blue = int(cfg.get("team_size", TEAM_SIZE))
+    orange = blue if SPAWN_OPPONENTS else 0
     if for_training:
         from curriculum_mutators import CurriculumStateMutator
         c = cfg["curriculum"]
@@ -269,6 +356,11 @@ def _state_mutator(cfg: Dict[str, Any], for_training: bool):
             # v10: shift FR mass toward the NATURAL stage as the mechanic lands.
             fr_easy_frac=c.get("fr_easy_frac", 0.25),
             fr_mid_frac=c.get("fr_mid_frac", 0.35),
+            fr_assist_frac=c.get("fr_assist_frac", 0.0),
+            team_random_w=c.get("team_random_w", 0.0),
+            team_counter_w=c.get("team_counter_w", 0.0),
+            team_rotation_w=c.get("team_rotation_w", 0.0),
+            aerial_def_w=c.get("aerial_def_w", 0.0),
         )
     else:
         reset_mutator = KickoffMutator()   # eval = standard kickoff games
@@ -299,7 +391,7 @@ def build_env(cfg: Dict[str, Any], for_training: bool = True):
 
     rlgym_env = RLGym(
         state_mutator=_state_mutator(cfg, for_training),
-        obs_builder=_obs_builder(),
+        obs_builder=_obs_builder(clamp_air_time=bool(cfg.get("clamp_air_time", False))),
         action_parser=action_parser,
         reward_fn=_reward_fn(cfg),
         termination_cond=termination_condition,

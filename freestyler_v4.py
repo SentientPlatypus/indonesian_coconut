@@ -115,9 +115,9 @@ if __name__ == "__main__":
         min_inference_size=min_inference_size,
         metrics_logger=None,
         ppo_batch_size=int(ppo["ppo_batch_size"]),
-        # Layer sizes MUST match the 17.9B checkpoint to resume — do not change.
-        policy_layer_sizes=[2048, 2048, 1024, 1024],
-        critic_layer_sizes=[2048, 2048, 1024, 1024],
+        # Layer sizes MUST match the resumed checkpoint (grow one with tools/expand_net.py).
+        policy_layer_sizes=list(cfg.get("layer_sizes", [2048, 2048, 1024, 1024])),
+        critic_layer_sizes=list(cfg.get("layer_sizes", [2048, 2048, 1024, 1024])),
         ts_per_iteration=int(ppo["ts_per_iteration"]),
         exp_buffer_size=int(ppo["exp_buffer_size"]),
         ppo_minibatch_size=int(ppo["ppo_minibatch_size"]),

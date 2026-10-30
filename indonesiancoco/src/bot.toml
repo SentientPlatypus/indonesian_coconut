@@ -1,0 +1,41 @@
+#:schema https://rlbot.org/schemas/agent.json
+[settings]
+# The name that will be displayed in game
+name = "indonesiancoco"
+# Path to loadout config from runner
+loadout_file = "loadout.toml"
+# (OPTIONAL) - what you want the working directory set to
+# This is relative to the location of this file
+# instead of setting to an empty string,
+# this value can be removed from the file
+root_dir = ""
+# The command RLBot will call to start your bot on Windows
+# ex: "bot.exe" for compiled bots, or "python bot.py" if you don't want to freeze your python bot
+run_command = "python bot.py"
+# The command RLBot will call to start your bot on linux
+# If this isn't set, RLBot may attempt to run the Windows command under Wine
+run_command_linux = "python bot.py"
+# This must be a unqiue identifier for your bot
+# recommended format is "author/botname/version"
+agent_id = "rlgym_and_rlbot_comunity/rlgymv2exaplebot/v0.1"
+
+# These values are optional but useful metadata for helper programs
+[details]
+# Short description of the bot
+description = """
+PPO bot trained with RLGym v2 + RocketSim on a discrete lookup-table action space.
+Separate policies for 1v1, 2v2 and 3v3 (the team-play policies are transferred from
+the 1v1 one and trained with team-spacing and passing rewards).
+"""
+# Fun fact about the bot
+fun_fact = "Beat Nexto 42-11 in 1v1."
+# Link to github repository
+source_link = "https://github.com/SentientPlatypus/indonesian_coconut"
+# Name of the bot's creator/developer
+developer = "SentientPlatypus"
+# Programming language
+language = "Python/RLGym"
+# ALL POSSIBLE TAGS: 1v1, teamplay, goalie, hoops, dropshot, snow-day, spike-rush, heatseaker, memebot
+# NOTE: Only add the goalie tag if your bot only plays as a goalie; this directly contrasts with the teamplay tag!
+# NOTE: Only add a tag for a special game mode if you bot properly supports it
+tags = ["1v1", "teamplay"]

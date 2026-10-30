@@ -26,7 +26,7 @@ class OpponentPoolEnv:
         self._cache: Dict[str, Any] = {}
         self._order: List[str] = []
         self._rng = random.Random(seed if seed is not None else os.getpid())
-        self._opp_agent = None
+        self._opp_agents = set()
         self._opp_pol = None
         self._full_obs = None
 
@@ -58,25 +58,28 @@ class OpponentPoolEnv:
         return self._cache[path]
 
     def _visible(self, d):
-        if self._opp_agent is None:
+        if not self._opp_agents:
             return d
-        return {k: v for k, v in d.items() if k != self._opp_agent}
+        return {k: v for k, v in d.items() if k not in self._opp_agents}
 
     def reset(self):
         obs = self.env.reset()
-        self._opp_agent = None
+        self._opp_agents = set()
         self._opp_pol = None
-        if self.frac > 0 and len(obs) == 2 and self._rng.random() < self.frac:
-            self._opp_agent = self._rng.choice(list(obs.keys()))
+        teams = {}
+        for a, c in self.env.state.cars.items():
+            teams.setdefault(c.team_num, []).append(a)
+        if self.frac > 0 and len(teams) == 2 and self._rng.random() < self.frac:
+            self._opp_agents = set(teams[self._rng.choice(sorted(teams))])
             self._opp_pol = self._policy(self._rng.choice(self.paths))
         self._full_obs = obs
         return self._visible(obs)
 
     def step(self, actions):
-        if self._opp_agent is not None:
+        if self._opp_agents:
             actions = dict(actions)
-            o = self._full_obs[self._opp_agent]
-            actions[self._opp_agent] = np.array([self._opp_pol.act(o)], dtype=np.int64)
+            for a in self._opp_agents:
+                actions[a] = np.array([self._opp_pol.act(self._full_obs[a])], dtype=np.int64)
         obs, rew, term, trunc = self.env.step(actions)
         self._full_obs = obs
         return self._visible(obs), self._visible(rew), self._visible(term), self._visible(trunc)
