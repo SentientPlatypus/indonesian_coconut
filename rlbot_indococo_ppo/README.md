@@ -9,7 +9,7 @@ An RLBot v5 package for the indococo-ppo 1v1 bot. Source and training notes:
 | `indococo-rlbot.exe` | Windows x86_64 binary (cross-built with `x86_64-pc-windows-gnu`). |
 | `indococo-rlbot` | Linux x86_64 binary. |
 | `weights/actor.bpk` | Policy weights. The current file is `1v1.pt` imported into Burn. |
-| `loadout.toml` | Copy of `rlbot_submission/loadout.toml`. |
+| `loadout.toml` | Copy of master's `rlbot_submission/loadout.toml`. |
 
 Both binaries run inference on the CPU with Burn and embed the collision
 meshes, so the package needs neither Python nor a GPU. To deploy a newly
