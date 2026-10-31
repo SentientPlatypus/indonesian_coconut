@@ -1,0 +1,486 @@
+# Teaching a PPO Rocket League bot flip resets and air dribble bumps: experiment report
+
+*indonesian_coconut, `indococo-ppo` branch. Training runs of Oct 30–31, 2026 on one NVIDIA L4. All times are America/New_York (ET).*
+
+Every number below comes from the run logs on the training box (`~/ippo_runs`), copied into [`data/`](data/). Anything that was not logged says **not recorded**. [`make_figures.py`](make_figures.py) rebuilds every figure from `data/`, and [`extract_data.py`](extract_data.py) rebuilds `data/` from a copy of `~/ippo_runs`.
+
+## Abstract
+
+We moved the 1v1 bot from the Python rlgym-ppo stack to **indococo-ppo**, a Rust PPO framework forked from VirxEC/rlgymppo_rs. It runs about 1.7× faster than upstream: 70.1k vs 40.8k steps/s on one L4. Then we ran four rounds of experiments aimed at two mechanics the community says separates top bots, **flip resets** and **air dribble bumps**.
+
+- **R0.** Continuing from the Python policy `1v1.pt` gave a peak at 430–531M steps of 60–62% against `1v1.pt` (400 games). That fell to 44.8% at 600M under plain self-play with a constant learning rate.
+- **R1.** Adding an opponent pool, cosine LR decay and keep-best fixed the drift. All three R1 arms beat 430M about 63.5% over 1000 games. The targeted rewards did not change behaviour: ADB-832M is the strongest bot, with pool score 84.7, but bumps went down.
+- **Bug.** The flip-reset detector missed 80–90% of real resets, because RocketSim reports wheels-on-ball as `on_ground`. With a per-tick detector, the true baseline is about 0.06–0.08 resets per car-minute. Almost all of those come from a setter that resets the car passively, and **no checkpoint has ever used a reset**.
+- **R2.** A use-weighted reset reward (FR2) made a stronger bot: 57.2% against ADB-832M over 1000 games. But it still learned no resets: 0.051/min and 0 uses.
+- **R3.** FR3, a staged reset curriculum with potential-based wheel-alignment shaping, is **in progress**. Through run 3 (41.5M steps), success on the easiest level stayed at about 1%. That is below the 7.3% a car with no input gets and far below the 54.7% of a scripted aligner. The air dribble terms take about 13% of |reward| against 0.02% for the reset payoff. Run 4, with an easier level 0, the aerial terms zeroed in curriculum episodes and entropy raised to 0.025, started at 1:55 PM ET on Oct 31.
+
+## 1. Setup
+
+### 1.1 Framework and hardware
+
+- **Hardware:** EC2 g6.8xlarge with one NVIDIA L4 (24 GB) and 32 vCPUs.
+- **Framework:** [indococo-ppo](https://github.com/SentientPlatypus/indococo-ppo), a GPL-2.0 fork of VirxEC/rlgymppo_rs. It uses RocketSim for physics, Burn/LibTorch for the networks, and a LibTorch CUDA backend.
+- **Bot crate:** `indococo_ppo_bot/` on this branch. It holds the rewards, obs and actions, the trainer, and the RLBot client. It pulls the framework as a pinned Cargo git dependency.
+
+**Throughput benchmark.** 1v1, a 7.8M-parameter actor+critic, 2 epochs, 100k steps/iteration, 50k minibatch, 512 games, 24 threads, idle L4, from scratch (`data/sps_benchmark.csv`):
+
+| Stage | Config | steps/s | learn s/iter |
+|---|---|---|---|
+| base | upstream rlgymppo_rs (Burn CUDA f32) | 40.8k | 1.88 |
+| 0 | update magnitudes on the GPU | 43.8k | 1.76 |
+| 0 | + fusion | 43.3k | 1.76 |
+| 1 | LibTorch f32 | 37.6k | 2.24 |
+| 1 | LibTorch TF32 | 57.9k | 1.29 |
+| 2 | **TF32 + bf16 critic (used for every run)** | **70.1k** | 1.03 |
+| 2 | TF32 + bf16 critic + policy | 80.7k | 0.79 |
+| 2 | Burn CUDA + bf16 both | 72.1k | 0.80 |
+
+A bf16 policy raised KL from 0.0012–0.0022 to 0.010 and the clip fraction from 1–2% to 6%, so the policy stays f32. Throughput during the real runs, from `Throughput/overall` (min / median / max over 0.5M-step means):
+
+| Run | min | median | max |
+|---|---|---|---|
+| R0 e8b2_1v1 | 38.1k | 70.5k | 77.7k |
+| X0 | 41.2k | 66.6k | 75.2k |
+| FR | 48.7k | 66.7k | 75.6k |
+| ADB | 43.4k | 66.7k | 75.1k |
+| FR2 | 19.7k | 61.3k | 71.8k |
+
+The lows come from eval loops that shared the CPUs.
+
+![sps](figures/sps_benchmark.png)
+
+### 1.2 Observations, actions, network, PPO
+
+- **Observations:** RLGym v2 `DefaultObs` in the 1v1 layout, 92 floats, with `air_time_since_jump` clamped at 1.25 s. This matches `1v1.pt` and what rlgym_compat feeds the deployed bot.
+- **Actions:** the 90-entry `LookupTableAction`, with tick skip 8.
+- **PPO** (`config/train.toml` and the experiment templates): 100k steps/iteration, minibatch 50k, 2 epochs, γ 0.995, λ 0.95, entropy coefficient 0.01, and LR 1e-4 for both nets in R0/R1 and 5e-5 in R2/R3. Self-play includes old versions.
+- **Warm start:** R0 imported `1v1.pt`. Its max |logit diff| against Python fp64 is 7.4e-9, with the same argmax.
+
+### 1.3 The E8B2 reward base
+
+All rounds build on the E8B2 reward set (`indococo_ppo_bot/config/e8b2_1v1.toml`). It has one Rust module per term and 33 parity tests against the Python classes. Weights:
+
+| term | w | term | w | term | w |
+|---|---|---|---|---|---|
+| goal | 1200 | possession | 68 | contact_quality | 250 |
+| goal_prob | 40 | energy | 3 | front_bump_setup | 24 |
+| ball_travel | 10 | boost_keep | 5 | safe_boost | 16 |
+| vel_ball_to_goal | 12 | boost_change | 8 | shadow_space | 18 |
+| goal_dist | 3 | aerial_boost | 14 | pressure_flick | 36 |
+| speed_to_ball | 1 | aerial_distance | 40 | high_ball | 18 |
+| face_ball | 1 | airdribble | 40 | range_carry | 28 |
+| touch | 6 | airdribble_seq | 55 | clear_path | 42 |
+| wall_pop | 7 | flick | 22 | ang_vel | 1 |
+| flip_reset | 70 | recover | 70 | demo | 50 |
+
+`in_air` and `overextend` have weight 0. The rewards are zero-sum: r_i − opp_scale · mean(r_opponents). From R1 on, `common_rewards.toml` adds `demo.victim_gate = true`, so the knocked car is never paid for a bump.
+
+### 1.4 Evaluation methodology
+
+`tools/pool_eval/` plays headless RocketSim matches through RLGym v2. Each game is a 1v1 Octane game from a kickoff, played to the first goal. It counts as a timeout after 30 s with no touch or after 300 s.
+
+- **Opponent pool:** `1v1.pt` (our Python E8B2 policy), `ppo_430M` (R0 checkpoint), **Nexto**, **Necto** (VirxEC/NectoFamily), **Element** (VirxEC/Elementv5) and **Immortal** (RLBotPack, tick skip 6). Public bots run their own obs builders, models and kickoff code through an RLGym v1 compatibility view. Nexto keeps its stochastic sampling. Seer, Ripple and Tecko are not in the pool, because Seer has no packet shim and the other two have no public weights.
+- **Pool score:** the mean decisive win rate over the six opponents.
+- **H2H:** each seed is played twice, with the candidate blue and then orange. Our policy plays greedily (argmax). The standard error is √(p(1−p)/n): about ±2.5 pts at 400 games, ±1.6 at 1000 and ±5 at 100. R0 used seed 10000; R1 onward used seed 424242 and `nice 19`.
+- **Air-time clamp:** on by default, because that is what the deployed bot sees. Master's `h2h_1v1.py` ran without it. Unclamped, 430M scored 51.0% against `1v1.pt` with both sides unclamped, and 52.5% with only 430M unclamped, against 57.2% clamped (400 games each).
+- **Fresh engine and spawn jitter fix.** Two harness bugs had to be fixed before the pool numbers meant anything (`data/pool_400.csv`, sources `pool_baseline*`, seed 10000, 400 games/opponent):
+
+| harness | 430M vs 1v1.pt | 430M vs itself | 1v1.pt vs itself | vs Necto/Element/Immortal | 430M pool |
+|---|---|---|---|---|---|
+| reused engine, no jitter | 40.0% (5 timeouts) | 53.2% | **59.2%** | 100 / 100 / 100 | not recorded |
+| fresh engine, no jitter | 45.0% | 50.0% | 50.0% | 100 / 100 / 100 | 79.0 |
+| **fresh engine + jitter (used)** | **57.2%** | 51.0% | 50.0% | 94.2 / 96.2 / 94.8 | **79.0** |
+
+  - A reused arena carries contact and car state across resets. Identical policies then did not mirror-cancel (`1v1.pt` beat itself 59.2%), and a seed did not replay the same game.
+  - Without jitter, two deterministic bots with RLGym's 5 kickoff spawns play only 10 distinct games, which is why the 100% results appear. The fix jitters each car's spawn by up to 60 uu and 4° with a seeded RNG, and keeps the ball centred.
+- **Baselines** (fresh engine and jitter, 400 games/opponent):
+
+| candidate | 1v1.pt | 430M | Nexto | Necto | Element | Immortal | Pool |
+|---|---|---|---|---|---|---|---|
+| 430M | 57.2 | 51.0 | 80.5 | 94.2 | 96.2 | 94.8 | 79.0 |
+| 1v1.pt | 50.0 | 42.5 | 84.2 | 94.2 | 98.2 | 95.8 | 77.5 |
+
+- **Periodic evals and keep-best:** `tools/eval_loop.sh` evaluates a checkpoint every 100M steps, with 100 games per opponent. It promotes a checkpoint to `bots/best` if it beats the best's pool score **and** wins a 400-game h2h against the previous best.
+- **Reset rates:** from R2 on, `indococo-train rates` plays 300k steps (1M for the baseline re-measurement) against 430M over a fixed setter mix. It uses greedy policies with 3% random actions, puts the candidate on blue, and counts resets with both detectors, plus uses and goals after a reset.
+
+## 2. R0: the first Rust run (`e8b2_1v1`, 0 → 600M)
+
+**Hypothesis.** The faster Rust stack, warm-started from `1v1.pt` with E8B2 rewards, keeps improving under self-play.
+
+**Config.** The run imported `1v1.pt` and did a 30M-step critic-only warm-up (policy LR 0), then 570M steps of PPO with LR 1e-4 held **constant**. Self-play included old versions. There was no fixed opponent pool and no keep-best. The trainer started at 1:26 PM ET on Oct 30 and ran at about 70k sps.
+
+**Results.** 400-game h2h against `1v1.pt`, deterministic, seed 10000 (`data/r0_h2h_vs_1v1.csv`):
+
+| steps | W-L | win % | ±se |
+|---|---|---|---|
+| 130.2M | 186-214 | 46.5 | 2.5 |
+| 230.4M | 170-230 | 42.5 | 2.5 |
+| 330.6M | 192-208 | 48.0 | 2.5 |
+| **430.8M** | 241-159 | **60.2** | 2.4 |
+| **531.0M** | 247-153 | **61.8** | 2.4 |
+| 600.0M | 179-221 | **44.8** | 2.5 |
+
+430M was confirmed over 1000 games: 602-398, or 60.2% against `1v1.pt`. Its pool score is 79.0.
+
+![r0](figures/r0_h2h_vs_1v1.png)
+![r0 learning](figures/learning_e8b2_1v1.png)
+
+**Analysis of the 600M regression.** This was not overfitting to a fixed target, because the opponent was only the policy and its own past versions. The pattern of rising, collapsing and rising again points to **self-play cycling**. With a constant LR of 1e-4 and no anchor, the policy keeps exploiting its current self and forgets how to beat other styles. The Python-stack run of the previous days had already shown the same oscillation against 1v1.pt: 51.0, 61.8, 33.5, 50.5, 32.5, 60.3 and 42.5% at roughly 100M intervals (`training_checkins.md`). The learning curves show no NaNs or KL spikes at 600M, so the regression was strategic rather than an optimisation failure. The skill tracker (`Rating/1v1`) is a self-play rating and does not show it.
+
+**Fixes adopted for R1:**
+1. a **fixed opponent pool**: in 25% of iterations the opponent is drawn from `1v1.pt`, the 430M checkpoint and saved past versions;
+2. an **LR schedule**: flat, then cosine to 0.2×;
+3. **keep-best**: promotion needs a higher pool score and an h2h win, so a regression can never overwrite the deliverable.
+
+R1 continued from 430.8M, not from 600M.
+
+## 3. R1: X0 / FR / ADB (430.8M → 880.8M, 450M steps each)
+
+### 3.1 Motivation from Discord (read-only research, RLGym and bot-dev channels)
+
+- **Flip resets.** A public FlipResetReward pays when the car touches the ball, `has_flip` goes from false to true and the ball is within 45° of the car's down vector. It pays again on the next touch after the reset flip is used.
+  - RocketSim reports `on_ground` while the wheels touch the ball, so "airborne" has to be a height test (z > 150).
+  - **State setters matter more than the reward.** One bot did not learn resets by 11B steps without setters. With reset/random setters, another reported "ELO jumped faster in 500M than the last 30B".
+  - **Farming risk:** a high reset weight dropped one bot to Nexto level until it was lowered.
+- **Air dribble bumps.** Touch height plus aerial distance is enough for air dribbles. For bumps and demos, use a zero-sum reward gated so the victim isn't paid (one author found 12% of bumps rewarded the loser), with about +30% while the opponent is demoed. One bot learned air dribble bumps about 5B steps after a demo/bump reward was added.
+- **Balancing tension:** lowering the reset reward was reported to make bots spam air dribble bumps, so FR and ADB were run as separate arms.
+
+### 3.2 Design
+
+All arms warm-started from the full 430.8M checkpoint (actor, critic and optimizer) with the same learner settings (`experiments/train_template.toml`):
+
+- LR 1e-4, held flat until 580M (150M into the run), then cosine to 0.2× over 300M;
+- opponent pool chance 0.25;
+- setter mix: kickoff 0.30, random 0.10 + 0.10, `air_near_ball` 0.25 (car under the ball, wheels toward it, flip spent) and `wall_air_dribble` 0.25.
+
+| arm | change on top of E8B2 + victim gate | file |
+|---|---|---|
+| **X0** | none (control) | `x0.toml` |
+| **FR** | `flip_reset_gated` w=100 for 150M steps, then w=40. obtain 1.0 and hit 1.0, ball > 300 uu, car z > 150, max distance 220, use window 2.5 s | `fr_ramp.toml` → `fr.toml` (switch at 580.8M) |
+| **ADB** | `air_touch_height` w=30 (ball > 250, decay 0.8, goal bonus 1.0) and `air_dribble_bump` w=40 (bump 0.3, demo 1.0, 0.1/s while demoed, air dribble bonus 2.0, goal bonus 1.0, possession window 1.25 s) | `adb.toml` |
+
+Sizing came from a 4M-step dry run of 430M with every new term at weight 1:
+
+- the dense positive reward is about 3.8/step;
+- `air_touch_height` is 0.0078/step at w=1, so w=30 is about 6%;
+- resets came at 0.007 per car-minute on the old detector, so `flip_reset_gated` was sized per event: 50–100 per reset at w=100;
+- a bump pays 12, an air dribble bump 36 (up to 2×), and a demo 40–120.
+
+**Keep criteria:** an arm is kept only if it beats X0-best over 1000+ games (>52%), keeps its pool score within about 2 points of X0's, and clearly raises its targeted event rate.
+
+### 3.3 Results
+
+**Periodic pool evals** (100 games/opponent, ±≈5 pts; `data/pool_evals.csv`). ✔ = promoted to best.
+
+| run | step | pool | 1v1.pt | 430M | Nexto | Necto | Element | Immortal | best |
+|---|---|---|---|---|---|---|---|---|---|
+| X0 | 531.0M | 78.8 | 48 | 59 | 75 | 96 | 96 | 99 | ✔ |
+| X0 | 631.2M | 80.0 | 54 | 59 | 73 | 99 | 99 | 96 | ✔ |
+| X0 | 731.4M | 82.2 | 54 | 60 | 84 | 98 | 100 | 97 | |
+| X0 | 831.6M | 82.7 | 69 | 58 | 80 | 96 | 99 | 94 | ✔ |
+| X0 | 880.8M | **83.5** | 58 | 65 | 86 | 97 | 98 | 97 | ✔ |
+| FR | 430.8M | 81.5 | 66 | 49 | 87 | 96 | 96 | 95 | ✔ (start) |
+| FR | 531.0M | 77.8 | 52 | 53 | 82 | 89 | 99 | 92 | |
+| FR | 630.9M | 79.5 | 51 | 56 | 78 | 99 | 98 | 95 | |
+| FR | 731.1M | 79.5 | 49 | 65 | 77 | 97 | 98 | 91 | |
+| FR | 831.3M | 81.3 | 58 | 62 | 82 | 92 | 96 | 98 | |
+| FR | 880.8M | **83.0** | 62 | 66 | 84 | 93 | 98 | 95 | ✔ |
+| ADB | 430.8M | 80.8 | 65 | 48 | 85 | 96 | 96 | 95 | ✔ (start) |
+| ADB | 531.0M | 76.3 | 49 | 48 | 72 | 96 | 98 | 95 | |
+| ADB | 631.2M | 78.5 | 54 | 53 | 75 | 96 | 100 | 93 | |
+| ADB | 731.4M | 79.3 | 62 | 62 | 78 | 91 | 94 | 89 | |
+| ADB | 831.6M | **82.8** | 53 | 70 | 87 | 95 | 97 | 95 | ✔ |
+| ADB | 880.8M | 81.0 | 62 | 63 | 81 | 92 | 93 | 95 | |
+
+X0's start eval at 430.8M is not in its evals.jsonl (not recorded). The 430.8M evals of FR and ADB, 81.5 and 80.8, are the same checkpoint and show the 100-game noise: 79.0 over 400 games.
+
+![pool vs steps](figures/pool_vs_steps.png)
+
+**Final analysis** (`final_analysis/`, seed 424242). Bests: X0 = trainer dir `1793405254` (~881M), FR = `1793412690` (~881M), ADB = `ckpt_831600000` (831.6M).
+
+| 1000-game h2h | W-L | win % | ±se |
+|---|---|---|---|
+| FR-best vs X0-best | 502-498 | 50.2 | 1.6 |
+| ADB-best vs X0-best | 521-479 | 52.1 | 1.6 |
+| X0-best vs 430M | 634-366 | 63.4 | 1.5 |
+| FR-best vs 430M | 634-366 | 63.4 | 1.5 |
+| ADB-best vs 430M | 636-364 | 63.6 | 1.5 |
+
+| 400-game pool | 1v1.pt | 430M | Nexto | Necto | Element | Immortal | **Pool** |
+|---|---|---|---|---|---|---|---|
+| X0-best | 59.2 | 62.5 | 86.0 | 98.5 | 97.5 | 96.2 | 83.3 |
+| FR-best | 63.0 | 64.2 | 84.8 | 96.5 | 98.0 | 96.0 | 83.8 |
+| ADB-best | 65.2 | 65.0 | 85.5 | 95.8 | 99.0 | 97.5 | **84.7** |
+| *430M (baseline)* | 57.2 | 51.0 | 80.5 | 94.2 | 96.2 | 94.8 | 79.0 |
+
+![h2h](figures/h2h_1000.png)
+![pool400](figures/pool400_per_opponent.png)
+
+**Training event rates** (per car-minute, mean of the last 100M steps, with the first 50M in brackets). Flip resets here are counted by the **old detector** (see §4).
+
+| arm | flip resets | air dribble bumps | all bumps | demos |
+|---|---|---|---|---|
+| X0 | 0.0085 (0.0088) | 0.644 (0.562) | 1.66 | 0.450 |
+| FR | 0.0109 (0.0088) | 0.633 (0.553) | 1.68 | 0.460 |
+| ADB | 0.0094 (0.0081) | 0.568 (0.546) | 1.59 | 0.440 |
+
+![events](figures/events_vs_steps.png)
+
+**Reward shares.** R1 logged only the signed per-step mean `Reward/<term>`. For zero-sum terms that mean cancels across the two cars: `goal` and `air_dribble_bump` log as exactly 0. The R1 share charts therefore show |signed mean| and overweight non-zero-sum shaping. Over the last 100M steps:
+
+- `flip_reset_gated` was 0.04% of the dense positive reward. It was non-zero in 62% of iterations, at 0.0043/step at w=100 and 0.0017/step at w=40.
+- The base `flip_reset` was 0.14–0.16%.
+- `air_touch_height` was 6.55%.
+
+Over the last 20 iterations, `airdribble_seq` alone was 47–52% of |signed mean| in every arm.
+
+![X0 shares](figures/reward_share_exp_X0.png) ![FR shares](figures/reward_share_exp_FR.png) ![ADB shares](figures/reward_share_exp_ADB.png)
+
+Learning curves: [X0](figures/learning_exp_X0.png), [FR](figures/learning_exp_FR.png), [ADB](figures/learning_exp_ADB.png), and [all runs overlaid](figures/learning_all_runs.png).
+
+### 3.4 Analysis and verdict
+
+- **The infrastructure fixes, not the rewards, made the gain.** All three arms beat 430M by the same margin, 63.4–63.6% (Δ ≤ 0.2 pts, well inside 1 se), and all raised the pool score by 4–6 points over 430M's 79.0.
+- **FR: not kept.** It tied X0 at 50.2%. Its reset rate went from 0.0085 to 0.0109 per minute, about one every 90 minutes.
+- **ADB: the best bot, but not for the hypothesised reason.** It won 52.1% against X0, which is +1.3 se, p ≈ 0.09 and so not significant. It has the best pool score (84.7) and the best result against `1v1.pt` (65.2). But air dribble bumps **fell**, from 0.644 to 0.568, so the targeted-rate criterion fails. The gain most likely comes from the `air_touch_height` shaping and the victim-gated demo.
+- **Diagnosis:**
+  1. the reset detector was broken (§4);
+  2. `flip_reset_gated` was far too sparse to give gradient;
+  3. 89% of `air_near_ball` setups give a reset with **no input**, so the reward paid for something the policy does not control;
+  4. the ADB event is too loose (it flags about 40% of all bumps) and symmetric in self-play, so the victim learns avoidance as fast as the attacker learns to bump.
+
+**Deliverable:** ADB-832M, packaged as `rlbot_indococo_ppo_adb_832M`. It is in GitHub release [`adb-832m`](https://github.com/SentientPlatypus/indonesian_coconut/releases/tag/adb-832m) and `checkpoints_to_test/adb_832M.bpk`.
+
+## 4. The flip-reset detection bug
+
+**Cause.** When three or more wheels touch anything, including the ball, RocketSim sets `is_on_ground` and on that tick re-arms the jump and clears `has_flipped` / `has_double_jumped`. The R1 counter (`events.rs is_flip_reset`) and the base `flip_reset` reward bailed out, or cleared their state, whenever `on_ground()` was true. They also required a `CarHitBall` touch, which wheel contact does not raise. With 8-tick steps, `has_flip` is already true by the next step, so the rising edge was never seen. A RocketSim probe of zero-input `air_near_ball` setups found the flip regained in 268 of 300, usually with `on_ground()` true on that step.
+
+**Fix** (`src/resets.rs`, run per physics tick through `SharedInfoProvider::on_tick`):
+
+```
+every physics tick, for each car:
+    flags_now = (has_jumped, has_double_jumped, has_flipped)
+    regained  = some flag was set last tick and is cleared now   # sim gave the jump/flip back
+    wheels_on_ball   = wheels whose contact is the ball
+    wheels_elsewhere = wheels touching floor, wall, ceiling or another car
+    if regained and wheels_on_ball > 0 and wheels_elsewhere == 0
+       and car.z > 150 and ball.z > 250 and car clear of walls and ceiling:
+        mark flip_reset for this car this step
+    prev_flags = flags_now
+end of each 8-tick step: any marked tick -> event counter, rewards
+step-level fallback (no tick data): same regain + airborne rule, plus underside facing the ball within 300 uu
+```
+
+The simulator decides whether the flip comes back, using its own ≥3-wheel ground rule. The detector only adds that nothing but the ball was touched and that the car and ball were airborne. Ceiling, wall and rolling-ball landings are excluded.
+
+**Tests** (`tests/flip_reset_sim.rs`, RocketSim):
+- a scripted reset under the ball is detected by both the tick and step rules;
+- a reset followed by a jump inside the same step is detected;
+- floor and wall landings are not;
+- the two rules agree on every step of 400 setter episodes.
+
+**True baselines** (`fr2_baseline/rates.jsonl`, 1M steps each, against 430M or self, `rates_mix.toml`; `data/flip_reset_rates.csv`):
+
+| policy (vs) | old detector /min | **fixed /min** | ratio | `air_near_ball` /min | `air_reset` /min | kickoff /min | uses |
+|---|---|---|---|---|---|---|---|
+| X0-best (430M) | 0.0099 | **0.0639** | 6.5× | 0.271 | 0.000 | 0.000 | 0 |
+| FR-best (430M) | 0.0054 | **0.0711** | 13× | 0.278 | 0.000 | 0.007 | 0 |
+| ADB-best (430M) | 0.0126 | **0.0783** | 6.2× | 0.332 | 0.000 | 0.002 | 0 |
+| ADB-best (self) | 0.0117 | 0.0576 | 4.9× | 0.255 | 0.004 | 0.003 | 0 |
+| 430M (self) | 0.0099 | 0.0666 | 6.7× | 0.279 | 0.004 | 0.000 | 0 |
+
+On these 1M-step measurements the old detector undercounted 5–13×. The earlier "10–30×" estimate was against the per-step training counters. **No policy used a reset (0 uses), and resets from kickoff play are essentially zero.** Almost every reset came from the passive `air_near_ball` setter. For X0, 64 of its 66 reset episodes were "early" resets in `air_near_ball` (inside 3 s, mostly passive).
+
+![detector](figures/detector_old_vs_new.png)
+
+## 5. R2: FR2, rewarding the *use* of a reset (831.6M → 1131.6M)
+
+**Hypothesis.** With correct detection, a reward that pays mainly for *using* a reset, plus a setter where a reset needs effort, will produce intentional resets.
+
+**Design** (`experiments/fr2.toml`, `train_fr2_template.toml`):
+
+- **Base:** ADB rewards, warm-started from ADB-best `ckpt_831600000`. The base `flip_reset` is set to 0, since with the fix it would pay 70 per reset plus dense shaping.
+- **`flip_reset_use`, w=80:**
+  - obtain 0.1, i.e. 8 points, decaying 0.5× per repeat, at most 3 per flight, ball > 300 uu, underside cos ≥ 0.5, and nothing in the first 0.5 s of an episode;
+  - use 1.0, i.e. 20–80: a dodge within 1.5 s of the reset, then within 0.6 s a goalward touch, scaled by speed up to 2000 uu/s;
+  - shot 0.5 (40) if the ball heads on target at ≥ 500 uu/s within 3 s;
+  - goal 1.0 (80) on top of the goal term.
+- **New setter `air_reset`:** the car starts 400–800 uu from the ball, up to 50° off directly underneath, with a 200–700 uu/s velocity mismatch and its wheels up to 90° off. With no input it resets in **0 of 200** episodes, against 89% for `air_near_ball`.
+- **Setter shares** in three 100M stages:
+  - `air_reset` 0.15 → 0.23 → 0.30, with `air_near_ball` 0.05;
+  - kickoff 0.35 → 0.27 → 0.20;
+  - random 0.1 + 0.1 and `wall_air_dribble` 0.25.
+- **LR** 5e-5, held 100M, then cosine to 0.4× by 300M.
+- **Logging** adds `RewardAbs/`, `RewardNonzero/`, `Setters/` and per-setter reset events. Each 100M eval runs `rates`.
+
+**Results.** Training finished at 11:53 AM ET on Oct 31. Keep-best never promoted past the warm start, so the final checkpoint `1793462035` (1131.6M) was evaluated directly.
+
+| periodic eval | pool | 1v1.pt | 430M | Nexto | Necto | Element | Immortal | resets/min (fixed) | old det. | uses |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 831.6M (start) | 82.8 | 55 | 69 | 86 | 95 | 97 | 95 | 0.099 | 0.009 | 0 |
+| 931.6M | 82.0 | 60 | 62 | 83 | 92 | 97 | 98 | 0.081 | 0.021 | 0 |
+| 1031.6M | 79.5 | 60 | 66 | 74 | 89 | 97 | 91 | 0.069 | 0.009 | 0 |
+| 1131.6M | 80.7 | 74 | 61 | 73 | 90 | 94 | 92 | 0.051 | 0.015 | 0 |
+
+| final | result |
+|---|---|
+| h2h FR2-1132M vs ADB-best (1000 games) | **572-428, 57.2% ± 1.6** |
+| pool (400/opponent) | **83.5**: 1v1.pt 66.8, 430M 70.0, Nexto 80.8, Necto 92.5, Element 96.2, Immortal 94.5 (ADB-best 84.7, Nexto 85.5) |
+| resets (fixed detector, vs 430M) | 0.051/min overall; `air_near_ball` 0.198, `air_reset` **0**, kickoff **0**; **0 uses**; 1 goal after a reset |
+
+![FR2 setters](figures/reset_by_setter_exp_FR2.png)
+![FR2 shares](figures/reward_share_exp_FR2.png)
+![rates by setter](figures/reset_rate_by_setter.png)
+
+Over the last 20 iterations, `flip_reset_use` was **0.001%** of |reward| and `airdribble_seq` was 14.8%. The aerial terms together (aerial_distance/boost, airdribble, airdribble_seq, air_touch_height, air_dribble_bump, high_ball, wall_pop, flick, pressure_flick) were 24.2%. Goal, vel_ball_to_goal and goal_dist were 39.1%. Learning curves: [FR2](figures/learning_exp_FR2.png).
+
+**Analysis and verdict.**
+- FR2 is a **stronger 1v1 bot** than ADB-832M head to head, with a significant +7.2 pts at 1000 games. It is weaker against Nexto (−4.7 pts at 400 games, about 2 se) and slightly lower on pool score.
+- On flip resets it **failed**. The rate in the periodic evals **fell** steadily from 0.099 to 0.051, it never earned a reset from `air_reset`, and it made no uses.
+- The policy almost never reaches a reset position on its own, so a reward conditioned on a reset almost never pays. There is no gradient to follow.
+- Shipped as `checkpoints_to_test/fr2_1132M.bpk`.
+
+## 6. R3: FR3, staged reset curriculum (IN PROGRESS)
+
+**Hypothesis.** An adaptive curriculum that starts with the ball almost on the wheels, plus dense potential-based alignment shaping, will let the policy find resets and then move out to `air_reset` difficulty.
+
+**Design** (`experiments/fr3.toml`, `train_fr3_template.toml`, `src/curriculum.rs`, `src/rewards/reset_align.rs`):
+
+- **Setter `reset_curriculum`** (28% of episodes): levels 0–9, blended by t = (level/9)^1.5.
+  - Level 0: a 40–80 uu wheel gap, wheels within 10°, closing at 60–120 uu/s while spinning at 1.5–2.5 rad/s. Without input the wheels usually turn away before contact.
+  - Level 9: a 500–800 uu gap, wheels up to 90° off, and a 200–700 uu/s mismatch, i.e. `air_reset` difficulty.
+  - Success is an *earned* reset: after 0.33 s of control and within 3 s.
+  - After 200 attempts, success above 60% advances a level and below 25% backs off one. 20% of episodes replay an easier level.
+- **`reset_align`, w=400:** while airborne above 300 uu and within 400 uu of a ball above 300 uu, φ = max(0, underside cos) · (1 − dist/400). Each step pays φ − φ_prev, so loops sum to zero, and positive pay is capped at 1 (400 points) per episode.
+- **`flip_reset_use`, w=600**, with FR2's parameters and the obtain grace cut to 0.3 s:
+  - obtain 60 → 30 → 15;
+  - use 150–600;
+  - shot 300;
+  - goal 600.
+- **Setter mix:**
+  - kickoff 0.32 for the first 100M steps, then 0.30;
+  - random 0.1 + 0.1;
+  - `air_near_ball` 0.05;
+  - `reset_curriculum` 0.28;
+  - `wall_air_dribble` 0.15;
+  - `air_reset` dropped.
+- **Training:** warm-started from ADB-best (831.6M). LR 5e-5, held 100M, then cosine to 0.4× by 300M (200M decay). Pool and keep-best as in FR2. The rates eval uses `rates_fr3.toml` (kickoff/open play, `air_reset`, and the curriculum pinned at level 2).
+
+**Baselines per level** (150 setups each, `tests/reset_curriculum_sim.rs`; `data/fr3_level_baselines.csv`):
+
+| level | no input | random input | scripted wheel alignment (pitch/roll only) |
+|---|---|---|---|
+| 0 | 0.073 | 0.000 | 0.547 |
+| 1 | 0.047 | 0.000 | 0.440 |
+| 2 | 0.007 | 0.000 | 0.127 |
+| 3 | 0.007 | 0.000 | 0.053 |
+| 4–9 | ≤0.007 | 0.000 | ≤0.027 |
+
+![baselines](figures/fr3_level_baselines.png)
+
+**Smoke runs and runs so far** (all warm-started at 831.6M; `data/metrics_exp_FR3_*.csv`):
+
+| run | change | steps | L0 success | `reset_align` \|reward\| share | sps |
+|---|---|---|---|---|---|
+| smoke 1 | first design: align w=10, improvement-only shaping, use w=80, L0 spin 2–3.5 rad/s | 22.8M logged (to 854.4M; EXPERIMENTS.md quotes 17M) | 0.8%, ended at 0 | 0.016% | 45–57k incl. start eval |
+| smoke 2 | spin 1.5–2.5, ease 1.5, align w=400, use w=600 | 27.8M logged (to 859.4M; EXPERIMENTS.md quotes 23M) | 1.2% (no-input 7%) | 0.64% | 58–69k |
+| run 3 | potential-based `reset_align`, obtain grace 0.3 s | 41.5M (to 873.1M), then stopped | 0–2.5% per 0.5M window, flat; **level stayed 0** | 1.69% (last 20 it.), 1.79% (whole run) | 49–67k |
+| **run 4 (live)** | run 3 + **easier level 0** (gap 30–60 uu, spin 1–2 rad/s; no-input 18%, scripted alignment 56%; level window 200 → 100 attempts; commit d57f47c) + **aerial terms zeroed in curriculum episodes** (`setter_scale.reset_curriculum`: airdribble, airdribble_seq, air_touch_height, aerial_distance, contact_quality = 0) + **entropy 0.01 → 0.025** | started 1:55 PM ET Oct 31 | not yet recorded | not yet recorded | not yet recorded |
+
+Run 3's first eval at 831.6M: pool 82.5 (1v1.pt 52, 430M 71, Nexto 86, Necto 95, Element 96, Immortal 95). On `rates_fr3.toml` it got 0.006 resets/min, curriculum L2 earned share 0, and 0 uses. That mix differs from `rates_mix.toml`, so it cannot be compared with the §4 table.
+
+![curriculum](figures/fr3_curriculum.png)
+![FR3 run 3 setters](figures/reset_by_setter_exp_FR3_run3.png)
+
+**Is the aerial reward dominating?** Share of |reward| per step in FR3 run 3 over the last 20 iterations (871.2–873.1M, `RewardAbs/`; `data/reward_shares.csv`):
+
+| term | share |
+|---|---|
+| goal | 17.5% |
+| **airdribble_seq** | **13.3%** (largest dense term) |
+| vel_ball_to_goal | 13.2% |
+| goal_dist | 9.0% |
+| all aerial / air dribble terms | 22.3% |
+| `reset_align` | 1.69% |
+| `flip_reset_use` | **0.018%** |
+
+So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0.018). In curriculum episodes the car starts under a raised ball, where nudging it with the nose or roof pays `airdribble`/`airdribble_seq` at once, while a wheel landing pays almost nothing unless it is completed and used. This motivated run 4's per-setter zeroing. `reset_align`'s signed mean was −0.06 (run 3's first 20M steps), so it was not being farmed.
+
+![FR3 run 3 shares](figures/reward_share_exp_FR3_run3.png)
+
+**Status: IN PROGRESS.** The decision rule was: if level-0 success is still under 5% at about 900M, make it easier and explore more. Run 3 was stopped at 873.1M and run 4 started. Its results, verdict and pool/h2h are not recorded yet.
+
+## 7. Summary of checkpoints
+
+| checkpoint | steps | lineage | best evidence | where |
+|---|---|---|---|---|
+| `1v1.pt` | — | Python E8B2 (master) | pool 77.5 | `master:rlbot_submission/policies/1v1.pt` |
+| 430M | 430.8M | R0 | 60.2% vs 1v1.pt (1000 g); pool 79.0 | `checkpoints_to_test/430M.bpk` |
+| 531M | 531.0M | R0 | 61.8% vs 1v1.pt (400 g) | not packaged (`e8b2_1v1/checkpoints` on the box, subject to rotation) |
+| 600M | 600.0M | R0 | 44.8% vs 1v1.pt (400 g), the regression | not packaged |
+| X0-best | ~881M | R1 control | 63.4% vs 430M (1000 g); pool 83.3 | box: `final_analysis/bests/X0` |
+| FR-best | ~881M | R1 FR | 50.2% vs X0 (1000 g); pool 83.8 | box: `final_analysis/bests/FR` |
+| **ADB-832M** | 831.6M | R1 ADB | 63.6% vs 430M, 52.1% vs X0 (1000 g); **pool 84.7** (best) | `checkpoints_to_test/adb_832M.bpk`; release [`adb-832m`](https://github.com/SentientPlatypus/indonesian_coconut/releases/tag/adb-832m) |
+| **FR2-1132M** | 1131.6M | R2 | **57.2% vs ADB-832M** (1000 g); pool 83.5 | `checkpoints_to_test/fr2_1132M.bpk` |
+| FR3 | — | R3 | in progress | box: `exp_FR3/bots/best` (still ADB-832M) |
+
+## 8. Lessons learned and threats to validity
+
+1. **100-game evals are noisy** (±5 pts per opponent). The same 430.8M checkpoint scored 81.5 and 80.8 in two 100-game pool evals and 79.0 over 400 games. Periodic keep-best decisions near the threshold are partly luck, so only the 1000-game h2hs (±1.6) should rank close candidates. ADB vs X0 at 52.1% is not significant.
+2. **Self-play zero-sum effects.**
+   - A zero-sum bump reward also teaches the victim to avoid bumps, which is why bumps fell in ADB.
+   - Logged signed means of zero-sum terms cancel to 0, so R1's reward shares are biased. From R2 on, `RewardAbs/` fixes that.
+   - Self-play ratings (`Rating/1v1`) did not show R0's regression. Fixed external opponents are needed.
+3. **Passive resets from setters.** 89% of `air_near_ball` setups reset with no input, and nearly every recorded reset in every policy comes from that setter. Any reset "rate" that includes such setters measures the setter, not the policy. Report earned resets (`flier_earned_reset_share`) and kickoff-only rates.
+4. **Metric bugs can invalidate whole rounds.** All of R1's flip-reset conclusions rest on a detector that missed 5–13× of resets. Simulator-level tests now pin the definition.
+5. **Shaping dominance.** Existing dense aerial terms (about 13–15% of |reward| for `airdribble_seq` alone) compete directly with the behaviour we want in the same states.
+6. **Eval harness validity.** Reused engines and missing spawn jitter produced impossible results: a policy beat itself 59%, and 100% against three bots. All R1+ numbers use the fixed harness. The R0 400-game h2h table (logged 2:02–3:17 PM ET Oct 30) predates the fresh-engine/jitter fix (pool baselines logged 4:52–5:45 PM ET); which harness version produced it is not recorded, so treat the R0 curve as indicative.
+7. **Single seed per run.** Every training run is one seed, so run-to-run variance is not recorded.
+8. **Headless ≠ RLBot.** Headless evals apply actions on the tick they are chosen, while RLBot runs them a few ticks late. Nexto's headless numbers may differ from live matches.
+
+## 9. Future work
+
+- Finish FR3 run 4. If the level-0 success still doesn't beat the 7.3% no-input baseline, consider:
+  - behaviour cloning or a warm-up from the scripted aligner, which gets 54.7% at L0;
+  - a separate reset-specialist policy, distilled later (an idea from Discord);
+  - lowering `airdribble_seq` globally rather than only in curriculum episodes.
+- A tight, attacker-only ADB event (≥ 2 attacker air touches in 1.5 s, ball within 250 uu), logged by absolute value, with its share raised to 4–5%.
+- Multi-seed reruns of the key comparisons (X0 vs ADB) to measure seed variance.
+- Framework: reuse collection values (stage 3), CUDA graphs and a GPU rollout buffer, as in the indococo-ppo README roadmap.
+
+## Appendix A: data and figures
+
+**Data files** (`data/`, about 0.8 MB):
+
+| file | contents |
+|---|---|
+| `metrics_<run>.csv` | per-run training metrics, every 5 iterations averaged (0.5M steps per row) |
+| `pool_evals.csv` | periodic 100-game pool evals and keep-best |
+| `pool_400.csv` | 400-game pools, including harness baselines |
+| `h2h_1000.csv` | 1000-game h2hs |
+| `r0_h2h_vs_1v1.csv` | R0 h2h vs 1v1.pt |
+| `flip_reset_rates.csv` | `rates` measurements: baselines and per-eval, by setter |
+| `reward_shares.csv` | per-term \|reward\| shares, last 20 and last 1000 iterations |
+| `fr3_level_baselines.csv` | FR3 per-level baselines |
+| `sps_benchmark.csv` | throughput benchmark |
+| `metric_keys_used.txt` | the metric keys used |
+
+**Metric keys used:**
+
+- `Cumulative/steps`;
+- learning: `Collect/avg step reward`, `Loss/policy`, `Loss/value`, `Loss/KL divergence`, `Loss/entropy`, `Loss/clip fraction`, `Throughput/overall`, `Collect/episode length`, `Player/In Air Ratio`, `Player/Ball Touch Ratio`, `Rating/1v1`;
+- events: `Events/Flip Resets per min`, `Events/Flip Resets (old detector) per min`, `Events/Flip Resets per min @<setter>`, `Events/Air Dribble Bumps per min`, `Events/Bumps per min`, `Events/Demos per min`, `Events/Has Flip Ratio`;
+- setters and curriculum: `Setters/<kind> share`, `Curriculum/level`, `Curriculum/success`, `Curriculum/success @L0`, `Curriculum/episode level`;
+- rewards: `Reward/<term>`, `RewardAbs/<term>` and `RewardNonzero/<term>`.
+
+**Smoothing:** the faint lines are 0.5M-step means. The bold lines are a centred rolling mean over 20 rows (10M steps), or 4 rows for runs shorter than 100M steps.
+
+**Not recorded:**
+
+- the LR value per iteration (only the schedule config);
+- X0's 430.8M start eval;
+- per-opponent pool numbers for 531M and 600M;
+- the old detector in R1 runs (R1's `Events/Flip Resets per min` *is* the old detector);
+- signed-vs-abs reward shares for R0/R1;
+- seed variance;
+- anything for FR3 run 4 so far.

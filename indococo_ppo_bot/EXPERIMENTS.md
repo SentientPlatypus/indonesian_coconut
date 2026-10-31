@@ -1,5 +1,7 @@
 # Experiments: flip resets and air dribble bumps
 
+Full research write-up with figures and data: [docs/experiments/REPORT.md](../docs/experiments/REPORT.md).
+
 Three arms, all warm-started from the full 430.8M checkpoint (actor, critic
 and optimizer state) and trained ~450M steps with identical learner settings
 (`experiments/train_template.toml`):
