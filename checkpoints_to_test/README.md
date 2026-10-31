@@ -14,6 +14,16 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
+### aud_1132M.bpk
+
+| | |
+|---|---|
+| Lineage | AUD reward-audit arm (air rewards retuned: airdribble_seq 50, airdribble 50, aerial_distance 38, air_touch_height 0, goalward-only reworks), 1131.6M steps (trainer dir `1793475982`), warm-started from ADB `ckpt_831600000` |
+| H2H | **64.6%** vs ADB-best (646-354 over 1000 games) |
+| Pool | **87.0**: 1v1.pt 72.5, 430M 69.5, Nexto 87.2, Necto 97.5, Element 99.0, Immortal 96.5 |
+| Flip resets | 0.111 resets/min with the fixed detector, 0 reset uses, none from the air_reset setter |
+| sha256 | `bb48b9b1ff0594aaf0be1d70d8ed9d41b2feebdc77802e9a34cbc35027ef4773` |
+
 ### fr2_1132M.bpk
 
 | | |
