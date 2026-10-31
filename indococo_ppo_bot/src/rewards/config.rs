@@ -452,7 +452,7 @@ mod extends_tests {
                 w.airdribble,
                 w.aerial_distance
             ),
-            (0.0, 20.0, 20.0, 15.0)
+            (0.0, 50.0, 50.0, 38.0)
         );
         assert_eq!(w.air_dribble_bump, 40.0);
         assert_eq!(aud.airdribble_seq.max_chain_touches, 6);

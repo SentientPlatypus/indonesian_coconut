@@ -4,13 +4,15 @@
 # ball speed 3x, carry distance 2x. airdribble_seq and aerial_distance paid
 # juggles and flights in any direction. Target: the four terms at 8-12% of
 # |reward|, every remaining air payout gated by ball progress toward goal.
+# Try 1 (seq 20, airdribble 20, aerial_distance 15) put the four terms at only
+# 3.8% of |reward| after 25M steps; weights x2.5 target ~9%.
 extends = "adb.toml"
 
 [weights]
 air_touch_height = 0.0   # duplicate of the height / goalward parts below
-airdribble_seq = 20.0    # was 55
-airdribble = 20.0        # was 40
-aerial_distance = 15.0   # was 40
+airdribble_seq = 50.0    # was 55 (try 1: 20)
+airdribble = 50.0        # was 40 (try 1: 20)
+aerial_distance = 38.0   # was 40 (try 1: 15)
 
 [airdribble_seq]
 goal_bonus_floor = 0.1   # touch + chain bonus x max(0.1, goalward ball speed)
