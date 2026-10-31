@@ -272,11 +272,20 @@ rarely fires.
 |---|---|---|---|---|---|
 | 1 | first design: align w=10, improvement-only, use w=80, level-0 spin 2-3.5 rad/s | 17M | 0.8% | 0.016% | 45-57k (with the start eval) |
 | 2 | spin 1.5-2.5, ease 1.5, align w=400, use w=600 | 23M | 1.2% (no-input baseline 7%) | 0.64% | 58-69k |
-| 3 (the run) | potential-based `reset_align`, obtain grace 0.3 s | first 20M | 0.9-1.6%, flat | 1.8% (signed mean −0.06: no farming) | 49-66k |
+| 3 | potential-based `reset_align`, obtain grace 0.3 s | 39M (to 870M) | 0.6-1.7%, flat (no-input 7%) | 1.8% (signed mean −0.06: no farming) | 49-66k |
+| 4 (the run) | fallback: level-0 gap 30-60 uu, spin 1-2 rad/s (no-input 18%, scripted 56%), window 100, entropy 0.025, air dribble/aerial/contact_quality terms off in curriculum episodes | first 35M | 4.3% → 5-6%, still level 0 | 1.5-1.9% | 45-64k |
 
 In run 2, improvement-only shaping paid nothing at level 0: the car spawns
 near its best alignment, so cancelling the spin earned nothing. Hence the
 potential-based version in run 3.
+
+Run 4's fallback adds `setter_scale` to the reward config: per setter kind,
+term weight multipliers. In `reset_curriculum` episodes `airdribble`,
+`airdribble_seq`, `air_touch_height`, `aerial_distance` and `contact_quality`
+are 0, because nose/roof touches of the raised ball paid those terms (about
+21% of |reward| in total) right away and competed with wheel contact. The
+level-0 table above is for runs 2-3; run 4's easier level 0 measures no input
+0.18, random 0, scripted 0.56 (level 1: 0.13 / 0 / 0.52).
 
 Run: `ARMS=FR3 WARM=<ADB-best checkpoint> SEED_BEST=<exp_ADB/bots/best>
 RATES_STEPS=300000 RATES_MIX=rates_fr3.toml experiments/run_experiments.sh`.
