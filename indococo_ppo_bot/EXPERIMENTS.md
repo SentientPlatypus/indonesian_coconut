@@ -389,7 +389,7 @@ Shipped as `checkpoints_to_test/fr4_1432M.bpk`. Full write-up:
 ## AUD 1132M -> rlbot_submission 1v1.pt (2026-10-31)
 
 The Rust actor has the same layout as the Python `DiscreteFF` (92 -> 2048-2048-1024-1024 -> 90, ReLU, softmax). Its observations match `DefaultObs` and its actions match `LookupTableAction`, so the weights convert directly:
-`indococo-train export <ckpt> x.safetensors`, then `tools/aud_to_pt/convert.py x.safetensors <old 1v1.pt> out.pt`
+`indococo-train export <ckpt> x.safetensors`, then `tools/bpk_to_pt/convert.py x.safetensors <old 1v1.pt> out.pt`
 (the old file is read only for key order and dtype).
 
 Parity checks:
