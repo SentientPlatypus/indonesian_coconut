@@ -162,7 +162,8 @@ almost never paid either. Wheel contacts also do not raise `CarHitBall`, so
 the touch requirement missed more.
 
 Fix (`src/resets.rs`): a reset is a re-armed jump/flip flag while the wheels
-touch the ball and nothing else, with the car above 150 uu. It is checked
+touch the ball and nothing else, with the car above 150 uu and the ball
+center above 250 uu (so landing on a rolling ball does not count). It is checked
 every physics tick through `SharedInfoProvider::on_tick`, so a reset followed
 by a jump inside the same 8-tick step still counts. The events, `flip_reset`,
 `flip_reset_gated` and `flip_reset_use` all use it, and a step-level version

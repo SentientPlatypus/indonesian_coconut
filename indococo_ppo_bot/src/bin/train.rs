@@ -27,7 +27,7 @@ use indococo_bot::rewards::flip_reset_use::{FlipResetUse, FlipResetUseParams};
 use indococo_bot::setters::{WeightedSetter, default_mix};
 use indococo_bot::state::StateView;
 use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use rlgymppo::rlgym::GameState;
 use rlgymppo::rlgym::rocketsim::init_from_default;
 use rlgymppo::{
@@ -666,6 +666,10 @@ fn load_actor(ckpt: &Path, dev: &Device) -> Net {
         .unwrap_or_else(|e| panic!("load actor {}: {e:?}", ckpt.display()))
 }
 
+/// Share of `rates` decisions replaced by a random action. Greedy policies
+/// from the same kickoff otherwise replay the same game in every env.
+const RATES_RANDOM_ACTION: f64 = 0.03;
+
 /// Greedy actions of `actor` for a batch of observations.
 fn argmax_actions(actor: &Net, obs: &[&Vec<f32>], dev: &Device) -> Vec<usize> {
     let flat: Vec<f32> = obs.iter().flat_map(|o| o.iter().copied()).collect();
@@ -697,19 +701,28 @@ fn rates_worker(
     let opp = opponent.map(|p| load_actor(p, &dev));
     let mut slots: Vec<RateSlot> = (0..ENVS).map(|_| RateSlot::new(mix)).collect();
     let mut counts = BTreeMap::new();
+    let mut rng = SmallRng::seed_from_u64(rand::rng().next_u64());
+    let mut explore = |a: usize| {
+        if rng.random_bool(RATES_RANDOM_ACTION) {
+            rng.random_range(0..N_ACTIONS)
+        } else {
+            a
+        }
+    };
     for _ in 0..steps.div_ceil(ENVS) {
         let blue: Vec<&Vec<f32>> = slots.iter().map(|s| &s.obs[0]).collect();
         let orange: Vec<&Vec<f32>> = slots.iter().map(|s| &s.obs[1]).collect();
         let a0 = argmax_actions(&cand, &blue, &dev);
         let a1 = argmax_actions(opp.as_ref().unwrap_or(&cand), &orange, &dev);
         for (i, slot) in slots.iter_mut().enumerate() {
-            slot.step(&[a0[i], a1[i]], &mut counts);
+            slot.step(&[explore(a0[i]), explore(a1[i])], &mut counts);
         }
     }
     counts
 }
 
-/// Plays `steps` steps (greedy policies, candidate on blue) over the setter
+/// Plays `steps` steps (greedy policies with 3% random actions, candidate on
+/// blue) over the setter
 /// mix in `setters_toml` and prints the candidate's flip reset rates per
 /// setter and overall as one JSON line.
 fn rates(setters_toml: &Path, candidate: &Path, opponent: &str, steps: usize, threads: usize) {

@@ -19,13 +19,19 @@
 //!
 //! The rule: a jump/flip flag was re-armed (see [`FlipFlags::regained`]) while
 //! the car is clear of the arena (above [`AIRBORNE_MIN_Z`], no wheel on a
-//! wall, floor or ceiling) and its wheels are on the ball.
+//! wall, floor or ceiling), its wheels are on the ball, and the ball is off
+//! the ground (center above [`MIN_BALL_Z`]). The last condition leaves out a
+//! car that drives or lands onto a rolling ball: RocketSim re-arms the jump
+//! there too, but that is not an aerial flip reset.
 
 use rlgymppo_utils::rlgym::GameState;
 use rlgymppo_utils::rocketsim::{Arena, CarState, UserInfoType};
 
 use crate::consts::{BACK_WALL_Y, CEILING_Z, SIDE_WALL_X};
 use crate::state::{AIRBORNE_MIN_Z, BallView, CarView};
+
+/// Lowest ball center height for a reset (a resting ball is at 93 uu).
+pub const MIN_BALL_Z: f64 = 250.0;
 
 /// Step-level fallback: largest car-to-ball distance (centers) that still
 /// counts as wheels on the ball, and how squarely the ball must sit under the
@@ -89,10 +95,11 @@ pub fn wheel_contacts(car: &CarState) -> (u8, u8) {
     (ball, other)
 }
 
-/// Tick rule: wheels on the ball, no other wheel contact, above the floor.
-fn wheels_on_ball_in_air(car: &CarState) -> bool {
+/// Tick rule: wheels on the ball, no other wheel contact, car above the
+/// floor and ball off the ground.
+fn wheels_on_ball_in_air(car: &CarState, ball_z: f64) -> bool {
     let (ball, other) = wheel_contacts(car);
-    ball > 0 && other == 0 && f64::from(car.phys.pos.z) > AIRBORNE_MIN_Z
+    ball > 0 && other == 0 && f64::from(car.phys.pos.z) > AIRBORNE_MIN_Z && ball_z > MIN_BALL_Z
 }
 
 /// Per-tick flip reset detection for one environment.
@@ -124,10 +131,11 @@ impl TickResetTracker {
                 .collect();
             self.pending = vec![false; n];
         }
+        let ball_z = f64::from(arena.get_ball_state().phys.pos.z);
         for i in 0..n {
             let car = arena.get_car_state(i);
             let flags = FlipFlags::of_state(car);
-            if self.prev[i].regained(flags) && wheels_on_ball_in_air(car) {
+            if self.prev[i].regained(flags) && wheels_on_ball_in_air(car, ball_z) {
                 self.pending[i] = true;
             }
             self.prev[i] = flags;
@@ -156,6 +164,7 @@ pub fn step_flip_reset(before: &CarView, car: &CarView, ball: &BallView) -> bool
         car.wheels_with_contact.iter().filter(|&&w| w).count() as u8 - car.wheels_on_ball.min(4);
     let p = car.pos;
     let clear = p.z > AIRBORNE_MIN_Z
+        && ball.pos.z > MIN_BALL_Z
         && p.z < CEILING_Z - SURFACE_MARGIN
         && p.x.abs() < SIDE_WALL_X - SURFACE_MARGIN
         && p.y.abs() < BACK_WALL_Y - SURFACE_MARGIN;

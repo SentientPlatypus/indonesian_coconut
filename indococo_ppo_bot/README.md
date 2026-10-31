@@ -168,7 +168,9 @@ RocketSim gives the jump and flip back when three or more wheels touch
 anything, the ball included, and reports that as `is_on_ground`. A flip
 reset is therefore: a jump/flip flag re-armed (`has_jumped`, `has_flipped` or
 `has_double_jumped` turning off) while the wheels are on the ball, nothing
-else, above 150 uu. `src/resets.rs` checks this every physics tick through
+else, with the car above 150 uu and the ball center above 250 uu (landing
+on a rolling ball also re-arms the jump but is not a flip reset).
+`src/resets.rs` checks this every physics tick through
 `SharedInfoProvider::on_tick` and hands the result to the events and rewards
 (`CarView::tick_flip_reset`); a step-level version of the same rule covers
 states without tick data. Until Oct 2026 the counters and the flip reset
@@ -176,7 +178,8 @@ rewards required `!on_ground()` on a touch step and so missed nearly every
 reset (`Events/Flip Resets (old detector) per min` still logs that count).
 
 `indococo-train rates <setters.toml> <ckpt> <opponent ckpt|self> <steps>
-[threads]` plays greedy policies over a setter mix (e.g.
+[threads]` plays greedy policies (3% random actions, so kickoff games do not
+repeat) over a setter mix (e.g.
 `experiments/rates_mix.toml`) with the candidate on blue and prints one JSON
 line: resets per minute (new and old detector), uses per minute, and the
 share of episodes, and of setter episodes where the candidate starts in the
