@@ -6,13 +6,15 @@ Every number below comes from the run logs on the training box (`~/ippo_runs`), 
 
 ## Abstract
 
-We moved the 1v1 bot from the Python rlgym-ppo stack to **indococo-ppo**, a Rust PPO framework forked from VirxEC/rlgymppo_rs. It runs about 1.7× faster than upstream: 70.1k vs 40.8k steps/s on one L4. Then we ran four rounds of experiments aimed at two mechanics the community says separates top bots, **flip resets** and **air dribble bumps**.
+We moved the 1v1 bot from the Python rlgym-ppo stack to **indococo-ppo**, a Rust PPO framework forked from VirxEC/rlgymppo_rs. It runs about 1.7× faster than upstream: 70.1k vs 40.8k steps/s on one L4. Then we ran five rounds of experiments aimed at two mechanics the community says separates top bots, **flip resets** and **air dribble bumps**.
 
 - **R0.** Continuing from the Python policy `1v1.pt` gave a peak at 430–531M steps of 60–62% against `1v1.pt` (400 games). That fell to 44.8% at 600M under plain self-play with a constant learning rate.
 - **R1.** Adding an opponent pool, cosine LR decay and keep-best fixed the drift. All three R1 arms beat 430M about 63.5% over 1000 games. The targeted rewards did not change behaviour: ADB-832M is the strongest bot, with pool score 84.7, but bumps went down.
 - **Bug.** The flip-reset detector missed 80–90% of real resets, because RocketSim reports wheels-on-ball as `on_ground`. With a per-tick detector, the true baseline is about 0.06–0.08 resets per car-minute. Almost all of those come from a setter that resets the car passively, and **no checkpoint has ever used a reset**.
 - **R2.** A use-weighted reset reward (FR2) made a stronger bot: 57.2% against ADB-832M over 1000 games. But it still learned no resets: 0.051/min and 0 uses.
-- **R3.** FR3, a staged reset curriculum with potential-based wheel-alignment shaping, is **in progress**. Through run 3 (41.5M steps), success on the easiest level stayed at about 1%. That is below the 7.3% a car with no input gets and far below the 54.7% of a scripted aligner. The air dribble terms take about 13% of |reward| against 0.02% for the reset payoff. Run 4, with an easier level 0, the aerial terms zeroed in curriculum episodes and entropy raised to 0.025, started at 1:55 PM ET on Oct 31.
+- **R3.** FR3, a staged reset curriculum with potential-based wheel-alignment shaping, never left level 0. Run 3 (41.5M steps) held about 1% success on the easiest level, below the 7.3% a car with no input gets. Run 4 (easier level 0, aerial terms zeroed in curriculum episodes, entropy 0.025) held about 5% against an 18% no-input baseline and was stopped at 895.6M so the air rewards could be audited first.
+- **R4.** AUD reworked the four air dribble terms to pay only goalward progress, with decay and caps. Warm-started from ADB-832M, its 1131.6M final beat ADB-832M **64.6%** over 1000 games with pool score **87.0**. There was no control arm, so part of that gain is just 300M more steps.
+- **R5.** FR4 put the FR3 run-4 reset curriculum on top of the AUD rewards (1131.6M → 1431.6M). It is the strongest bot so far: **63.3%** vs ADB-832M, **53.2%** vs AUD-final, pool **87.1** (Nexto 89.8). The curriculum still never left level 0 (about 4% success against 18% for no input), and **no checkpoint has used a reset**.
 
 ## 1. Setup
 
@@ -340,7 +342,7 @@ Over the last 20 iterations, `flip_reset_use` was **0.001%** of |reward| and `ai
 - The policy almost never reaches a reset position on its own, so a reward conditioned on a reset almost never pays. There is no gradient to follow.
 - Shipped as `checkpoints_to_test/fr2_1132M.bpk`.
 
-## 6. R3: FR3, staged reset curriculum (IN PROGRESS)
+## 6. R3: FR3, staged reset curriculum (stopped)
 
 **Hypothesis.** An adaptive curriculum that starts with the ball almost on the wheels, plus dense potential-based alignment shaping, will let the policy find resets and then move out to `air_reset` difficulty.
 
@@ -385,7 +387,7 @@ Over the last 20 iterations, `flip_reset_use` was **0.001%** of |reward| and `ai
 | smoke 1 | first design: align w=10, improvement-only shaping, use w=80, L0 spin 2–3.5 rad/s | 22.8M logged (to 854.4M; EXPERIMENTS.md quotes 17M) | 0.8%, ended at 0 | 0.016% | 45–57k incl. start eval |
 | smoke 2 | spin 1.5–2.5, ease 1.5, align w=400, use w=600 | 27.8M logged (to 859.4M; EXPERIMENTS.md quotes 23M) | 1.2% (no-input 7%) | 0.64% | 58–69k |
 | run 3 | potential-based `reset_align`, obtain grace 0.3 s | 41.5M (to 873.1M), then stopped | 0–2.5% per 0.5M window, flat; **level stayed 0** | 1.69% (last 20 it.), 1.79% (whole run) | 49–67k |
-| **run 4 (live)** | run 3 + **easier level 0** (gap 30–60 uu, spin 1–2 rad/s; no-input 18%, scripted alignment 56%; level window 200 → 100 attempts; commit d57f47c) + **aerial terms zeroed in curriculum episodes** (`setter_scale.reset_curriculum`: airdribble, airdribble_seq, air_touch_height, aerial_distance, contact_quality = 0) + **entropy 0.01 → 0.025** | started 1:55 PM ET Oct 31 | not yet recorded | not yet recorded | not yet recorded |
+| run 4 | run 3 + **easier level 0** (gap 30–60 uu, spin 1–2 rad/s; no-input 18%, scripted alignment 56%; level window 200 → 100 attempts; commit d57f47c) + **aerial terms zeroed in curriculum episodes** (`setter_scale.reset_curriculum`: airdribble, airdribble_seq, air_touch_height, aerial_distance, contact_quality = 0) + **entropy 0.01 → 0.025** | 63.5M (832.1M to 895.6M), then stopped | about 4.7% over the last 20M steps, against an 18% no-input baseline; **level stayed 0** | see `data/reward_shares.csv` | see `figures/learning_exp_FR3_run4.png` |
 
 Run 3's first eval at 831.6M: pool 82.5 (1v1.pt 52, 430M 71, Nexto 86, Necto 95, Element 96, Immortal 95). On `rates_fr3.toml` it got 0.006 resets/min, curriculum L2 earned share 0, and 0 uses. That mix differs from `rates_mix.toml`, so it cannot be compared with the §4 table.
 
@@ -408,9 +410,66 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 
 ![FR3 run 3 shares](figures/reward_share_exp_FR3_run3.png)
 
-**Status: IN PROGRESS.** The decision rule was: if level-0 success is still under 5% at about 900M, make it easier and explore more. Run 3 was stopped at 873.1M and run 4 started. Its results, verdict and pool/h2h are not recorded yet.
+**Status: stopped.** The decision rule was: if level-0 success is still under 5% at about 900M, make it easier and explore more. Run 3 was stopped at 873.1M and run 4 started. Run 4 also stayed at level 0, below even the easier no-input baseline, and was stopped at 895.6M so the air rewards could be audited first (R4). The curriculum was then retried on the audited rewards as FR4 (R5).
 
-## 7. Summary of checkpoints
+## 7. R4: AUD, air reward audit (831.6M → 1131.6M)
+
+**Why.** The four air dribble terms (`airdribble`, `airdribble_seq`, `air_touch_height`, `aerial_distance`) were about 73–77% of positive shaping and 21–23% of |reward| in every run since R0. One goalward touch under the ball paid all four, `airdribble_seq` paid every chained touch in any direction with no decay or cap, and `airdribble` paid for flying near the ball without touching it. Full audit table: `EXPERIMENTS.md`, Round 4.
+
+**Design** (`experiments/aud.toml`, extends ADB):
+
+- `air_touch_height` 30 → 0.
+- `airdribble_seq` 55 → 50: touch and chain bonus scaled by max(0.1, goalward ball speed), 0.8 decay per touch, capped at 6 touches, carry counts only ball progress toward goal.
+- `airdribble` 40 → 50: direction and push floors removed, pays only within 0.5 s of the carrier's last touch.
+- `aerial_distance` 40 → 38: ball progress toward goal only.
+- A first try at weights 20/20/15 gave only 3.8% of |reward| (target 8–12%) and was stopped at 846.2M; the run uses ×2.5.
+- New metric `Events/Aerial Goals per min`.
+- 300M steps from ADB-best with `train_template.toml`, the same pool and LR schedule as ADB. The planned CTRL arm (unchanged ADB rewards) was dropped at the user's request, so AUD is compared against ADB-best only. Trained about 2:20–3:46 PM ET Oct 31.
+
+**Results** (`aud_final/`, seed 424242):
+
+| measure | AUD-final (1131.6M) | ADB-832M |
+|---|---|---|
+| h2h, 1000 games | **64.6%** (646-354, ±1.5) vs ADB-832M | — |
+| pool score (400 games per opponent) | **87.0** | 84.7 |
+| vs 1v1.pt / 430M / Nexto | 72.5 / 69.5 / 87.2 | 65.2 / 65.0 / 85.5 |
+| vs Necto / Element / Immortal | 97.5 / 99.0 / 96.5 | 95.8 / 99.0 / 97.5 |
+
+- **Air term share** (last 20 iterations, `RewardAbs/`): `airdribble` 4.96%, `airdribble_seq` 2.69%, `aerial_distance` 0.70%, `air_touch_height` 0, so 8.35% for the four, inside the 8–12% target (FR3 run 3 had about 21%). `air_dribble_bump` 1.24%. The goal term is now the largest at 23.7%.
+- **Training events**, mean of the last 100M steps (ADB's last 100M in brackets): aerial goals 0.40/min (not logged for ADB), goals 1.04/min, air dribble bumps 0.55 (0.57), bumps 1.75 (1.59), demos 0.41 (0.44), in-air ratio 0.52 (0.52).
+- **Flip resets** (`rates_mix.toml`, 300k steps vs 430M): 0.111 resets/min, earned-reset share of flier episodes 8.3%, almost all from the `air_near_ball` setter (0.50/min), **0 uses**.
+- Periodic 100-game pools: 82.0 at 831.6M, 86.5 at 931.8M, 85.2 at 1032.0M, 86.8 at 1131.6M.
+
+**Verdict.** Pass on everything measurable: the air terms are in the target band, aerial goals are logged and steady, and AUD beats ADB-832M clearly with a higher pool score. Without CTRL, the gain can't be split between the reward change and 300M more steps; for scale, FR2 with 300M more steps on different rewards beat ADB-832M 57.2%. Shipped as `checkpoints_to_test/aud_1132M.bpk`.
+
+![AUD shares](figures/reward_share_exp_AUD.png)
+
+## 8. R5: FR4, flip resets on the audited rewards (1131.6M → 1431.6M)
+
+**Design** (`experiments/fr4.toml`, `train_fr4_template.toml`): `aud.toml` plus FR3 run 4's reset setup. That is `flip_reset_use` 600 (obtain grace 0.3 s), potential-based `reset_align` 400, the `reset_curriculum` setter at 28% with the easier level 0, entropy 0.025, LR 5e-5 held to 1231.6M then cosine to 0.4×, and the aerial terms and `contact_quality` zeroed in curriculum episodes. Warm-started from AUD-final, 300M steps, trained about 3:46–5:23 PM ET Oct 31 at about 61k steps/s. The chain's FR4 driver exited before training ended, so the final 1000-game h2hs and the 400-game pool were run by hand (`fr4_final/run.sh`); the 1431.6M checkpoint's periodic eval (pool and rates) had already run.
+
+**Results** (`fr4_final/`, seed 424242):
+
+| measure | FR4-final (1431.6M) |
+|---|---|
+| h2h vs ADB-832M, 1000 games | **63.3%** (633-367, ±1.5) |
+| h2h vs AUD-final, 1000 games | **53.2%** (532-468, ±1.6) |
+| pool score (400 games per opponent) | **87.1**, the best so far |
+| vs 1v1.pt / 430M / Nexto | 68.0 / 71.0 / **89.8** |
+| vs Necto / Element / Immortal | 98.0 / 99.5 / 96.5 |
+
+- **Curriculum:** the level never left 0. Level-0 success averaged 4.1% over the run and 3.8% over the last 100M, against 18% for no input and 56% for the scripted aligner.
+- **Flip resets** (`rates_fr3.toml`, 300k steps vs 430M, at 1431.6M): 0.003 resets/min, 0 earned resets, **0 uses**; 0 resets from the curriculum pinned at level 2. Every periodic eval (1131.6M to 1431.6M) was between 0.003 and 0.009 resets/min with 0 uses.
+- **Reward share** (last 20 iterations): `reset_align` 2.25%, `flip_reset_use` 0.03%, the four air terms 5.3%.
+- **Training events**, last 100M steps (AUD in brackets): aerial goals 0.27/min (0.40), goals 1.03 (1.04), air dribble bumps 0.36 (0.55), bumps 1.45 (1.75), demos 0.22 (0.41), in-air ratio 0.50 (0.52). The curriculum episodes take 28% of training, so these training-mix rates are not directly comparable.
+- Periodic 100-game pools: 86.7, 86.5, 87.2, 87.5; keep-best promoted 1331.8M (51.0% vs best over 400) and 1431.6M (53.5%).
+
+**Verdict.** A stronger bot, but not for the targeted reason. FR4 beats AUD-final by about 2 se and has the best pool and Nexto scores, which most likely comes from 300M more steps at a low, decaying LR. It learned no flip resets, and the curriculum failed for the third time even with the air shaping cut to about 5%. Shipped as `checkpoints_to_test/fr4_1432M.bpk`.
+
+![FR4 setters](figures/reset_by_setter_exp_FR4.png)
+![FR4 shares](figures/reward_share_exp_FR4.png)
+
+## 9. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
 |---|---|---|---|---|
@@ -422,9 +481,11 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 | FR-best | ~881M | R1 FR | 50.2% vs X0 (1000 g); pool 83.8 | box: `final_analysis/bests/FR` |
 | **ADB-832M** | 831.6M | R1 ADB | 63.6% vs 430M, 52.1% vs X0 (1000 g); **pool 84.7** (best) | `checkpoints_to_test/adb_832M.bpk`; release [`adb-832m`](https://github.com/SentientPlatypus/indonesian_coconut/releases/tag/adb-832m) |
 | **FR2-1132M** | 1131.6M | R2 | **57.2% vs ADB-832M** (1000 g); pool 83.5 | `checkpoints_to_test/fr2_1132M.bpk` |
-| FR3 | — | R3 | in progress | box: `exp_FR3/bots/best` (still ADB-832M) |
+| FR3 | — | R3 | stopped at level 0; no checkpoint kept | box: `exp_FR3_run4` |
+| **AUD-1132M** | 1131.6M | R4 | **64.6% vs ADB-832M** (1000 g); pool 87.0 | `checkpoints_to_test/aud_1132M.bpk` |
+| **FR4-1432M** | 1431.6M | R5 | **63.3% vs ADB-832M**, **53.2% vs AUD-1132M** (1000 g); **pool 87.1** (best) | `checkpoints_to_test/fr4_1432M.bpk` |
 
-## 8. Lessons learned and threats to validity
+## 10. Lessons learned and threats to validity
 
 1. **100-game evals are noisy** (±5 pts per opponent). The same 430.8M checkpoint scored 81.5 and 80.8 in two 100-game pool evals and 79.0 over 400 games. Periodic keep-best decisions near the threshold are partly luck, so only the 1000-game h2hs (±1.6) should rank close candidates. ADB vs X0 at 52.1% is not significant.
 2. **Self-play zero-sum effects.**
@@ -438,12 +499,12 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 7. **Single seed per run.** Every training run is one seed, so run-to-run variance is not recorded.
 8. **Headless ≠ RLBot.** Headless evals apply actions on the tick they are chosen, while RLBot runs them a few ticks late. Nexto's headless numbers may differ from live matches.
 
-## 9. Future work
+## 11. Future work
 
-- Finish FR3 run 4. If the level-0 success still doesn't beat the 7.3% no-input baseline, consider:
+- The reset curriculum failed three times (FR3 runs 3–4, FR4), always below the no-input baseline. Next options:
   - behaviour cloning or a warm-up from the scripted aligner, which gets 54.7% at L0;
   - a separate reset-specialist policy, distilled later (an idea from Discord);
-  - lowering `airdribble_seq` globally rather than only in curriculum episodes.
+  - a curriculum-only pretraining phase, or paying only for earned resets above the no-input rate.
 - A tight, attacker-only ADB event (≥ 2 attacker air touches in 1.5 s, ball within 250 uu), logged by absolute value, with its share raised to 4–5%.
 - Multi-seed reruns of the key comparisons (X0 vs ADB) to measure seed variance.
 - Framework: reuse collection values (stage 3), CUDA graphs and a GPU rollout buffer, as in the indococo-ppo README roadmap.
@@ -483,4 +544,4 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 - the old detector in R1 runs (R1's `Events/Flip Resets per min` *is* the old detector);
 - signed-vs-abs reward shares for R0/R1;
 - seed variance;
-- anything for FR3 run 4 so far.
+- a CTRL arm for AUD (dropped), so AUD's reward effect can't be separated from more training.

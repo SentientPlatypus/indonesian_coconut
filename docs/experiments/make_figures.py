@@ -15,9 +15,9 @@ D, F = os.path.join(HERE, "data"), os.path.join(HERE, "figures")
 os.makedirs(F, exist_ok=True)
 ARMS = {"exp_X0": "X0 (control)", "exp_FR": "FR", "exp_ADB": "ADB"}
 COL = {"e8b2_1v1": "k", "exp_X0": "tab:gray", "exp_FR": "tab:blue", "exp_ADB": "tab:orange", "exp_FR2": "tab:green",
-       "exp_FR3_smoke1": "tab:pink", "exp_FR3_smoke2": "tab:olive", "exp_FR3_run3": "tab:purple", "exp_FR3": "tab:red"}
+       "exp_FR3_smoke1": "tab:pink", "exp_FR3_smoke2": "tab:olive", "exp_FR3_run3": "tab:purple", "exp_FR3_run4": "tab:red", "exp_AUD": "tab:cyan", "exp_FR4": "tab:brown"}
 NAME = {"e8b2_1v1": "R0 e8b2_1v1", **ARMS, "exp_FR2": "R2 FR2", "exp_FR3_smoke1": "FR3 smoke 1",
-        "exp_FR3_smoke2": "FR3 smoke 2", "exp_FR3_run3": "FR3 run 3", "exp_FR3": "FR3 run 4"}
+        "exp_FR3_smoke2": "FR3 smoke 2", "exp_FR3_run3": "FR3 run 3", "exp_FR3_run4": "FR3 run 4", "exp_AUD": "R4 AUD", "exp_FR4": "R5 FR4"}
 
 
 def rd(name):
@@ -68,7 +68,7 @@ for run, rows in M.items():
 
 # 2. Learning curves overlaid for all main runs (mean reward, KL, sps).
 fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
-for run in ["e8b2_1v1", "exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_run3", "exp_FR3"]:
+for run in ["e8b2_1v1", "exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_run3", "exp_FR3_run4", "exp_AUD", "exp_FR4"]:
     if run not in M:
         continue
     x = col(M[run], "steps") / 1e6
@@ -96,7 +96,7 @@ if h:
 # 4. Pool score + per-opponent win rate vs steps (100 games/opponent, periodic evals).
 P = rd("pool_evals.csv")
 OPP = ["1v1.pt", "ppo_430M", "nexto", "necto", "element", "immortal"]
-runs = [r for r in ["exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_run3", "exp_FR3"] if any(p["run"] == r for p in P)]
+runs = [r for r in ["exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_run3", "exp_FR3_run4", "exp_AUD", "exp_FR4"] if any(p["run"] == r for p in P)]
 fig, ax = plt.subplots(2, 4, figsize=(17, 7.5))
 panels = ["pool_score"] + OPP
 for a, k in zip(ax.flat, panels):
@@ -111,7 +111,7 @@ fig.suptitle("Periodic pool evals (100 games per opponent, se ≈ ±4-5 pts), se
 save(fig, "pool_vs_steps.png")
 
 # 5. Final 400-game pool per opponent (bar chart).
-Q = [q for q in rd("pool_400.csv") if q["source"] in ("final_analysis", "fr2_final", "pool_baseline")]
+Q = [q for q in rd("pool_400.csv") if q["source"] in ("final_analysis", "fr2_final", "aud_final", "fr4_final", "pool_baseline")]
 cands = []
 for q in Q:
     if q["candidate"] not in cands:
@@ -133,9 +133,9 @@ H = rd("h2h_1000.csv")
 if H:
     lab = [f"{h['candidate']} vs {h['opponent']}" for h in H]
     y = col(H, "win_rate_decisive") * 100; e = col(H, "se") * 100
-    fig, a = plt.subplots(figsize=(8, 4))
+    fig, a = plt.subplots(figsize=(8, 0.35 * len(lab) + 1.5))
     a.barh(lab, y, xerr=e * 1.96, capsize=3, color="tab:blue")
-    a.axvline(50, color="k", ls="--"); a.set_xlim(40, 70)
+    a.axvline(50, color="k", ls="--"); a.set_xlim(40, 72)
     a.set_xlabel("win % (bars: 95% CI = ±1.96 se)"); a.set_title("1000-game head-to-heads, seed 424242")
     for i, v in enumerate(y):
         a.text(v + 0.3, i, f"{v:.1f}", va="center", fontsize=8)
@@ -148,7 +148,7 @@ EV = [("Events/Flip Resets per min", "flip resets / car-min (R1: old detector; R
       ("Events/Demos per min", "demos / car-min"), ("Events/Has Flip Ratio", "has-flip ratio")]
 fig, ax = plt.subplots(2, 3, figsize=(15, 7.5))
 for a, (k, lab) in zip(ax.flat, EV):
-    for r in ["exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_run3", "exp_FR3"]:
+    for r in ["exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_run3", "exp_FR3_run4", "exp_AUD", "exp_FR4"]:
         if r in M and k in M[r][0]:
             a.plot(col(M[r], "steps") / 1e6, smooth(col(M[r], k), 20), color=COL[r], label=NAME[r], lw=1.2)
     a.set_xlabel("cumulative steps (M)"); a.set_ylabel(lab, fontsize=8); a.grid(alpha=0.3)
@@ -158,7 +158,7 @@ save(fig, "events_vs_steps.png")
 
 # 8. Reward-term share bar charts.
 S = rd("reward_shares.csv")
-for r in ["exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_run3", "exp_FR3"]:
+for r in ["exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_run3", "exp_FR3_run4", "exp_AUD", "exp_FR4"]:
     rr = sorted([s for s in S if s["run"] == r and s["window"] == "last20"], key=lambda s: -float(s["share"]))
     if not rr:
         continue
@@ -205,7 +205,7 @@ if R:
     save(fig, "detector_old_vs_new.png")
 
 # 10. FR2 / FR3 training reset rate by setter vs steps.
-for r in ["exp_FR2", "exp_FR3_run3", "exp_FR3"]:
+for r in ["exp_FR2", "exp_FR3_run3", "exp_FR3_run4", "exp_FR4"]:
     if r not in M:
         continue
     ks = [k for k in M[r][0] if k.startswith("Events/Flip Resets per min @")]
@@ -224,18 +224,19 @@ for r in ["exp_FR2", "exp_FR3_run3", "exp_FR3"]:
 
 # 11. FR3 curriculum success / level.
 fig, ax = plt.subplots(1, 2, figsize=(13, 4))
-for r in ["exp_FR3_smoke1", "exp_FR3_smoke2", "exp_FR3_run3", "exp_FR3"]:
+for r in ["exp_FR3_smoke1", "exp_FR3_smoke2", "exp_FR3_run3", "exp_FR3_run4", "exp_FR4"]:
     if r not in M or "Curriculum/success" not in M[r][0]:
         continue
-    x = (col(M[r], "steps") - 831.6e6) / 1e6
+    x = (col(M[r], "steps") - col(M[r], "steps")[0]) / 1e6
     ax[0].plot(x, smooth(col(M[r], "Curriculum/success"), 4) * 100, color=COL[r], label=NAME[r])
     ax[1].plot(x, col(M[r], "Curriculum/level"), color=COL[r], label=NAME[r])
-ax[0].axhline(7.3, ls="--", color="gray", label="L0 no-input baseline 7.3%")
+ax[0].axhline(7.3, ls="--", color="gray", label="L0 no-input baseline 7.3% (smoke runs, run 3)")
+ax[0].axhline(18, ls="--", color="tab:brown", lw=0.8, label="easier L0 no-input 18% (run 4, FR4)")
 ax[0].axhline(54.7, ls=":", color="k", label="L0 scripted baseline 54.7%")
 ax[0].axhline(60, ls="-.", color="tab:red", lw=0.8, label="advance threshold 60%")
 ax[0].set_ylabel("curriculum success % (2M-step mean)"); ax[1].set_ylabel("curriculum level")
 for a in ax:
-    a.set_xlabel("steps since warm start at 831.6M (M)"); a.legend(fontsize=7); a.grid(alpha=0.3)
+    a.set_xlabel("steps since warm start (M; FR3 at 831.6M, FR4 at 1131.6M)"); a.legend(fontsize=7); a.grid(alpha=0.3)
 save(fig, "fr3_curriculum.png")
 
 # 12. FR3 per-level baselines.

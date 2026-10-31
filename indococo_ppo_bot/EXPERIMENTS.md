@@ -353,6 +353,16 @@ AUD's result can't be fully separated from 300M more steps of training. AUD is
 compared against ADB-best instead (1000-game h2h, seed 424242, and the 400-game
 pool). Right after AUD's training ends, FR4 starts from AUD's final checkpoint.
 
+### AUD result
+
+AUD-final (1131.6M) beat ADB-best 646-354 (**64.6%**, ±1.5) over 1000 games
+(seed 424242) with a 400-game pool score of **87.0** (1v1.pt 72.5, 430M 69.5,
+Nexto 87.2, Necto 97.5, Element 99.0, Immortal 96.5; ADB-best 84.7). The four
+air terms ended at 8.35% of |reward| (last 20 iterations), inside the 8-12%
+target, and aerial goals held at about 0.40/min. Flip resets on
+`rates_mix.toml`: 0.111/min, 0 uses. Without CTRL the gain can't be split
+from 300M more steps. Shipped as `checkpoints_to_test/aud_1132M.bpk`.
+
 ## Round 5: FR4 (flip resets on the audited rewards)
 
 `experiments/fr4.toml` = `aud.toml` + the FR3 run-4 reset setup:
@@ -363,3 +373,15 @@ and `setter_scale.reset_curriculum` zeroing `airdribble`, `airdribble_seq`,
 0.32 then 0.30, entropy 0.025, LR 5e-5) with the LR hold moved to
 1131.6M + 100M, then cosine to 0.4x. 300M steps (1131.6M -> 1431.6M), run
 folder `exp_FR4`, tmux session `ippo_FR4`.
+
+### FR4 result
+
+FR4-final (1431.6M) beat ADB-best 633-367 (**63.3%**) and AUD-final 532-468
+(**53.2%**, ±1.6) over 1000 games each (seed 424242), with the best pool score
+so far, **87.1** (1v1.pt 68.0, 430M 71.0, Nexto 89.8, Necto 98.0, Element 99.5,
+Immortal 96.5). No resets: the curriculum stayed at level 0 for all 300M steps
+(level-0 success about 4% against 18% for no input), and `rates_fr3.toml` gave
+0.003 resets/min with 0 uses. The chain's FR4 driver exited before training
+ended, so the final evals were run by hand (`~/ippo_runs/fr4_final/`).
+Shipped as `checkpoints_to_test/fr4_1432M.bpk`. Full write-up:
+`docs/experiments/REPORT.md` sections 7-8.

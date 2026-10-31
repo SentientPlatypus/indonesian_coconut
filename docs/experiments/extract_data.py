@@ -9,7 +9,7 @@ import csv, json, os, sys
 RAW = sys.argv[1]
 OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(OUT, exist_ok=True)
-RUNS = ["e8b2_1v1", "exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_smoke1", "exp_FR3_smoke2", "exp_FR3_run3", "exp_FR3"]
+RUNS = ["e8b2_1v1", "exp_X0", "exp_FR", "exp_ADB", "exp_FR2", "exp_FR3_smoke1", "exp_FR3_smoke2", "exp_FR3_run3", "exp_FR3_run4", "exp_AUD", "exp_FR4"]
 LEARN = ["Collect/avg step reward", "Loss/policy", "Loss/value", "Loss/KL divergence", "Loss/entropy",
          "Loss/clip fraction", "Throughput/overall", "Collect/episode length", "Player/In Air Ratio",
          "Player/Ball Touch Ratio", "Rating/1v1"]
@@ -115,9 +115,14 @@ wcsv("r0_h2h_vs_1v1.csv", rows, ["steps", "checkpoint", "opponent", "games", "wi
 H = ["source", "candidate", "opponent", "games", "wins", "losses", "timeouts", "win_rate_decisive", "se", "seed", "time"]
 rows = [dict(d, source="final_analysis") for d in jl(os.path.join(RAW, "final_analysis", "h2h.jsonl"))]
 rows += [dict(d, source="fr2_final") for d in jl(os.path.join(RAW, "fr2_final", "h2h.jsonl"))]
+rows += [dict(d, source="aud_final") for d in jl(os.path.join(RAW, "aud_final", "h2h.jsonl"))]
+for f in ("h2h_ADB.jsonl", "h2h_AUD.jsonl"):
+    rows += [dict(d, source="fr4_final") for d in jl(os.path.join(RAW, "fr4_final", f))]
 wcsv("h2h_1000.csv", rows, H)
 rows = [dict(d, source="final_analysis") for d in jl(os.path.join(RAW, "final_analysis", "pool400.jsonl"))]
 rows += [dict(d, source="fr2_final") for d in jl(os.path.join(RAW, "fr2_final", "pool400.jsonl"))]
+for v in ("aud_final", "fr4_final"):
+    rows += [dict(d, source=v) for d in jl(os.path.join(RAW, v, "pool400.jsonl"))]
 for v in ("pool_baseline", "pool_baseline_nojitter", "pool_baseline_reused_engine"):
     rows += [dict(d, source=v) for d in jl(os.path.join(RAW, "e8b2_1v1", "logs", v + ".jsonl"))]
 wcsv("pool_400.csv", rows, H)
