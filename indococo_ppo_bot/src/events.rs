@@ -33,6 +33,12 @@ pub struct StepEvents {
     /// A bump or demo by a car in the middle of an air dribble (see
     /// [`in_air_dribble`]). Only set by [`EventTracker`].
     pub air_dribble_bump: bool,
+    /// Scored a goal this step (last toucher on the scoring team). Only set
+    /// by [`EventTracker`].
+    pub goal: bool,
+    /// Scored within [`AERIAL_GOAL_S`] of its own airborne touch. Only set
+    /// by [`EventTracker`].
+    pub aerial_goal: bool,
 }
 
 impl StepEvents {
@@ -59,6 +65,8 @@ impl StepEvents {
                     demo: victim_demoed,
                     demoed: car.is_demoed() && !before.is_demoed(),
                     air_dribble_bump: false,
+                    goal: false,
+                    aerial_goal: false,
                 }
             })
             .collect()
@@ -68,17 +76,22 @@ impl StepEvents {
 /// Seconds after an airborne touch during which a car still "has" the air dribble.
 pub const AIR_DRIBBLE_POSSESSION_S: f64 = 1.25;
 
+/// A goal is aerial if the scorer touched the ball airborne this recently.
+pub const AERIAL_GOAL_S: f64 = 1.0;
+
 /// Step-to-step event detection with the history air dribble bumps need.
 #[derive(Default)]
 pub struct EventTracker {
     prev: Option<StateView>,
     last_air_touch: Vec<Option<u64>>,
+    last_toucher: Option<usize>,
 }
 
 impl EventTracker {
     /// Starts a new episode.
     pub fn reset(&mut self, initial: StateView) {
         self.last_air_touch = vec![None; initial.cars.len()];
+        self.last_toucher = None;
         self.prev = Some(initial);
     }
 
@@ -97,8 +110,20 @@ impl EventTracker {
             e.air_dribble_bump = in_dribble && (e.bump || e.demo);
         }
         for (i, car) in cur.cars.iter().enumerate() {
-            if car.ball_touches > 0 && car.is_airborne() {
-                self.last_air_touch[i] = Some(cur.tick_count);
+            if car.ball_touches > 0 {
+                self.last_toucher = Some(i);
+                if car.is_airborne() {
+                    self.last_air_touch[i] = Some(cur.tick_count);
+                }
+            }
+        }
+        let new_goal = self.prev.as_ref().is_some_and(|p| !p.goal_scored());
+        if let (true, Some(team), Some(s)) = (new_goal, cur.scoring_team(), self.last_toucher) {
+            if let Some(e) = events.get_mut(s).filter(|_| cur.cars[s].team == team) {
+                e.goal = true;
+                let ticks = (AERIAL_GOAL_S * TICKS_PER_SECOND) as u64;
+                e.aerial_goal = self.last_air_touch[s]
+                    .is_some_and(|t| cur.tick_count.saturating_sub(t) <= ticks);
             }
         }
         self.prev = Some(cur);
@@ -241,5 +266,28 @@ mod tests {
         late.cars[0].bump_victim = Some(1);
         let e = t.step(late);
         assert!(e[0].bump && !e[0].air_dribble_bump, "touch too long ago");
+    }
+
+    #[test]
+    fn aerial_goal_needs_a_recent_airborne_touch_by_the_scorer() {
+        let run = |gap: u64| {
+            let mut t = EventTracker::default();
+            let mut s = air_state();
+            t.reset(s.clone());
+            s.tick_count = 8;
+            s.cars[0].ball_touches = 1;
+            assert!(s.cars[0].is_airborne());
+            t.step(s.clone());
+            s.cars[0].ball_touches = 0;
+            s.tick_count = 8 + gap;
+            s.ball.pos = DVec3::new(0.0, 6000.0, 300.0);
+            let e = t.step(s.clone());
+            s.tick_count += 8;
+            let again = t.step(s);
+            assert!(!again[0].goal);
+            (e[0].goal, e[0].aerial_goal, e[1].goal)
+        };
+        assert_eq!(run(96), (true, true, false));
+        assert_eq!(run(240), (true, false, false));
     }
 }

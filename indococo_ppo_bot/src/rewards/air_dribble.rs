@@ -29,6 +29,11 @@ pub struct AirDribbleParams {
     pub goal_speed_target: f64,
     pub push_floor: f64,
     pub finish_floor: f64,
+    /// Floor of the goal-direction multiplier (E8B2 0.15; AUD 0).
+    pub goal_progress_floor: f64,
+    /// AUD: pay only within this many seconds of the carrier's last ball
+    /// touch (0 = off, the E8B2 behaviour).
+    pub require_touch_s: f64,
 }
 
 impl Default for AirDribbleParams {
@@ -38,6 +43,8 @@ impl Default for AirDribbleParams {
             goal_speed_target: 900.0,
             push_floor: 0.35,
             finish_floor: 0.40,
+            goal_progress_floor: 0.15,
+            require_touch_s: 0.0,
         }
     }
 }
@@ -68,6 +75,7 @@ pub struct AirDribble {
     p: AirDribbleParams,
     t: TakeoffParams,
     last_touch: Option<usize>,
+    last_touch_tick: u64,
     sustain_streak: Vec<u32>,
     takeoff_mult: Vec<f64>,
 }
@@ -97,13 +105,14 @@ impl AirDribble {
             sustain_cap: 15,
             min_carry_boost: 0.20,
             low_boost_penalty: 0.025,
-            goal_progress_floor: 0.15,
+            goal_progress_floor: p.goal_progress_floor,
             finish_zone_y: 2200.0,
             finish_max_z: GOAL_HEIGHT * 0.78,
             finish_fade_z: GOAL_HEIGHT * 1.5,
             p,
             t,
             last_touch: None,
+            last_touch_tick: 0,
             sustain_streak: Vec::new(),
             takeoff_mult: Vec::new(),
         }
@@ -134,6 +143,9 @@ impl StepReward for AirDribble {
         let touching: Vec<usize> = (0..state.cars.len())
             .filter(|&a| state.cars[a].ball_touches > 0)
             .collect();
+        if !touching.is_empty() {
+            self.last_touch_tick = state.tick_count;
+        }
         if touching.len() == 1 {
             self.last_touch = Some(touching[0]);
         } else if touching.len() > 1 {
@@ -144,7 +156,10 @@ impl StepReward for AirDribble {
         };
         let car = &state.cars[a];
 
-        if car.on_ground() || bpos.z < self.min_height {
+        let touch_ticks = self.p.require_touch_s * crate::consts::TICKS_PER_SECOND;
+        let stale = self.p.require_touch_s > 0.0
+            && state.tick_count.saturating_sub(self.last_touch_tick) as f64 > touch_ticks;
+        if car.on_ground() || bpos.z < self.min_height || stale {
             self.break_carry(a);
             return rewards;
         }
@@ -246,5 +261,84 @@ impl StepReward for AirDribble {
         );
         rewards[a] = score * self.per_step * sustain;
         rewards
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{BallView, CarView};
+
+    /// Car under the ball at 1000 uu, ball 150 uu above the roof moving
+    /// toward the orange goal.
+    fn carry(tick: u64, touch: bool) -> StateView {
+        StateView {
+            tick_count: tick,
+            ball: BallView {
+                pos: DVec3::new(0.0, 0.0, 1150.0),
+                vel: DVec3::new(0.0, 900.0, 0.0),
+                ..Default::default()
+            },
+            cars: vec![CarView {
+                team: 0,
+                pos: DVec3::new(0.0, 0.0, 1000.0),
+                vel: DVec3::new(0.0, 900.0, 0.0),
+                forward: DVec3::Y,
+                right: DVec3::X,
+                up: DVec3::Z,
+                boost: 0.8,
+                ball_touches: u32::from(touch),
+                has_jumped: true,
+                air_time_since_jump: 1.0,
+                ..CarView::default()
+            }],
+        }
+    }
+
+    fn reward(p: AirDribbleParams, ticks_since_touch: u64) -> f64 {
+        let t = TakeoffParams {
+            speed_far: 0.0,
+            ..TakeoffParams::default()
+        };
+        let mut r = AirDribble::new(p, t);
+        r.reset(&carry(0, false));
+        r.get_rewards(&carry(0, true));
+        r.get_rewards(&carry(ticks_since_touch, false))[0]
+    }
+
+    #[test]
+    fn default_ignores_touch_age() {
+        let p = AirDribbleParams::default();
+        assert!(reward(p.clone(), 8) > 0.0);
+        assert!((reward(p.clone(), 8) - reward(p, 600)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn require_touch_cuts_stale_carries() {
+        let p = AirDribbleParams {
+            require_touch_s: 0.5,
+            ..AirDribbleParams::default()
+        };
+        assert!(reward(p.clone(), 48) > 0.0);
+        assert_eq!(reward(p, 72), 0.0);
+    }
+
+    #[test]
+    fn zero_goal_floor_pays_nothing_moving_away() {
+        let p = AirDribbleParams {
+            goal_progress_floor: 0.0,
+            push_floor: 0.0,
+            ..AirDribbleParams::default()
+        };
+        let t = TakeoffParams {
+            speed_far: 0.0,
+            ..TakeoffParams::default()
+        };
+        let mut r = AirDribble::new(p, t);
+        let mut s = carry(0, true);
+        s.ball.vel = DVec3::new(0.0, -900.0, 0.0);
+        s.cars[0].vel = s.ball.vel;
+        r.reset(&s);
+        assert_eq!(r.get_rewards(&s)[0], 0.0);
     }
 }

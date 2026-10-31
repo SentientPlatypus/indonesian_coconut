@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::aerial_boost_toward_ball::AerialBoostTowardBall;
-use super::aerial_distance::AerialDistance;
+use super::aerial_distance::{AerialDistance, AerialDistanceParams};
 use super::aerial_front_bump_setup::AerialFrontBumpSetup;
 use super::air_dribble::{AirDribble, AirDribbleParams};
 use super::air_dribble_bump::{AirDribbleBump, AirDribbleBumpParams};
-use super::air_dribble_sequence::AirDribbleSequence;
+use super::air_dribble_sequence::{AirDribbleSeqParams, AirDribbleSequence};
 use super::air_touch_height::{AirTouchHeight, AirTouchHeightParams};
 use super::ang_vel::AngVel;
 use super::ball_travel::BallTravel;
@@ -183,6 +183,8 @@ pub struct RewardConfig {
     /// `{weight_key: opp_scale}`; listed terms are wrapped in [`ZeroSum`].
     pub zero_sum: BTreeMap<String, f64>,
     pub airdribble: AirDribbleParams,
+    pub airdribble_seq: AirDribbleSeqParams,
+    pub aerial_distance: AerialDistanceParams,
     pub takeoff: TakeoffParams,
     pub flip_reset: FlipResetParams,
     pub demo: DemoParams,
@@ -281,7 +283,7 @@ impl RewardConfig {
             (
                 "aerial_distance",
                 w.aerial_distance,
-                Box::new(AerialDistance::default()),
+                Box::new(AerialDistance::new(&self.aerial_distance)),
             ),
             ("in_air", w.in_air, Box::new(InAir)),
             (
@@ -292,7 +294,10 @@ impl RewardConfig {
             (
                 "airdribble_seq",
                 w.airdribble_seq,
-                Box::new(AirDribbleSequence::new(t.clone())),
+                Box::new(AirDribbleSequence::with_params(
+                    t.clone(),
+                    self.airdribble_seq.clone(),
+                )),
             ),
             ("wall_pop", w.wall_pop, Box::new(WallPopSetup::default())),
             ("flick", w.flick, Box::new(Flick::default())),
@@ -429,6 +434,32 @@ impl RewardConfig {
 #[cfg(test)]
 mod extends_tests {
     use super::*;
+
+    #[test]
+    fn aud_reworks_air_terms_and_adb_keeps_e8b2_behaviour() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let adb = RewardConfig::from_file(&dir.join("adb.toml")).unwrap();
+        assert_eq!(adb.airdribble_seq, AirDribbleSeqParams::default());
+        assert_eq!(adb.aerial_distance, AerialDistanceParams::default());
+        assert_eq!(adb.airdribble.require_touch_s, 0.0);
+        assert_eq!(adb.weights.airdribble_seq, 55.0);
+        let aud = RewardConfig::from_file(&dir.join("aud.toml")).unwrap();
+        let w = &aud.weights;
+        assert_eq!(
+            (
+                w.air_touch_height,
+                w.airdribble_seq,
+                w.airdribble,
+                w.aerial_distance
+            ),
+            (0.0, 20.0, 20.0, 15.0)
+        );
+        assert_eq!(w.air_dribble_bump, 40.0);
+        assert_eq!(aud.airdribble_seq.max_chain_touches, 6);
+        assert!(aud.aerial_distance.goalward_ball_only);
+        assert_eq!(aud.airdribble.push_floor, 0.0);
+        let _ = aud.build();
+    }
 
     #[test]
     fn experiment_file_overrides_its_base() {

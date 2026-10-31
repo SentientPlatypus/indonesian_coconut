@@ -1,0 +1,27 @@
+# AUD: air reward audit. Base: ADB. The four air dribble terms paid ~75% of
+# the positive shaping (airdribble_seq alone ~48%, ~0.9x the goal term's
+# |reward|) and overlap on every aerial touch: height is paid 3x, goalward
+# ball speed 3x, carry distance 2x. airdribble_seq and aerial_distance paid
+# juggles and flights in any direction. Target: the four terms at 8-12% of
+# |reward|, every remaining air payout gated by ball progress toward goal.
+extends = "adb.toml"
+
+[weights]
+air_touch_height = 0.0   # duplicate of the height / goalward parts below
+airdribble_seq = 20.0    # was 55
+airdribble = 20.0        # was 40
+aerial_distance = 15.0   # was 40
+
+[airdribble_seq]
+goal_bonus_floor = 0.1   # touch + chain bonus x max(0.1, goalward ball speed)
+chain_decay = 0.8        # per touch within a chain
+max_chain_touches = 6
+goalward_carry = true    # carry = ball progress toward goal only
+
+[airdribble]
+goal_progress_floor = 0.0
+push_floor = 0.0
+require_touch_s = 0.5    # no pay for flying near the ball without touching it
+
+[aerial_distance]
+goalward_ball_only = true   # drop car distance; ball progress toward goal only

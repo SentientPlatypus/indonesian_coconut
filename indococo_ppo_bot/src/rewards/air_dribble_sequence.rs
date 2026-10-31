@@ -21,6 +21,32 @@ use crate::state::StateView;
 
 const DEAD: i64 = -1_000_000_000;
 
+/// Config table `[airdribble_seq]`. The default reproduces E8B2 (v4_env).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AirDribbleSeqParams {
+    /// If > 0, touch + chain bonus are scaled by
+    /// `max(goal_bonus_floor, goalward ball speed / BALL_MAX_SPEED)` (AUD 0.1).
+    pub goal_bonus_floor: f64,
+    /// Payout multiplied by `chain_decay^(touch_index - 1)` (E8B2 1.0, AUD 0.8).
+    pub chain_decay: f64,
+    /// Touches after this many in one chain pay nothing (0 = no cap; AUD 6).
+    pub max_chain_touches: u32,
+    /// Carry counts only ball progress toward the opponent goal (AUD).
+    pub goalward_carry: bool,
+}
+
+impl Default for AirDribbleSeqParams {
+    fn default() -> Self {
+        Self {
+            goal_bonus_floor: 0.0,
+            chain_decay: 1.0,
+            max_chain_touches: 0,
+            goalward_carry: false,
+        }
+    }
+}
+
 pub struct AirDribbleSequence {
     min_air_z: f64,
     rel_speed_max: f64,
@@ -33,6 +59,7 @@ pub struct AirDribbleSequence {
     forward_goal_w: f64,
     forward_car_w: f64,
     t: TakeoffParams,
+    p: AirDribbleSeqParams,
     prev_ball_pos: DVec3,
     prev_touches: Vec<u32>,
     alive_until: Vec<i64>,
@@ -46,6 +73,11 @@ impl AirDribbleSequence {
     /// chain_ms 1400, carry_scale 1.7 / (2 * 5120)).
     #[must_use]
     pub fn new(t: TakeoffParams) -> Self {
+        Self::with_params(t, AirDribbleSeqParams::default())
+    }
+
+    #[must_use]
+    pub fn with_params(t: TakeoffParams, p: AirDribbleSeqParams) -> Self {
         let chain_ms = 1400.0;
         Self {
             min_air_z: 320.0,
@@ -59,6 +91,7 @@ impl AirDribbleSequence {
             forward_goal_w: 2.0,
             forward_car_w: 1.0,
             t,
+            p,
             prev_ball_pos: DVec3::ZERO,
             prev_touches: Vec::new(),
             alive_until: Vec::new(),
@@ -83,13 +116,19 @@ impl StepReward for AirDribbleSequence {
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let mut rewards = vec![0.0; state.cars.len()];
         let (bpos, bvel) = (state.ball.pos, state.ball.vel);
-        let travel = safe_norm(bpos - self.prev_ball_pos);
+        let delta = bpos - self.prev_ball_pos;
+        let travel_all = safe_norm(delta);
         self.prev_ball_pos = bpos;
         let tick = state.tick_count as i64;
 
         for (a, car) in state.cars.iter().enumerate() {
             let touches = car.ball_touches;
             let chain_alive = tick <= self.alive_until[a];
+            let travel = if self.p.goalward_carry {
+                (delta.y * car.attack_sign()).max(0.0)
+            } else {
+                travel_all
+            };
             if chain_alive && bpos.z >= self.min_air_z && car.boost >= self.min_sustain_boost {
                 self.carry[a] += travel;
             } else if chain_alive && car.boost < self.min_sustain_boost {
@@ -128,11 +167,19 @@ impl StepReward for AirDribbleSequence {
             let goal_term =
                 (bvel.dot(unit(opp_net(car.attack_sign()) - bpos)) / BALL_MAX_SPEED).max(0.0);
             let car_term = (bvel.dot(unit(car.forward)) / BALL_MAX_SPEED).max(0.0);
-            let mut payout =
-                self.touch_bonus + self.forward_goal_w * goal_term + self.forward_car_w * car_term;
-            payout += self.carry[a] * self.carry_scale;
+            let mut bonus = self.touch_bonus;
             if self.chain_touches[a] >= 2 {
-                payout += self.chain_bonus;
+                bonus += self.chain_bonus;
+            }
+            if self.p.goal_bonus_floor > 0.0 {
+                bonus *= goal_term.min(1.0).max(self.p.goal_bonus_floor);
+            }
+            let mut payout =
+                bonus + self.forward_goal_w * goal_term + self.forward_car_w * car_term;
+            payout += self.carry[a] * self.carry_scale;
+            payout *= self.p.chain_decay.powi(self.chain_touches[a] as i32 - 1);
+            if self.p.max_chain_touches > 0 && self.chain_touches[a] > self.p.max_chain_touches {
+                payout = 0.0;
             }
             payout *= self.takeoff_mult[a];
             payout *= pressure_ad_mult(
@@ -147,5 +194,75 @@ impl StepReward for AirDribbleSequence {
             self.carry[a] = 0.0;
         }
         rewards
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{BallView, CarView};
+
+    fn st(tick: u64, touches: u32, ball_vy: f64) -> StateView {
+        StateView {
+            tick_count: tick,
+            ball: BallView {
+                pos: DVec3::new(0.0, 0.0, 1000.0),
+                vel: DVec3::new(0.0, ball_vy, 0.0),
+                ..Default::default()
+            },
+            cars: vec![CarView {
+                team: 0,
+                pos: DVec3::new(0.0, 0.0, 850.0),
+                vel: DVec3::new(0.0, ball_vy, 0.0),
+                forward: DVec3::Y,
+                right: DVec3::X,
+                up: DVec3::Z,
+                boost: 0.9,
+                ball_touches: touches,
+                has_jumped: true,
+                air_time_since_jump: 1.0,
+                ..CarView::default()
+            }],
+        }
+    }
+
+    /// Payouts of `n` touches 10 ticks apart.
+    fn chain(p: AirDribbleSeqParams, n: u32, vy: f64) -> Vec<f64> {
+        let t = TakeoffParams {
+            speed_near: 0.0,
+            speed_far: 0.0,
+            pressure_floor: 1.0,
+            ..TakeoffParams::default()
+        };
+        let mut r = AirDribbleSequence::with_params(t, p);
+        r.reset(&st(0, 0, vy));
+        (1..=n)
+            .map(|i| r.get_rewards(&st(u64::from(i) * 10, i, vy))[0])
+            .collect()
+    }
+
+    #[test]
+    fn default_pays_flat_chain() {
+        let v = chain(AirDribbleSeqParams::default(), 8, 0.0);
+        assert!((v[0] - 0.20).abs() < 1e-9);
+        for x in &v[1..] {
+            assert!((x - 0.55).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn aud_scales_bonus_decays_and_caps() {
+        let p = AirDribbleSeqParams {
+            goal_bonus_floor: 0.1,
+            chain_decay: 0.8,
+            max_chain_touches: 6,
+            goalward_carry: true,
+        };
+        let v = chain(p, 8, 0.0);
+        assert!((v[0] - 0.02).abs() < 1e-9);
+        assert!((v[1] - 0.055 * 0.8).abs() < 1e-9);
+        assert!((v[5] - 0.055 * 0.8f64.powi(5)).abs() < 1e-9);
+        assert_eq!(v[6], 0.0);
+        assert_eq!(v[7], 0.0);
     }
 }

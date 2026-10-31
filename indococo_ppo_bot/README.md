@@ -154,6 +154,23 @@ demo = 1.0
 min_wheels_cos = 0.7
 ```
 
+Air dribble reworks (AUD, `experiments/aud.toml`) are config-gated; their
+defaults reproduce E8B2, so ADB and earlier arms are unchanged:
+
+```toml
+[airdribble_seq]
+goal_bonus_floor = 0.1   # touch + chain bonus x max(floor, goalward ball speed); 0 = off
+chain_decay = 0.8        # payout x decay^(touch - 1) within a chain; 1 = off
+max_chain_touches = 6    # later touches pay 0; 0 = no cap
+goalward_carry = true    # carry = ball progress toward goal, not any travel
+[airdribble]
+goal_progress_floor = 0.0   # E8B2 0.15
+push_floor = 0.0            # E8B2 0.35
+require_touch_s = 0.5       # pay only this soon after the carrier's touch; 0 = off
+[aerial_distance]
+goalward_ball_only = true   # drop car distance, pay ball progress toward goal
+```
+
 A new reward term is one module under `src/rewards/`, a weight field in
 `RewardWeights`, and one line in `RewardConfig::build`. A new reset setup is a
 `SetterKind` variant. The opponent pool trains only against our own policies:
@@ -161,7 +178,9 @@ the Python pool bots run in `tools/pool_eval`, not in the Rust collector.
 
 `metrics.jsonl` gets `Events/Has Flip Ratio` (share of car-steps with the
 flip available) and `Events/Flip Resets per min`, `Events/Bumps per min`,
-`Events/Demos per min` (per car per minute of game time), the flip reset rate
+`Events/Demos per min`, `Events/Goals per min` and `Events/Aerial Goals per min`
+(the scorer touched the ball airborne within 1 s before the goal) (per car per
+minute of game time), `Player/In Air Ratio` and `Player/Ball Touch Ratio`, the flip reset rate
 per starting setter (`Events/Flip Resets per min @<kind>`), each setter's
 share of episodes (`Setters/<kind> share`), and per reward term the signed
 mean (`Reward/`), mean absolute value (`RewardAbs/`) and non-zero share
@@ -267,7 +286,8 @@ train template and setter shares), and starts tmux session `ippo_<arm>` with a
 runs a final eval and writes `FINISHED`; `experiments/status.py` refreshes
 `$RUNS/EXPERIMENTS_STATUS.md` every 5 minutes. Arms: X0, FR, ADB (round 1),
 FR2 (flip resets with fixed detection), FR3 (reset curriculum + alignment
-shaping; see EXPERIMENTS.md). `RATES_MIX` picks the rates setter file
+shaping), AUD (air reward audit: `aud.toml`) and CTRL (ADB continuation, its
+control); see EXPERIMENTS.md. `RATES_MIX` picks the rates setter file
 (FR3 uses `experiments/rates_fr3.toml`).
 
 ## Deploy (RLBot v5)

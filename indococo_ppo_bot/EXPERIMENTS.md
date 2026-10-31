@@ -289,3 +289,54 @@ level-0 table above is for runs 2-3; run 4's easier level 0 measures no input
 
 Run: `ARMS=FR3 WARM=<ADB-best checkpoint> SEED_BEST=<exp_ADB/bots/best>
 RATES_STEPS=300000 RATES_MIX=rates_fr3.toml experiments/run_experiments.sh`.
+
+Run 4 was stopped at 895.6M steps (last checkpoint 881.7M) on 2026-10-31
+around 2:16 PM ET to run the air reward audit first. Its curriculum never left
+level 0: level-0 success averaged 4.8% over the last 50 iterations (no-input
+baseline 18%), resets 0.037/min overall and 0.118/min in curriculum episodes.
+The run folder is `exp_FR3_run4` (note in `STOPPED.md`).
+
+## Round 4: AUD (air reward audit)
+
+### Why
+
+The four air dribble terms are E8B2 ports from the Python stack
+(`freestyleMechs.py` `AirdribbleReward`, `AirDribbleSequenceReward`;
+`customRewardsGYM.py` `AerialDistanceReward`), plus `air_touch_height` (added
+for ADB). Per car-step, last third of each run (weighted):
+
+| Run | airdribble | airdribble_seq | air_touch_height | aerial_distance | share of positive shaping | share of \|reward\| | goal term \|r\| |
+|---|---|---|---|---|---|---|---|
+| E8B2 400-600M | 0.59 | 1.86 | - | 0.22 | 73% | - | - |
+| ADB | 0.61 | 1.95 | 0.25 | 0.24 | 75% | - | - |
+| FR2 | 0.62 | 2.09 | 0.26 | 0.25 | 77% | 22.7% | 2.31 |
+| FR3 run 3 | 0.59 | 1.92 | 0.24 | 0.23 | 73% | 20.9% | 2.52 |
+
+One goalward touch under the ball pays all four: height 3x, goalward ball
+speed 3x, carry distance 2x. `airdribble_seq` pays at least 0.55 x 55 = 30
+per chained touch in any direction, with no decay or cap; `aerial_distance`
+pays car and ball travel in any direction; `airdribble` pays the last toucher
+for flying near the ball without touching it, with 0.15 / 0.35 floors when
+the ball goes away from goal. Cars are airborne 52% of the time but touch the
+ball on ~6.7% of steps, and no goal-from-aerial metric existed.
+
+### Design (`experiments/aud.toml`, extends ADB)
+
+- `air_touch_height` 30 -> 0.
+- `airdribble_seq` 55 -> 20: touch + chain bonus x max(0.1, goalward ball
+  speed), 0.8 decay per touch in a chain, capped at 6 touches, carry only
+  ball progress toward goal.
+- `airdribble` 40 -> 20: goal-direction and push floors 0, pays only within
+  0.5 s of the carrier's last touch.
+- `aerial_distance` 40 -> 15: ball progress toward goal only.
+- New metric `Events/Aerial Goals per min` (and `Events/Goals per min`).
+
+Arms: AUD and CTRL (`adb.toml` unchanged), each 300M steps from ADB-best
+(`ckpt_831600000`), run one after another with the same opponent pool, setter
+mix and LR schedule (`train_template.toml`). The trainer has no seed option,
+so RNG seeds differ. Pass: the four air terms at 8-12% of |reward|, aerial
+goals/min not lower than CTRL, 1000-game h2h AUD vs CTRL >= 50% (seed
+424242), pool score within one se.
+
+Run: `ARMS="AUD CTRL" WARM=<ADB-best checkpoint> SEED_BEST=<exp_ADB/bots/best>
+RATES_STEPS=300000 experiments/run_experiments.sh`.
