@@ -14,6 +14,16 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
+### fr4_1432M.bpk
+
+| | |
+|---|---|
+| Lineage | FR4 arm (reset curriculum on the AUD air rewards), 1431.6M steps (trainer dir `1793481832`), warm-started from AUD-final |
+| H2H | **63.3%** vs ADB-best (633-367), **53.2%** vs AUD-final (532-468), over 1000 games each |
+| Pool | **87.1**: 1v1.pt 68.0, 430M 71.0, Nexto 89.8, Necto 98.0, Element 99.5, Immortal 96.5 |
+| Flip resets | 0.003 resets/min on `rates_fr3.toml`, 0 uses. The curriculum never left level 0. |
+| sha256 | `a1c62359ea196833dc5915a0b96c8bf42dbc684bf8c04386ab34047c5d7c189d` |
+
 ### aud_1132M.bpk
 
 | | |
