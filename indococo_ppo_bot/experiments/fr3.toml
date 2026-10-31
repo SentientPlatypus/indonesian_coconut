@@ -36,3 +36,14 @@ episode_cap = 1.0
 
 [flip_reset_use]
 grace_s = 0.3
+
+# Fallback (run 4): in reset_curriculum episodes, nose/roof touches of the
+# raised ball paid air dribble reward right away (aerial/air dribble terms
+# ~21% of |reward|), competing with wheel contact. There, wheel contact,
+# the reset and its use are the only aerial payoff.
+[setter_scale.reset_curriculum]
+airdribble = 0.0
+airdribble_seq = 0.0
+air_touch_height = 0.0
+aerial_distance = 0.0
+contact_quality = 0.0

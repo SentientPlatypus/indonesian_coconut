@@ -22,6 +22,8 @@ pub struct CombinedReward {
     pub terms: Vec<Term>,
     /// Weighted per-term contribution of the last step, for metrics.
     last: Vec<Vec<f64>>,
+    /// Per setter kind, a weight multiplier per term (term order).
+    setter_scales: Vec<(String, Vec<f64>)>,
 }
 
 impl CombinedReward {
@@ -30,7 +32,15 @@ impl CombinedReward {
         Self {
             terms,
             last: Vec::new(),
+            setter_scales: Vec::new(),
         }
+    }
+
+    /// Adds per-setter term multipliers (see `RewardConfig::setter_scale`).
+    #[must_use]
+    pub fn with_setter_scales(mut self, scales: Vec<(String, Vec<f64>)>) -> Self {
+        self.setter_scales = scales;
+        self
     }
 
     pub fn reset_view(&mut self, initial: &StateView) {
@@ -41,11 +51,22 @@ impl CombinedReward {
 
     /// Total reward per car.
     pub fn step_view(&mut self, state: &StateView) -> Vec<f64> {
+        self.step_view_for(state, "")
+    }
+
+    /// Total reward per car in an episode started by `setter`.
+    pub fn step_view_for(&mut self, state: &StateView, setter: &str) -> Vec<f64> {
         let mut total = vec![0.0; state.cars.len()];
         self.last.clear();
-        for t in &mut self.terms {
+        let scales = self
+            .setter_scales
+            .iter()
+            .find(|(s, _)| s == setter)
+            .map(|(_, v)| v.clone());
+        for (i, t) in self.terms.iter_mut().enumerate() {
             let r = t.reward.get_rewards(state);
-            let weighted: Vec<f64> = r.iter().map(|x| x * t.weight).collect();
+            let weight = t.weight * scales.as_ref().map_or(1.0, |v| v[i]);
+            let weighted: Vec<f64> = r.iter().map(|x| x * weight).collect();
             for (acc, w) in total.iter_mut().zip(&weighted) {
                 *acc += w;
             }
@@ -71,7 +92,7 @@ impl<SI: SharedInfoReport + TickResets> Reward<SI> for CombinedReward {
 
     fn get_rewards(&mut self, state: &GameState, shared_info: &mut SI) -> Vec<f32> {
         let view = StateView::from_game_state(state).with_tick_resets(shared_info.tick_resets());
-        let total = self.step_view(&view);
+        let total = self.step_view_for(&view, shared_info.setter_kind());
         let report = shared_info.report();
         for (t, w) in self.terms.iter().zip(&self.last) {
             let n = w.len().max(1) as f64;

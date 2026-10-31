@@ -163,11 +163,17 @@ impl SetterLog for SharedInfo {
 pub trait TickResets {
     /// Which cars (car order) got a flip reset during the last step.
     fn tick_resets(&self) -> &[bool];
+    /// Setter kind that started the current episode.
+    fn setter_kind(&self) -> &'static str;
 }
 
 impl TickResets for SharedInfo {
     fn tick_resets(&self) -> &[bool] {
         self.resets.last_step()
+    }
+
+    fn setter_kind(&self) -> &'static str {
+        self.setter
     }
 }
 

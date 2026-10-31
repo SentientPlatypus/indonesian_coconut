@@ -1,7 +1,7 @@
 //! Adaptive flip reset curriculum (`kind = "reset_curriculum"`).
 //!
 //! One car starts airborne under an elevated ball with its jump and flip
-//! used. Level 0 puts the ball almost on the wheels (40-80 uu gap, wheels
+//! used. Level 0 puts the ball almost on the wheels (30-60 uu gap, wheels
 //! within 10 degrees, nearly matched velocity); the top level is as hard as
 //! `air_reset` (500-800 uu gap, wheels up to 90 degrees off, 200-700 uu/s
 //! velocity mismatch, higher and faster balls). Every parameter blends between
@@ -57,7 +57,7 @@ impl Default for Adapt {
     fn default() -> Self {
         Self {
             levels: 10,
-            window: 200,
+            window: 100,
             advance: 0.6,
             back_off: 0.25,
         }
@@ -75,7 +75,7 @@ struct State {
 static STATE: Mutex<State> = Mutex::new(State {
     adapt: Adapt {
         levels: 10,
-        window: 200,
+        window: 100,
         advance: 0.6,
         back_off: 0.25,
     },
@@ -174,7 +174,7 @@ impl Default for ResetCurriculum {
     fn default() -> Self {
         Self {
             levels: 10,
-            window: 200,
+            window: 100,
             advance: 0.6,
             back_off: 0.25,
             ease: 1.5,
@@ -183,12 +183,12 @@ impl Default for ResetCurriculum {
             min_control_s: 0.3,
             deadline_s: 3.0,
             easy: Difficulty {
-                gap: [40.0, 80.0],
+                gap: [30.0, 60.0],
                 wheel_error_deg: 10.0,
                 max_tilt_deg: 15.0,
                 velocity_mismatch: [0.0, 30.0],
                 closing_speed: [60.0, 120.0],
-                spin: [1.5, 2.5],
+                spin: [1.0, 2.0],
                 ball_height: [600.0, 800.0],
                 carry_speed: [0.0, 100.0],
                 ball_vz: [-50.0, 50.0],

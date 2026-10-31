@@ -194,6 +194,10 @@ pub struct RewardConfig {
     pub air_dribble_bump: AirDribbleBumpParams,
     pub flip_reset_use: FlipResetUseParams,
     pub reset_align: ResetAlignParams,
+    /// `{setter kind: {term: scale}}`: term weights multiplied by `scale` in
+    /// episodes started by that setter (e.g. no air dribble reward in
+    /// `reset_curriculum` episodes). Unknown term names panic in `build`.
+    pub setter_scale: BTreeMap<String, BTreeMap<String, f64>>,
 }
 
 impl RewardConfig {
@@ -393,16 +397,32 @@ impl RewardConfig {
                 .into_iter()
                 .filter(|(_, weight, _)| *weight != 0.0),
         );
-        CombinedReward::new(
-            terms
-                .into_iter()
-                .map(|(name, weight, reward)| Term {
-                    name,
-                    weight,
-                    reward,
-                })
-                .collect(),
-        )
+        let terms: Vec<Term> = terms
+            .into_iter()
+            .map(|(name, weight, reward)| Term {
+                name,
+                weight,
+                reward,
+            })
+            .collect();
+        let scales = self
+            .setter_scale
+            .iter()
+            .map(|(setter, by_term)| {
+                for term in by_term.keys() {
+                    assert!(
+                        terms.iter().any(|t| t.name == term),
+                        "setter_scale.{setter}: unknown or unweighted term {term}"
+                    );
+                }
+                let per_term = terms
+                    .iter()
+                    .map(|t| by_term.get(t.name).copied().unwrap_or(1.0))
+                    .collect();
+                (setter.clone(), per_term)
+            })
+            .collect();
+        CombinedReward::new(terms).with_setter_scales(scales)
     }
 }
 
