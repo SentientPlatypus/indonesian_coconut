@@ -436,6 +436,44 @@ mod extends_tests {
     use super::*;
 
     #[test]
+    fn fr4_is_aud_plus_the_fr3_reset_setup() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let fr4 = RewardConfig::from_file(&dir.join("fr4.toml")).unwrap();
+        let fr3 = RewardConfig::from_file(&dir.join("fr3.toml")).unwrap();
+        let aud = RewardConfig::from_file(&dir.join("aud.toml")).unwrap();
+        let w = &fr4.weights;
+        assert_eq!(
+            (
+                w.airdribble_seq,
+                w.airdribble,
+                w.aerial_distance,
+                w.air_touch_height
+            ),
+            (50.0, 50.0, 38.0, 0.0)
+        );
+        assert_eq!(
+            (w.flip_reset, w.flip_reset_use, w.reset_align),
+            (0.0, 600.0, 400.0)
+        );
+        assert_eq!(fr4.airdribble_seq, aud.airdribble_seq);
+        assert_eq!(fr4.aerial_distance, aud.aerial_distance);
+        let mut want = fr3.setter_scale.clone();
+        want.get_mut("reset_curriculum")
+            .unwrap()
+            .remove("air_touch_height");
+        assert_eq!(fr4.setter_scale, want);
+        assert_eq!(
+            format!("{:?}", fr4.flip_reset_use),
+            format!("{:?}", fr3.flip_reset_use)
+        );
+        assert_eq!(
+            format!("{:?}", fr4.reset_align),
+            format!("{:?}", fr3.reset_align)
+        );
+        let _ = fr4.build();
+    }
+
+    #[test]
     fn aud_reworks_air_terms_and_adb_keeps_e8b2_behaviour() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
         let adb = RewardConfig::from_file(&dir.join("adb.toml")).unwrap();

@@ -35,6 +35,7 @@ declare -A STAGES=(
   [FR3]="fr3.toml:1000:train_fr3_template.toml:0.32:0 fr3.toml:2000:train_fr3_template.toml:0.30:0"
   [AUD]="aud.toml:3000"
   [CTRL]="adb.toml:3000"
+  [FR4]="fr4.toml:1000:train_fr4_template.toml:0.32:0 fr4.toml:2000:train_fr4_template.toml:0.30:0"
   [FR2]="fr2.toml:1000:train_fr2_template.toml:0.35:0.15 fr2.toml:1000:train_fr2_template.toml:0.27:0.23 fr2.toml:1000:train_fr2_template.toml:0.20:0.30"
 )
 ARMS=${ARMS:-"X0 FR ADB"}

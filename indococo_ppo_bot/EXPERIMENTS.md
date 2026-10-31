@@ -345,3 +345,21 @@ goals/min not lower than CTRL, 1000-game h2h AUD vs CTRL >= 50% (seed
 
 Run: `ARMS="AUD CTRL" WARM=<ADB-best checkpoint> SEED_BEST=<exp_ADB/bots/best>
 RATES_STEPS=300000 experiments/run_experiments.sh`.
+
+### CTRL dropped; FR4 next
+
+CTRL (an unchanged ADB continuation) was dropped at the user's request, so
+AUD's result can't be fully separated from 300M more steps of training. AUD is
+compared against ADB-best instead (1000-game h2h, seed 424242, and the 400-game
+pool). Right after AUD's training ends, FR4 starts from AUD's final checkpoint.
+
+## Round 5: FR4 (flip resets on the audited rewards)
+
+`experiments/fr4.toml` = `aud.toml` + the FR3 run-4 reset setup:
+`flip_reset_use` 600 (obtain grace 0.3 s), potential-based `reset_align` 400,
+and `setter_scale.reset_curriculum` zeroing `airdribble`, `airdribble_seq`,
+`aerial_distance` and `contact_quality` (`air_touch_height` is already 0).
+`train_fr4_template.toml` is the FR3 template (curriculum 28%, kickoff
+0.32 then 0.30, entropy 0.025, LR 5e-5) with the LR hold moved to
+1131.6M + 100M, then cosine to 0.4x. 300M steps (1131.6M -> 1431.6M), run
+folder `exp_FR4`, tmux session `ippo_FR4`.

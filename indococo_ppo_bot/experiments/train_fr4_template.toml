@@ -1,0 +1,72 @@
+# FR4 learner settings. run_experiments.sh fills in @RUN@, @REWARDS@,
+# @ITERATIONS@ and the kickoff share @KICKOFF_W@ per stage (@AIR_RESET_W@ unused).
+reward_config = "@RUN@/cfg/experiments/@REWARDS@"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = 100_000
+mini_batch_size = 50_000
+epochs = 2
+# ADB-best was trained at ~0.25x of 1e-4 at the end of its schedule; restart
+# at 5e-5 rather than the full 1e-4.
+policy_lr = 5e-5
+critic_lr = 5e-5
+entropy = 0.025       # FR3 fallback: 2.5x, the warm policy barely explored the curriculum
+gamma = 0.995
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 20
+iterations = @ITERATIONS@
+critic_warmup_steps = 0      # warm start from ADB-best (831.6M, critic included)
+self_play_old_versions = true
+skill_tracker = false
+
+# Flat for the first 100M steps (1131.6M + 100M), then cosine to 0.4x by the
+# end of the 300M-step run.
+[lr_schedule]
+kind = "cosine"
+hold_steps = 1_231_600_000
+decay_steps = 200_000_000
+min_scale = 0.4
+
+[opponents]
+chance = 0.25
+past_versions_weight = 1.0
+[[opponents.fixed]]
+name = "1v1.pt"
+checkpoint = "@RUN@/opponents/1v1"
+weight = 1.0
+[[opponents.fixed]]
+name = "ppo_430M"
+checkpoint = "@RUN@/opponents/ppo_430M"
+weight = 1.0
+
+# Setter mix: the adaptive reset curriculum at 28%, kickoffs 30-32%, the
+# rest as in FR2 (random 20%, air_near_ball 5%, wall air dribbles 15-17%,
+# air_reset dropped: the curriculum's top level covers it).
+[[state_setters]]
+kind = "kickoff"
+weight = @KICKOFF_W@
+[[state_setters]]
+kind = "random"
+weight = 0.1
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.1
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.05
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.28
+[[state_setters]]
+kind = "wall_air_dribble"
+weight = 0.15

@@ -1,0 +1,42 @@
+# FR4: flip resets on the audited air rewards. Rewards: aud.toml (air terms
+# goalward-gated, no double counting, ~9% of |reward|) + the FR3 run-4 flip
+# reset setup: flip_reset_use 600, potential-based reset_align 400, and no
+# air dribble / aerial / contact_quality pay in reset_curriculum episodes.
+# Setter mix, entropy 0.025 and the curriculum (easier level 0, 100-attempt
+# window) come from train_fr4_template.toml / src/curriculum.rs.
+# Warm start: AUD final (1131.6M).
+extends = "aud.toml"
+
+[weights]
+flip_reset = 0.0
+flip_reset_use = 600.0
+reset_align = 400.0
+
+[flip_reset_use]
+obtain = 0.1
+obtain_decay = 0.5
+max_obtains_per_flight = 3
+grace_s = 0.3
+min_ball_height = 300.0
+min_underside_cos = 0.5
+dodge_window_s = 1.5
+touch_window_s = 0.6
+use_weight = 1.0
+use_full_speed = 2000.0
+follow_s = 3.0
+shot_bonus = 0.5
+min_shot_speed = 500.0
+goal_bonus = 1.0
+
+[reset_align]
+max_dist = 400.0
+min_car_height = 300.0
+min_ball_height = 300.0
+episode_cap = 1.0
+
+[setter_scale.reset_curriculum]
+airdribble = 0.0
+airdribble_seq = 0.0
+# (air_touch_height is already 0 in aud.toml; build rejects unweighted terms)
+aerial_distance = 0.0
+contact_quality = 0.0
