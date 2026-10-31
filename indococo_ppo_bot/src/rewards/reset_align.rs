@@ -7,11 +7,12 @@
 //! `phi = max(0, underside_cos) * (1 - dist / max_dist)`
 //!
 //! with `underside_cos` the cosine between the car's down vector and the
-//! direction to the ball. The term pays only **improvement**: the amount
-//! `phi` rises above the best value already reached in the current flight.
-//! Hovering at a fixed alignment, or backing off and coming back, pays
-//! nothing, so one flight pays at most 1. Payouts per car per episode are
-//! capped at `episode_cap`. Landing on a world surface starts a new flight.
+//! direction to the ball. The term is potential-based: each step pays
+//! `phi - phi_prev`, so turning the wheels toward the ball pays and letting
+//! them drift away costs the same amount. Hovering pays nothing, and
+//! any loop (approach, back off, approach) sums to zero, so it cannot be
+//! farmed; an episode's total is at most `phi` at its end (<= 1). Positive
+//! payouts per car per episode are also capped at `episode_cap`.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +42,7 @@ impl Default for ResetAlignParams {
 
 pub struct ResetAlign {
     p: ResetAlignParams,
-    best: Vec<f64>,
+    prev: Vec<f64>,
     paid: Vec<f64>,
 }
 
@@ -50,7 +51,7 @@ impl ResetAlign {
     pub fn new(p: ResetAlignParams) -> Self {
         Self {
             p,
-            best: Vec::new(),
+            prev: Vec::new(),
             paid: Vec::new(),
         }
     }
@@ -78,7 +79,7 @@ impl StepReward for ResetAlign {
         let n = initial.cars.len();
         // Start each car at its current alignment, so a setter that spawns
         // a car already aligned pays nothing for it.
-        self.best = initial
+        self.prev = initial
             .cars
             .iter()
             .map(|c| self.potential(c, initial))
@@ -89,18 +90,14 @@ impl StepReward for ResetAlign {
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let mut rewards = vec![0.0; state.cars.len()];
         for (a, car) in state.cars.iter().enumerate() {
-            if car.on_world_surface() {
-                self.best[a] = 0.0;
-                continue;
-            }
             let phi = self.potential(car, state);
-            let gain = (phi - self.best[a]).max(0.0);
-            if gain > 0.0 {
-                self.best[a] = phi;
-                let pay = gain.min(self.p.episode_cap - self.paid[a]).max(0.0);
-                self.paid[a] += pay;
-                rewards[a] = pay;
+            let mut r = phi - self.prev[a];
+            self.prev[a] = phi;
+            if r > 0.0 {
+                r = r.min(self.p.episode_cap - self.paid[a]).max(0.0);
+                self.paid[a] += r;
             }
+            rewards[a] = r;
         }
         rewards
     }
@@ -135,41 +132,36 @@ mod tests {
     }
 
     #[test]
-    fn pays_only_improvement_and_caps() {
+    fn potential_difference_telescopes() {
         let mut r = ResetAlign::new(ResetAlignParams::default());
         // Wheels toward the ball (up = -Z means wheels point +Z).
         r.reset(&state(500.0, -DVec3::Z));
         assert_eq!(r.get_rewards(&state(500.0, -DVec3::Z))[0], 0.0);
         let a = r.get_rewards(&state(700.0, -DVec3::Z))[0];
         assert!((a - 0.25).abs() < 1e-9, "{a}");
-        // Hovering at the same spot pays nothing.
+        // Hovering pays nothing.
         assert_eq!(r.get_rewards(&state(700.0, -DVec3::Z))[0], 0.0);
-        // Backing off and returning pays nothing.
-        assert_eq!(r.get_rewards(&state(600.0, -DVec3::Z))[0], 0.0);
-        assert_eq!(r.get_rewards(&state(700.0, -DVec3::Z))[0], 0.0);
-        let b = r.get_rewards(&state(900.0, -DVec3::Z))[0];
-        assert!((b - 0.5).abs() < 1e-9, "{b}");
-        // Roof toward the ball pays nothing.
-        let mut r = ResetAlign::new(ResetAlignParams::default());
-        r.reset(&state(500.0, DVec3::Z));
-        assert_eq!(r.get_rewards(&state(900.0, DVec3::Z))[0], 0.0);
+        // Backing off costs what coming back pays.
+        let back = r.get_rewards(&state(600.0, -DVec3::Z))[0];
+        let again = r.get_rewards(&state(700.0, -DVec3::Z))[0];
+        assert!((back + again).abs() < 1e-9 && back < 0.0, "{back} {again}");
+        // Roof toward the ball: alignment lost, negative.
+        let flip = r.get_rewards(&state(700.0, DVec3::Z))[0];
+        assert!((flip + 0.25).abs() < 1e-9, "{flip}");
     }
 
     #[test]
-    fn episode_cap_holds_across_flights() {
+    fn positive_pay_is_capped_per_episode() {
         let mut r = ResetAlign::new(ResetAlignParams {
             episode_cap: 1.2,
             ..ResetAlignParams::default()
         });
         r.reset(&state(500.0, -DVec3::Z));
-        let mut total = 0.0;
+        let mut positive = 0.0;
         for _ in 0..5 {
-            total += r.get_rewards(&state(900.0, -DVec3::Z))[0];
-            // Land: a new flight.
-            let mut s = state(17.0, DVec3::Z);
-            s.cars[0].wheels_with_contact = [true; 4];
-            total += r.get_rewards(&s)[0];
+            positive += r.get_rewards(&state(900.0, -DVec3::Z))[0].max(0.0);
+            r.get_rewards(&state(500.0, -DVec3::Z));
         }
-        assert!((total - 1.2).abs() < 1e-9, "{total}");
+        assert!((positive - 1.2).abs() < 1e-9, "{positive}");
     }
 }

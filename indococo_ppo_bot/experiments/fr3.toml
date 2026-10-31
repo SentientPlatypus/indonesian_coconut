@@ -20,6 +20,11 @@ flip_reset = 0.0
 # ~1% of |reward| and flip_reset_use stays the bigger payoff per event:
 # use pays 150-600 per reset used, obtain 60 (then 30, 15), shot 300, goal 600;
 # one full approach to the ball pays at most 400, once per episode.
+# Smoke run 2 (23M): level-0 success 1.2%, below the 7% no-input baseline.
+# The improvement-only shaping paid nothing at level 0 (the car spawns near
+# its best alignment), so reset_align is now potential-based (phi - phi_prev):
+# cancelling the spin pays, drifting off costs. obtain's grace drops to 0.3 s
+# to match the curriculum's earned window.
 flip_reset_use = 600.0
 reset_align = 400.0
 
@@ -28,3 +33,6 @@ max_dist = 400.0
 min_car_height = 300.0
 min_ball_height = 300.0
 episode_cap = 1.0
+
+[flip_reset_use]
+grace_s = 0.3

@@ -167,7 +167,10 @@ fn earned_resets_need_actions() {
     // an orientation-only controller (no boost, no dodge) does at level 0.
     for (level, &(idle, random, _)) in rows.iter().enumerate() {
         let max_idle = if level == 0 { 0.15 } else { 0.1 };
-        assert!(idle < max_idle && random < 0.1, "level {level}: {idle} {random}");
+        assert!(
+            idle < max_idle && random < 0.1,
+            "level {level}: {idle} {random}"
+        );
     }
     assert!(rows[0].2 > 0.4, "scripted level 0: {}", rows[0].2);
     assert!(rows[0].2 > 3.0 * rows[0].0, "level 0 needs actions");
