@@ -11,6 +11,7 @@ use rlgymppo_utils::terminal::{
 use rlgymppo_utils::{AvgTracker, Report, any_terminal};
 
 use crate::action::LookupNoMask;
+use crate::curriculum::{self, Attempt, CurriculumLog};
 use crate::events::EventTracker;
 use crate::obs::V2DefaultObs;
 use crate::resets::TickResetTracker;
@@ -34,6 +35,8 @@ pub struct SharedInfo {
     resets: TickResetTracker,
     /// Setter that started the current episode.
     setter: &'static str,
+    /// Curriculum episode still being decided.
+    attempt: Option<Attempt>,
 }
 
 impl Default for SharedInfo {
@@ -50,6 +53,7 @@ impl From<u64> for SharedInfo {
             events: EventTracker::default(),
             resets: TickResetTracker::default(),
             setter: "",
+            attempt: None,
         }
     }
 }
@@ -67,6 +71,18 @@ impl SharedInfoProvider for SharedInfo {
     /// Runs before the rewards of the step (rlgym_rs `post_step` order).
     fn update(&mut self, gs: &GameState) {
         self.resets.finish_step();
+        if let Some(mut a) = self.attempt {
+            let reset = self
+                .resets
+                .last_step()
+                .get(a.flier)
+                .copied()
+                .unwrap_or(false);
+            match a.step(reset) {
+                Some(success) => self.finish_attempt(a, success),
+                None => self.attempt = Some(a),
+            }
+        }
         for (info, car) in &gs.cars {
             self.metrics["Player/Distance to ball"] +=
                 AvgTracker::from(car.phys.pos.distance(gs.ball.pos));
@@ -103,8 +119,38 @@ impl SharedInfo {
     }
 }
 
+impl SharedInfo {
+    /// Reports a decided curriculum episode and logs it.
+    fn finish_attempt(&mut self, a: Attempt, success: bool) {
+        self.attempt = None;
+        let level = curriculum::record(a.level, success);
+        self.metrics["Curriculum/level"] += AvgTracker::from(level as f64);
+        self.metrics["Curriculum/success"] += AvgTracker::from(success);
+        self.metrics[format!("Curriculum/success @L{}", a.level).as_str()] +=
+            AvgTracker::from(success);
+    }
+}
+
+impl CurriculumLog for SharedInfo {
+    fn start_curriculum(
+        &mut self,
+        level: usize,
+        flier: usize,
+        min_control_s: f32,
+        deadline_s: f32,
+    ) {
+        self.attempt = Some(Attempt::new(level, flier, min_control_s, deadline_s));
+        self.metrics["Curriculum/episode level"] += AvgTracker::from(level as f64);
+    }
+}
+
 impl SetterLog for SharedInfo {
     fn record_setter(&mut self, chosen: &'static str, labels: &[&'static str]) {
+        // An episode that ended before its curriculum attempt was decided
+        // (goal, timeout) is a failure.
+        if let Some(a) = self.attempt {
+            self.finish_attempt(a, false);
+        }
         self.setter = chosen;
         for &label in labels {
             self.metrics[format!("Setters/{label} share").as_str()] +=

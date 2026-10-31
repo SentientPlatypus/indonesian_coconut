@@ -35,6 +35,8 @@ use rlgymppo_utils::shared_info::SharedInfoRng;
 use rlgymppo_utils::state_setters::{KickoffState, RandomState};
 use serde::Deserialize;
 
+use crate::curriculum::CurriculumLog;
+
 /// Side wall `|x|`, and the car's half height when resting on a surface.
 const SIDE_WALL_X: f32 = 4096.0;
 const CAR_REST_HEIGHT: f32 = 17.0;
@@ -69,6 +71,8 @@ pub enum SetterKind {
     /// One car in the air 400-800 uu from the ball, moving and facing the
     /// wrong way: a flip reset needs steering and boost.
     AirReset(AirReset),
+    /// Adaptive flip reset curriculum ([`crate::curriculum`]).
+    ResetCurriculum(crate::curriculum::ResetCurriculum),
 }
 
 impl SetterKind {
@@ -81,6 +85,7 @@ impl SetterKind {
             Self::AirNearBall(_) => "air_near_ball",
             Self::WallAirDribble(_) => "wall_air_dribble",
             Self::AirReset(_) => "air_reset",
+            Self::ResetCurriculum(_) => "reset_curriculum",
         }
     }
 }
@@ -135,7 +140,7 @@ impl<SI> SetterMix<SI> {
     }
 }
 
-impl<SI: SharedInfoRng + SetterLog> StateSetter<SI> for SetterMix<SI> {
+impl<SI: SharedInfoRng + SetterLog + CurriculumLog> StateSetter<SI> for SetterMix<SI> {
     fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
         let total = *self.cumulative.last().expect("non-empty mix");
         let i = self.pick(shared_info.rng().random_range(0.0..total));
@@ -149,7 +154,9 @@ impl<SI: SharedInfoRng + SetterLog> StateSetter<SI> for SetterMix<SI> {
 /// # Panics
 /// If no entry has a positive weight.
 #[must_use]
-pub fn build_mix<SI: SharedInfoRng + SetterLog + 'static>(mix: &[WeightedSetter]) -> SetterMix<SI> {
+pub fn build_mix<SI: SharedInfoRng + SetterLog + CurriculumLog + 'static>(
+    mix: &[WeightedSetter],
+) -> SetterMix<SI> {
     let used: Vec<&WeightedSetter> = mix.iter().filter(|s| s.weight > 0.0).collect();
     assert!(
         !used.is_empty(),
@@ -175,7 +182,9 @@ pub fn build_mix<SI: SharedInfoRng + SetterLog + 'static>(mix: &[WeightedSetter]
 }
 
 impl SetterKind {
-    fn build<SI: SharedInfoRng + 'static>(&self) -> Box<dyn StateSetter<SI> + Send> {
+    fn build<SI: SharedInfoRng + CurriculumLog + 'static>(
+        &self,
+    ) -> Box<dyn StateSetter<SI> + Send> {
         match *self {
             Self::Kickoff => Box::new(KickoffState),
             Self::Random {
@@ -195,6 +204,10 @@ impl SetterKind {
             Self::AirNearBall(ref s) => Box::new(s.clone()),
             Self::WallAirDribble(ref s) => Box::new(s.clone()),
             Self::AirReset(ref s) => Box::new(s.clone()),
+            Self::ResetCurriculum(ref s) => {
+                crate::curriculum::configure(s.adapt());
+                Box::new(s.clone())
+            }
         }
     }
 }
@@ -336,13 +349,13 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AirReset {
 }
 
 /// Uniform random unit vector.
-fn random_unit(rng: &mut impl RngExt) -> Vec3A {
+pub(crate) fn random_unit(rng: &mut impl RngExt) -> Vec3A {
     let z: f32 = rng.random_range(-1.0..1.0);
     horizontal(rng) * (1.0 - z * z).sqrt() + Vec3A::Z * z
 }
 
 /// Unit vector within `max_angle` radians of `axis` (unit), uniform in azimuth.
-fn tilted_toward(rng: &mut impl RngExt, axis: Vec3A, max_angle: f32) -> Vec3A {
+pub(crate) fn tilted_toward(rng: &mut impl RngExt, axis: Vec3A, max_angle: f32) -> Vec3A {
     let local = tilted_up(rng, max_angle);
     let helper = if axis.z.abs() < 0.9 {
         Vec3A::Z
@@ -418,7 +431,7 @@ impl<SI: SharedInfoRng> StateSetter<SI> for WallAirDribble {
     }
 }
 
-fn range(rng: &mut impl RngExt, [lo, hi]: [f32; 2]) -> f32 {
+pub(crate) fn range(rng: &mut impl RngExt, [lo, hi]: [f32; 2]) -> f32 {
     if hi > lo {
         rng.random_range(lo..hi)
     } else {
@@ -426,7 +439,7 @@ fn range(rng: &mut impl RngExt, [lo, hi]: [f32; 2]) -> f32 {
     }
 }
 
-fn ball_at(pos: Vec3A, vel: Vec3A) -> BallState {
+pub(crate) fn ball_at(pos: Vec3A, vel: Vec3A) -> BallState {
     let mut ball = BallState::DEFAULT;
     ball.phys.pos = pos;
     ball.phys.vel = vel;
@@ -434,19 +447,19 @@ fn ball_at(pos: Vec3A, vel: Vec3A) -> BallState {
 }
 
 /// Unit vector in the xy plane.
-fn horizontal(rng: &mut impl RngExt) -> Vec3A {
+pub(crate) fn horizontal(rng: &mut impl RngExt) -> Vec3A {
     let a = rng.random_range(-PI..PI);
     Vec3A::new(a.cos(), a.sin(), 0.0)
 }
 
 /// Unit vector within `max_tilt` radians of +z, uniform in azimuth.
-fn tilted_up(rng: &mut impl RngExt, max_tilt: f32) -> Vec3A {
+pub(crate) fn tilted_up(rng: &mut impl RngExt, max_tilt: f32) -> Vec3A {
     let tilt = rng.random_range(0.0..=max_tilt);
     horizontal(rng) * tilt.sin() + Vec3A::Z * tilt.cos()
 }
 
 /// A rotation whose up axis is `up`, with a random heading around it.
-fn orientation(rng: &mut impl RngExt, up: Vec3A) -> Mat3A {
+pub(crate) fn orientation(rng: &mut impl RngExt, up: Vec3A) -> Mat3A {
     let helper = if up.z.abs() < 0.9 { Vec3A::Z } else { Vec3A::X };
     let a = up.cross(helper).normalize();
     let b = up.cross(a);
@@ -456,7 +469,7 @@ fn orientation(rng: &mut impl RngExt, up: Vec3A) -> Mat3A {
 }
 
 /// A car resting on the field at a random spot and heading.
-fn ground_car(rng: &mut impl RngExt) -> CarState {
+pub(crate) fn ground_car(rng: &mut impl RngExt) -> CarState {
     let mut car = CarState::DEFAULT;
     car.phys.pos = Vec3A::new(
         rng.random_range(-3500.0..3500.0),

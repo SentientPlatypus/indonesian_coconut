@@ -517,6 +517,9 @@ struct ResetCounts {
     /// setter's flier), and how many of them reset within `EARLY_STEPS`.
     episodes_as_flier: u64,
     flier_episodes_with_early_reset: u64,
+    /// Flier episodes whose first reset came after `EARNED_FROM_STEP` steps
+    /// of control and within `EARLY_STEPS`: earned, as in the curriculum.
+    flier_episodes_with_earned_reset: u64,
     episodes_with_reset: u64,
     /// Episodes with a reset in their first `EARLY_STEPS` steps (3 s): the
     /// setter's own situation, before play moves on.
@@ -535,6 +538,7 @@ impl ResetCounts {
         self.episodes += o.episodes;
         self.episodes_as_flier += o.episodes_as_flier;
         self.flier_episodes_with_early_reset += o.flier_episodes_with_early_reset;
+        self.flier_episodes_with_earned_reset += o.flier_episodes_with_earned_reset;
         self.episodes_with_reset += o.episodes_with_reset;
         self.episodes_with_early_reset += o.episodes_with_early_reset;
         self.resets += o.resets;
@@ -565,12 +569,17 @@ impl ResetCounts {
                 self.episodes_with_early_reset as f64 / self.episodes.max(1) as f64,
             "flier_early_reset_share":
                 self.flier_episodes_with_early_reset as f64 / self.episodes_as_flier.max(1) as f64,
+            "flier_earned_reset_share":
+                self.flier_episodes_with_earned_reset as f64 / self.episodes_as_flier.max(1) as f64,
         })
     }
 }
 
 /// Steps (3 s) during which a reset counts as early in its episode.
 const EARLY_STEPS: u64 = 45;
+/// First step whose reset counts as earned (after 0.33 s of control; see
+/// `curriculum::Attempt`).
+const EARNED_FROM_STEP: u64 = 6;
 
 /// One environment of the `rates` run, the candidate on car 0 (blue).
 struct RateSlot {
@@ -643,6 +652,8 @@ impl RateSlot {
                 let early = self.steps_into_episode <= EARLY_STEPS;
                 c.episodes_with_early_reset += u64::from(early);
                 c.flier_episodes_with_early_reset += u64::from(early && self.flier);
+                let earned = early && self.steps_into_episode >= EARNED_FROM_STEP;
+                c.flier_episodes_with_earned_reset += u64::from(earned && self.flier);
             }
             self.reset_this_episode = true;
         }

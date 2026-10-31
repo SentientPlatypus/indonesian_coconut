@@ -1,0 +1,26 @@
+# FR3: flip resets, round 3 (staged curriculum). Base: ADB (air_touch_height
+# 30, air_dribble_bump 40, victim-gated demos), warm-started from ADB-best.
+#
+# FR2 showed the policy almost never reaches a reset position, so the sparse
+# use reward rarely fired (0.051 resets/min, none earned from air_reset).
+# FR3 adds:
+# * the reset_curriculum setter (train_fr3_template.toml): adaptive levels
+#   from "ball almost on the wheels" to air_reset difficulty;
+# * reset_align: dense, improvement-only wheels-to-ball alignment shaping
+#   near an elevated ball, at most 1 per flight and episode_cap per episode.
+# flip_reset_use stays the main payoff (weight 80, as in FR2); the base
+# flip_reset term stays off.
+extends = "fr2.toml"
+
+[weights]
+flip_reset = 0.0
+flip_reset_use = 80.0
+# One full approach from out of range to wheels-on-ball pays 1 * 10.
+# Measured in the smoke run as a share of |reward| (target 1-3%).
+reset_align = 10.0
+
+[reset_align]
+max_dist = 400.0
+min_car_height = 300.0
+min_ball_height = 300.0
+episode_cap = 2.0

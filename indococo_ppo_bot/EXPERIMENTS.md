@@ -203,3 +203,63 @@ episodes.
 
 Run: `ARMS=FR2 WARM=<ADB-best checkpoint> SEED_BEST=<exp_ADB/bots/best>
 RATES_STEPS=300000 experiments/run_experiments.sh`.
+
+### FR2 result
+
+FR2's final checkpoint (1132M) beat ADB-best 57.2% head to head but scored
+83.5 on the pool (ADB-best 84.7). Its true reset rate was 0.051/min, with no
+earned resets from `air_reset`, no uses and one goal after a reset. The
+policy almost never reaches a reset position, so the sparse use reward
+rarely fires.
+
+## Round 3: FR3 (staged reset curriculum)
+
+### Design
+
+- **Setter `reset_curriculum`, 28% of episodes** (`src/curriculum.rs`):
+  adaptive levels 0-9 from "ball almost on the wheels" to `air_reset`
+  difficulty.
+  - Level 0: 40-80 uu wheel gap, wheels within 10 degrees, closing at
+    60-120 uu/s while spinning at 2-3.5 rad/s.
+  - Level 9: 500-800 uu gap, wheels up to 90 degrees off, 200-700 uu/s
+    velocity mismatch.
+  - Success is an earned reset: after 0.33 s of control and within 3 s.
+  - After 200 attempts at the current level, >60% success advances a level
+    and <25% backs off one. 20% of episodes replay an easier level.
+  - **Baselines per level** (150 setups each, `tests/reset_curriculum_sim.rs`):
+
+    | Level | No input | Random input | Scripted wheel alignment (no boost) |
+    |---|---|---|---|
+    | 0 | 0.013 | 0.000 | 0.413 |
+    | 1 | 0.000 | 0.000 | 0.120 |
+    | 2 | 0.013 | 0.000 | 0.040 |
+    | 3-9 | ≤0.007 | ≤0.007 | ≤0.020 |
+
+- **Reward `reset_align`, weight 10** (`src/rewards/reset_align.rs`):
+  - While airborne above 300 uu, within 400 uu of a ball above 300 uu:
+    `phi = max(0, underside cos) * (1 - dist / 400)`.
+  - It pays only improvement over the best `phi` of the current flight, so
+    hovering or backing off and returning pays nothing.
+  - At most 1 per flight and 2 per episode.
+  - Target share is 1-3% of |reward|, checked in the smoke run.
+- **`flip_reset_use` stays at 80** with FR2's parameters: obtain 0.1 (none in
+  the first 0.5 s), use 1.0 for a dodge within 1.5 s plus a goalward touch,
+  shot 0.5, goal 1.0. The base `flip_reset` stays at 0.
+- **Setter mix** (`experiments/train_fr3_template.toml`):
+  - kickoff 0.32 for the first 100M steps, then 0.30;
+  - random 0.1 + 0.1, `air_near_ball` 0.05, `reset_curriculum` 0.28,
+    `wall_air_dribble` 0.15;
+  - `air_reset` dropped (the curriculum's top level covers it).
+- **Base**: the ADB rewards, warm-started from ADB-best (`ckpt_831600000`,
+  the best pool score). FR2-final won the head-to-head but has a lower pool
+  score and learned no resets, so it adds nothing for this round.
+  Training setup:
+  - LR 5e-5 held for 100M steps, then cosine to 0.4x by 300M;
+  - opponent pool and keep-best as in FR2.
+- **Evals** every 100M steps: pool plus `indococo-train rates` (300k steps vs
+  430M over `experiments/rates_fr3.toml`). Rates cover kickoff/open play,
+  `air_reset`, and the curriculum pinned at level 2. They report resets/min,
+  the earned share and uses/min.
+
+Run: `ARMS=FR3 WARM=<ADB-best checkpoint> SEED_BEST=<exp_ADB/bots/best>
+RATES_STEPS=300000 RATES_MIX=rates_fr3.toml experiments/run_experiments.sh`.

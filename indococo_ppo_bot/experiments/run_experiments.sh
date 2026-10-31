@@ -15,12 +15,14 @@
 #      collision_meshes/), LIBTORCH_LIB, PY, EVERY, GAMES, PROCS,
 #      SEED_BEST (optional bots/best dir the arm has to beat),
 #      RATES_STEPS (true flip reset rates per eval, `indococo-train rates`
-#      over experiments/rates_mix.toml vs OPP_430M; 0 = off)
+#      over experiments/$RATES_MIX vs OPP_430M; 0 = off), RATES_MIX
+#      (rates_mix.toml)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 CRATE=$(dirname "$HERE")
 : "${RUNS:?}" "${BIN:?}" "${WARM:?}" "${OPP_1V1:?}" "${OPP_430M:?}" "${MESHES:?}" "${LIBTORCH_LIB:?}" "${PY:?}"
 EVERY=${EVERY:-100000000} GAMES=${GAMES:-100} PROCS=${PROCS:-8} RATES_STEPS=${RATES_STEPS:-0}
+RATES_MIX=${RATES_MIX:-rates_mix.toml}
 TS=100000   # timesteps per iteration (train_template.toml)
 export LD_LIBRARY_PATH=$LIBTORCH_LIB   # indococo-train export needs LibTorch too
 
@@ -30,6 +32,7 @@ declare -A STAGES=(
   [X0]="x0.toml:4500"
   [FR]="fr_ramp.toml:1500 fr.toml:3000"
   [ADB]="adb.toml:4500"
+  [FR3]="fr3.toml:1000:train_fr3_template.toml:0.32:0 fr3.toml:2000:train_fr3_template.toml:0.30:0"
   [FR2]="fr2.toml:1000:train_fr2_template.toml:0.35:0.15 fr2.toml:1000:train_fr2_template.toml:0.27:0.23 fr2.toml:1000:train_fr2_template.toml:0.20:0.30"
 )
 ARMS=${ARMS:-"X0 FR ADB"}
@@ -96,7 +99,7 @@ final_eval() {  # pool eval + keep-best of the newest checkpoint, if not yet log
   local rates=$run/logs/final_rates.json
   echo '{}' > "$rates"
   if (( RATES_STEPS > 0 )); then
-    (cd "$MESHES" && nice -n 19 "$run/indococo-train" rates "$run/cfg/experiments/rates_mix.toml" \
+    (cd "$MESHES" && nice -n 19 "$run/indococo-train" rates "$run/cfg/experiments/$RATES_MIX" \
         "$run/checkpoints/$newest" "$OPP_430M" "$RATES_STEPS" 16) 2>/dev/null | tail -1 > "$rates.new" \
         && [[ -s $rates.new ]] && mv "$rates.new" "$rates"
   fi
@@ -114,7 +117,7 @@ for arm in $ARMS; do
     tmux new-session -d -s "$session" -n train "$run/train.sh"
   fi
   if ! tmux list-windows -t "$session" -F '#W' | grep -qx eval; then
-    tmux new-window -d -t "$session" -n eval "env LD_LIBRARY_PATH='$LIBTORCH_LIB' TRAIN_BIN='$run/indococo-train' PY='$PY' EVERY=$EVERY GAMES=$GAMES PROCS=$PROCS RATES_STEPS=$RATES_STEPS RATES_MIX='$run/cfg/experiments/rates_mix.toml' RATES_OPP='$OPP_430M' MESHES='$MESHES' '$CRATE/tools/eval_loop.sh' '$run/checkpoints' '$run/logs/evals.jsonl' '$run/bots/best' 2>&1 | tee -a '$run/logs/eval_loop.log'; sleep infinity"
+    tmux new-window -d -t "$session" -n eval "env LD_LIBRARY_PATH='$LIBTORCH_LIB' TRAIN_BIN='$run/indococo-train' PY='$PY' EVERY=$EVERY GAMES=$GAMES PROCS=$PROCS RATES_STEPS=$RATES_STEPS RATES_MIX='$run/cfg/experiments/$RATES_MIX' RATES_OPP='$OPP_430M' MESHES='$MESHES' '$CRATE/tools/eval_loop.sh' '$run/checkpoints' '$run/logs/evals.jsonl' '$run/bots/best' 2>&1 | tee -a '$run/logs/eval_loop.log'; sleep infinity"
   fi
   until [[ -f $run/TRAIN_DONE ]]; do
     status

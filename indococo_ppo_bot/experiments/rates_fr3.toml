@@ -1,0 +1,15 @@
+# Setter mix for `indococo-train rates` in FR3 evals (true flip reset rates).
+# kickoff: open play. air_reset: hard reset setups (~0% passive).
+# reset_curriculum pinned at level 2 (~1% passive, ~4% for a scripted
+# wheel-alignment controller), so evals stay comparable while training moves
+# the curriculum level. Earned = first reset after 0.33 s of control, within 3 s.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.5
+[[state_setters]]
+kind = "air_reset"
+weight = 0.2
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.3
+fixed_level = 2

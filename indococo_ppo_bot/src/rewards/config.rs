@@ -37,6 +37,7 @@ use super::opponent_possession_space::OpponentPossessionSpace;
 use super::possession::Possession;
 use super::possession_range_carry::{PossessionRangeCarry, TakeoffParams};
 use super::pressure_flick::PressureFlick;
+use super::reset_align::{ResetAlign, ResetAlignParams};
 use super::safe_boost_collect::SafeBoostCollect;
 use super::speed_toward_ball::SpeedTowardBall;
 use super::touch::Touch;
@@ -123,6 +124,7 @@ pub struct RewardWeights {
     pub air_touch_height: f64,
     pub air_dribble_bump: f64,
     pub flip_reset_use: f64,
+    pub reset_align: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -191,6 +193,7 @@ pub struct RewardConfig {
     pub air_touch_height: AirTouchHeightParams,
     pub air_dribble_bump: AirDribbleBumpParams,
     pub flip_reset_use: FlipResetUseParams,
+    pub reset_align: ResetAlignParams,
 }
 
 impl RewardConfig {
@@ -355,7 +358,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 4] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 5] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -378,6 +381,11 @@ impl RewardConfig {
                 "flip_reset_use",
                 w.flip_reset_use,
                 Box::new(FlipResetUse::new(self.flip_reset_use.clone())),
+            ),
+            (
+                "reset_align",
+                w.reset_align,
+                Box::new(ResetAlign::new(self.reset_align.clone())),
             ),
         ];
         terms.extend(

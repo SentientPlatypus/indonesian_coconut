@@ -33,6 +33,7 @@ indococo_ppo_bot/
     env.rs                arena, terminals, metrics (Events/*, Setters/*), per-tick hook -> BotEnv
     setters.rs            configurable state setters, SetterMix (logs which setter started an episode)
     resets.rs             flip reset detection: per physics tick in training, step-level fallback
+    curriculum.rs         reset_curriculum setter: adaptive levels shared by all envs, earned-reset tracking
     events.rs             flip reset / bump / demo / has_flip counters
     rewards/
       mod.rs              StepReward trait (reset / get_rewards on StateView)
@@ -41,7 +42,8 @@ indococo_ppo_bot/
       zero_sum.rs         ZeroSumReward wrapper
       mech.rs             shared mechanic helpers (+ unit tests)
       <one file per reward>   goal.rs, goal_prob.rs, ... ang_vel.rs
-      flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs
+      flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs,
+      reset_align.rs
                           experiment terms (built only when weighted; see EXPERIMENTS.md)
     bin/train.rs          indococo-train: train | import | export | record | rates
     bin/rlbot.rs          indococo-rlbot: RLBot v5 client, Burn CPU (flex) inference
@@ -132,6 +134,9 @@ ball_height = [600.0, 1600.0]
 kind = "air_reset"     # car 400-800 uu from the ball, velocity and wheels off: a reset needs steering
 weight = 0.1
 [[state_setters]]
+kind = "reset_curriculum" # adaptive: ball almost on the wheels -> air_reset difficulty (src/curriculum.rs)
+weight = 0.1
+[[state_setters]]
 kind = "wall_air_dribble"
 weight = 0.1
 ```
@@ -160,7 +165,26 @@ flip available) and `Events/Flip Resets per min`, `Events/Bumps per min`,
 per starting setter (`Events/Flip Resets per min @<kind>`), each setter's
 share of episodes (`Setters/<kind> share`), and per reward term the signed
 mean (`Reward/`), mean absolute value (`RewardAbs/`) and non-zero share
-(`RewardNonzero/`) per car-step.
+(`RewardNonzero/`) per car-step. With `reset_curriculum` in the mix it also
+logs `Curriculum/level` (the shared level), `Curriculum/success` and
+`Curriculum/success @L<n>` per decided episode, and `Curriculum/episode level`.
+
+### Reset curriculum
+
+`reset_curriculum` (`src/curriculum.rs`) starts one car in the air under an
+elevated ball with its jump and flip used. Each parameter blends linearly
+from the easy end (level 0: 40-80 uu wheel gap, wheels within 10 degrees,
+closing at 60-120 uu/s while spinning at 2-3.5 rad/s, so the wheels only meet
+the ball if the agent cancels the spin) to the hard end (top level: 500-800
+uu gap, wheels up to 90 degrees off, 200-700 uu/s velocity mismatch, balls
+up to 1500 uu and 600 uu/s). An episode succeeds when the flier gets an
+*earned* flip reset: after 0.33 s of control and within 3 s. The level is
+process-wide; after 200 attempts at the current level a success rate above
+60% moves up a level and below 25% moves down. 20% of episodes replay an
+easier level. `fixed_level` pins it (tests, evals). `tests/reset_curriculum_sim.rs`
+checks every level's states in RocketSim and that doing nothing or random
+input almost never earns a reset, while a scripted wheel-alignment
+controller does at level 0.
 
 ### Flip reset detection
 
@@ -183,7 +207,8 @@ repeat) over a setter mix (e.g.
 `experiments/rates_mix.toml`) with the candidate on blue and prints one JSON
 line: resets per minute (new and old detector), uses per minute, and the
 share of episodes, and of setter episodes where the candidate starts in the
-air, with a reset. Run it from the repository root.
+air, with a reset (`flier_early_reset_share`: within 3 s;
+`flier_earned_reset_share`: after 0.33 s of control and within 3 s). Run it from the repository root.
 
 The defaults use LibTorch CUDA with a bf16 critic and an f32 policy. On the
 L4 box, a warm-started run reaches about 78k sps.
@@ -241,7 +266,9 @@ train template and setter shares), and starts tmux session `ippo_<arm>` with a
 `train` and an `eval` window (`tools/eval_loop.sh`). When training ends it
 runs a final eval and writes `FINISHED`; `experiments/status.py` refreshes
 `$RUNS/EXPERIMENTS_STATUS.md` every 5 minutes. Arms: X0, FR, ADB (round 1),
-FR2 (flip resets with fixed detection; see EXPERIMENTS.md).
+FR2 (flip resets with fixed detection), FR3 (reset curriculum + alignment
+shaping; see EXPERIMENTS.md). `RATES_MIX` picks the rates setter file
+(FR3 uses `experiments/rates_fr3.toml`).
 
 ## Deploy (RLBot v5)
 

@@ -10,6 +10,7 @@
 
 pub mod action;
 pub mod consts;
+pub mod curriculum;
 pub mod env;
 pub mod events;
 pub mod math;

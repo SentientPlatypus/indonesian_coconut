@@ -14,7 +14,11 @@ EVENTS = ["Flip Resets per min", "Air Dribble Bumps per min", "Bumps per min", "
 # Shown when present: the reset reward's activity and the reset setters' share.
 EXTRA = ["RewardAbs/flip_reset_use", "RewardNonzero/flip_reset_use",
          "Events/Flip Resets per min @air_reset", "Events/Flip Resets per min @air_near_ball",
-         "Setters/air_reset share", "Setters/air_near_ball share"]
+         "Setters/air_reset share", "Setters/air_near_ball share",
+         "RewardAbs/reset_align", "RewardNonzero/reset_align",
+         "Curriculum/level", "Curriculum/success", "Curriculum/episode level",
+         "Events/Flip Resets per min @reset_curriculum", "Events/Flip Resets per min @kickoff",
+         "Setters/reset_curriculum share"]
 
 
 def tail_json(path, n):
@@ -58,17 +62,18 @@ def arm_section(runs, arm):
     if evals:
         out.append("")
         out.append("| steps | pool score | vs 1v1.pt | vs 430M | vs Nexto | vs Necto | promoted "
-                   "| resets/min (all) | kickoff games | air_reset flier early | uses/min |")
-        out.append("|---|---|---|---|---|---|---|---|---|---|---|")
+                   "| resets/min (all) | kickoff games | air_reset flier early | curriculum L2 earned | uses/min |")
+        out.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
         for e in evals:
             wr = {r["opponent"]: r["win_rate_decisive"] for r in e["pool"]}
             rates = e.get("flip_reset_rates") or {}
             per = rates.get("per_setter", {})
-            cells = ["-"] * 4
+            cells = ["-"] * 5
             if rates:
                 cells = [f"{rates['all']['resets_per_min']:.3f}",
                          f"{per.get('kickoff', {}).get('resets_per_min', 0):.3f}",
                          f"{per.get('air_reset', {}).get('flier_early_reset_share', 0):.2f}",
+                         f"{per.get('reset_curriculum', {}).get('flier_earned_reset_share', 0):.2f}",
                          f"{rates['all']['uses_per_min']:.3f}"]
             out.append(f"| {e['steps'] / 1e6:.0f}M | {100 * e['pool_score']:.1f} | "
                        + " | ".join(f"{100 * wr.get(k, float('nan')):.1f}" for k in ("1v1.pt", "ppo_430M", "nexto", "necto"))
