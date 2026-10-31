@@ -385,3 +385,16 @@ Immortal 96.5). No resets: the curriculum stayed at level 0 for all 300M steps
 ended, so the final evals were run by hand (`~/ippo_runs/fr4_final/`).
 Shipped as `checkpoints_to_test/fr4_1432M.bpk`. Full write-up:
 `docs/experiments/REPORT.md` sections 7-8.
+
+## AUD 1132M -> rlbot_submission 1v1.pt (2026-10-31)
+
+The Rust actor has the same layout as the Python `DiscreteFF` (92 -> 2048-2048-1024-1024 -> 90, ReLU, softmax). Its observations match `DefaultObs` and its actions match `LookupTableAction`, so the weights convert directly:
+`indococo-train export <ckpt> x.safetensors`, then `tools/aud_to_pt/convert.py x.safetensors <old 1v1.pt> out.pt`
+(the old file is read only for key order and dtype).
+
+Parity checks:
+- Fixed test input: Rust and torch probabilities differ by at most 9.3e-10; both pick the same action.
+- 10,030 recorded RocketSim observations: Rust `V2DefaultObs` and `rlbot_submission/obs.py` differ by at most 6.0e-8. Policy argmax agrees on 100%.
+- 200 games in pool_eval: the converted file beat the previous 1v1.pt 135-65 (67.5% ±3.3).
+
+master f571bf7 replaced `rlbot_submission/policies/1v1.pt` (sha256 15e16300…53f68). The previous version is at tag `pre-aud-1v1` (sha256 e1823a33…c4a24e).
