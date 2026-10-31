@@ -1,0 +1,12 @@
+# Setter mix for `indococo-train rates` (true flip reset rates per eval).
+# Kickoffs measure normal play; the two air setters measure reset skill
+# (air_near_ball resets ~89% passively, air_reset ~0% passively).
+[[state_setters]]
+kind = "kickoff"
+weight = 0.5
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.25
+[[state_setters]]
+kind = "air_reset"
+weight = 0.25

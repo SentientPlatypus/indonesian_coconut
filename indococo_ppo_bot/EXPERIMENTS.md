@@ -147,3 +147,58 @@ Reward share of total dense positive reward (~3.9/step) over the last 100M steps
 6. **New base for the next round.** Keep air_touch_height (w=30) and the victim-gated demo as the base, and use the ADB config as the next control.
 
 Packaged: ~/ippo_runs/exp_ADB/bots/rlbot_indococo_ppo_adb_832M (+ .tar.gz), agent_id indonesian_coconut/indococo_ppo_adb_832m.
+
+## Round 2: FR2 (flip resets with fixed detection)
+
+### The detection bug
+
+RocketSim treats wheels on the ball like a landing: with three or more
+wheels in contact (ball included) `is_on_ground` is true and on that tick the
+jump is re-armed and `has_flipped` / `has_double_jumped` are cleared. Round 1
+counted a reset only on a step where the car was *not* `on_ground()`, touched
+the ball and `has_flip` rose, so it missed almost every reset. The base
+`flip_reset` reward (weight 70) also cleared its state on `on_ground()`, so it
+almost never paid either. Wheel contacts also do not raise `CarHitBall`, so
+the touch requirement missed more.
+
+Fix (`src/resets.rs`): a reset is a re-armed jump/flip flag while the wheels
+touch the ball and nothing else, with the car above 150 uu. It is checked
+every physics tick through `SharedInfoProvider::on_tick`, so a reset followed
+by a jump inside the same 8-tick step still counts. The events, `flip_reset`,
+`flip_reset_gated` and `flip_reset_use` all use it, and a step-level version
+of the rule covers states without tick data. `tests/flip_reset_sim.rs` checks
+it in RocketSim: a scripted reset under the ball is detected (tick and step
+rule), a reset followed by a jump in the same step is detected, floor and
+wall landings are not, and the two rules agree on every step of 400 setter
+episodes.
+
+### Design
+
+- **Reward `flip_reset_use`, weight 80** (`experiments/fr2.toml`; the base
+  `flip_reset` is set to 0 because the fix would make it pay 70 per obtained
+  reset plus dense shaping):
+  - obtain 0.1 (8 points), 0.5x for each repeat, at most 3 per flight, ball
+    above 300 uu and under the wheels. Nothing in an episode's first 0.5 s.
+  - use 1.0 (20-80): a dodge within 1.5 s of the reset, then within 0.6 s a
+    touch that sends the ball toward the opponent goal, scaled by that speed
+    up to 2000 uu/s.
+  - shot 0.5 (40) if the ball heads on target at 500+ uu/s within 3 s of the
+    reset; goal 1.0 (80) if the team scores within 3 s.
+- **Setter `air_reset`**: the car starts 400-800 uu from the ball, up to 50°
+  off straight under it, with a 200-700 uu/s velocity mismatch in a random
+  direction and its wheels up to 90° off the ball. With no input it resets in
+  0% of 200 episodes; `air_near_ball` resets passively in 89%.
+- **Setter shares** ramp over three 100M stages: `air_reset` 0.15 / 0.23 /
+  0.30 and `air_near_ball` 0.05 (20% / 28% / 35% reset setups), with kickoff
+  0.35 / 0.27 / 0.20, random 0.1 + 0.1, and `wall_air_dribble` 0.25.
+- **Base**: the ADB rewards, warm-started from ADB-best (`ckpt_831600000`),
+  with the same opponent pool. LR 5e-5, held for 100M steps, then cosine to
+  0.4x by 300M.
+- **Metrics**: `RewardAbs/` and `RewardNonzero/` per term, `Setters/<kind>
+  share`, and `Events/Flip Resets per min @<kind>`. Each 100M eval also runs
+  `indococo-train rates` (300k steps vs 430M over
+  `experiments/rates_mix.toml`) and stores the result under
+  `flip_reset_rates`.
+
+Run: `ARMS=FR2 WARM=<ADB-best checkpoint> SEED_BEST=<exp_ADB/bots/best>
+RATES_STEPS=300000 experiments/run_experiments.sh`.

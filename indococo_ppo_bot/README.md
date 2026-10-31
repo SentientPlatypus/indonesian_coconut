@@ -3,7 +3,7 @@
 The indonesian_coconut 1v1 bot rebuilt on the
 [indococo-ppo](https://github.com/SentientPlatypus/indococo-ppo) framework
 (Rust; RocketSim + Burn PPO). The framework crates are a cargo git
-dependency pinned to rev `11e58c9`.
+dependency pinned to rev `416a097`.
 
 What carries over from the Python stack:
 
@@ -30,21 +30,27 @@ indococo_ppo_bot/
     state.rs              StateView: f64 mirror of rlgym GameState/Car (+ derived props)
     obs.rs                V2DefaultObs (92)
     action.rs             90-action lookup table
-    env.rs                arena, terminals, metrics (incl. Events/*) -> BotEnv
-    setters.rs            configurable state setters and their weighted mix
+    env.rs                arena, terminals, metrics (Events/*, Setters/*), per-tick hook -> BotEnv
+    setters.rs            configurable state setters, SetterMix (logs which setter started an episode)
+    resets.rs             flip reset detection: per physics tick in training, step-level fallback
     events.rs             flip reset / bump / demo / has_flip counters
     rewards/
       mod.rs              StepReward trait (reset / get_rewards on StateView)
-      combined.rs         weighted sum, implements rlgym_rs Reward, logs Reward/<term>
+      combined.rs         weighted sum, implements rlgym_rs Reward, logs Reward/, RewardAbs/, RewardNonzero/<term>
       config.rs           RewardConfig (TOML) -> CombinedReward, term order = v4_env
       zero_sum.rs         ZeroSumReward wrapper
       mech.rs             shared mechanic helpers (+ unit tests)
       <one file per reward>   goal.rs, goal_prob.rs, ... ang_vel.rs
-    bin/train.rs          indococo-train: train | import | export | record
+      flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs
+                          experiment terms (built only when weighted; see EXPERIMENTS.md)
+    bin/train.rs          indococo-train: train | import | export | record | rates
     bin/rlbot.rs          indococo-rlbot: RLBot v5 client, Burn CPU (flex) inference
   tests/
     reward_parity.rs      one test per reward term vs. Python on recorded states
+    flip_reset_sim.rs     flip reset detection against RocketSim (resets, landings, setters)
     fixtures/e8b2_rewards.jsonl
+  experiments/            experiment reward configs, train templates, run_experiments.sh, status.py,
+                          rates_mix.toml (setter mix for `indococo-train rates`)
   tools/parity.py         regenerates the fixture with the Python classes (needs master)
   tools/eval_loop.sh      pool evals + keep-best during training
   tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal
@@ -123,8 +129,11 @@ kind = "air_near_ball" # car under the ball, wheels toward it, flip used
 weight = 0.2
 ball_height = [600.0, 1600.0]
 [[state_setters]]
+kind = "air_reset"     # car 400-800 uu from the ball, velocity and wheels off: a reset needs steering
+weight = 0.1
+[[state_setters]]
 kind = "wall_air_dribble"
-weight = 0.2
+weight = 0.1
 ```
 
 Reward files compose with `extends`: an experiment file names a base file and
@@ -147,9 +156,31 @@ the Python pool bots run in `tools/pool_eval`, not in the Rust collector.
 
 `metrics.jsonl` gets `Events/Has Flip Ratio` (share of car-steps with the
 flip available) and `Events/Flip Resets per min`, `Events/Bumps per min`,
-`Events/Demos per min` (per car per minute of game time). A flip reset is an
-airborne touch that gives the flip back with the ball within 45 degrees of
-straight under the wheels.
+`Events/Demos per min` (per car per minute of game time), the flip reset rate
+per starting setter (`Events/Flip Resets per min @<kind>`), each setter's
+share of episodes (`Setters/<kind> share`), and per reward term the signed
+mean (`Reward/`), mean absolute value (`RewardAbs/`) and non-zero share
+(`RewardNonzero/`) per car-step.
+
+### Flip reset detection
+
+RocketSim gives the jump and flip back when three or more wheels touch
+anything, the ball included, and reports that as `is_on_ground`. A flip
+reset is therefore: a jump/flip flag re-armed (`has_jumped`, `has_flipped` or
+`has_double_jumped` turning off) while the wheels are on the ball, nothing
+else, above 150 uu. `src/resets.rs` checks this every physics tick through
+`SharedInfoProvider::on_tick` and hands the result to the events and rewards
+(`CarView::tick_flip_reset`); a step-level version of the same rule covers
+states without tick data. Until Oct 2026 the counters and the flip reset
+rewards required `!on_ground()` on a touch step and so missed nearly every
+reset (`Events/Flip Resets (old detector) per min` still logs that count).
+
+`indococo-train rates <setters.toml> <ckpt> <opponent ckpt|self> <steps>
+[threads]` plays greedy policies over a setter mix (e.g.
+`experiments/rates_mix.toml`) with the candidate on blue and prints one JSON
+line: resets per minute (new and old detector), uses per minute, and the
+share of episodes, and of setter episodes where the candidate starts in the
+air, with a reset. Run it from the repository root.
 
 The defaults use LibTorch CUDA with a bf16 critic and an f32 policy. On the
 L4 box, a warm-started run reaches about 78k sps.
@@ -195,6 +226,19 @@ python tools/pool_eval/pool_eval.py --candidate checkpoints/<n> --games 400 --pr
 100M steps during training and keeps the best checkpoint (by pool score and
 a head-to-head against the previous best) in `<best dir>`, outside checkpoint
 rotation. It only needs Python with `rlgym` 2.x and `torch`, no master files.
+With `RATES_STEPS` set it also stores `indococo-train rates` output under
+`flip_reset_rates` in each eval line.
+
+### Pipeline (experiments)
+
+`experiments/run_experiments.sh` runs arms one after another on the GPU. Per
+arm it creates `$RUNS/exp_<arm>` (configs, warm-start checkpoint, opponents,
+binary), writes `train.sh` with the arm's stages (reward file, iterations,
+train template and setter shares), and starts tmux session `ippo_<arm>` with a
+`train` and an `eval` window (`tools/eval_loop.sh`). When training ends it
+runs a final eval and writes `FINISHED`; `experiments/status.py` refreshes
+`$RUNS/EXPERIMENTS_STATUS.md` every 5 minutes. Arms: X0, FR, ADB (round 1),
+FR2 (flip resets with fixed detection; see EXPERIMENTS.md).
 
 ## Deploy (RLBot v5)
 

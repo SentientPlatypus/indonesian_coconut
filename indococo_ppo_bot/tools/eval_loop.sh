@@ -9,7 +9,10 @@
 #
 #   tools/eval_loop.sh <checkpoints> <out.jsonl> <best dir>
 # env: TRAIN_BIN, PY (python with rlgym 2 + torch), POOL (pool.toml), EVERY (100000000),
-#      GAMES (200), PROCS (8)
+#      GAMES (200), PROCS (8). With RATES_STEPS > 0 each eval also gets the
+#      checkpoint's true flip reset rates (`indococo-train rates` over RATES_MIX
+#      vs RATES_OPP, run from MESHES, the dir holding collision_meshes/) under
+#      "flip_reset_rates".
 set -euo pipefail
 CKPTS=$1 OUT=$2 BEST=$3
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -36,9 +39,15 @@ while true; do
       nice -n 19 "$PY" "$HERE/pool_eval/keep_best.py" --checkpoint "$snap" --policy "$st" \
           --best "$BEST" --pool "$POOL" --games "$GAMES" --procs "$PROCS" --log "$log" \
           > "$WORK/keep_best_$steps.log" 2>&1
-      "$PY" -c 'import json,sys; r=json.load(open(sys.argv[1])); r["steps"]=int(sys.argv[2]); print(json.dumps(r))' \
-          "$log" "$steps" >> "$OUT"
-      rm -rf "$snap" "$st" "$log"
+      rates=$WORK/rates_$steps.json
+      echo '{}' > "$rates"
+      if (( ${RATES_STEPS:-0} > 0 )); then
+        (cd "$MESHES" && nice -n 19 "$TRAIN_BIN" rates "$RATES_MIX" "$snap" "$RATES_OPP" "$RATES_STEPS" 8) \
+            2> "$WORK/rates_$steps.log" | tail -1 > "$rates.new" && [[ -s $rates.new ]] && mv "$rates.new" "$rates"
+      fi
+      "$PY" -c 'import json,sys; r=json.load(open(sys.argv[1])); r["steps"]=int(sys.argv[2]); r["flip_reset_rates"]=json.load(open(sys.argv[3])); print(json.dumps(r))' \
+          "$log" "$steps" "$rates" >> "$OUT"
+      rm -rf "$snap" "$st" "$log" "$rates" "$rates.new"
       next=$(( (steps / EVERY + 1) * EVERY ))
     fi
   fi

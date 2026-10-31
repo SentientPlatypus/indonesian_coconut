@@ -1,0 +1,34 @@
+# FR2: flip resets, round 2. Base: the ADB arm (air_touch_height 30,
+# air_dribble_bump 40, victim-gated demos), warm-started from ADB-best.
+#
+# Detection is fixed (src/resets.rs): resets are now seen per physics tick.
+# The base E8B2 flip_reset term (weight 70) is switched off: with the fix it
+# would pay 70 per reset obtained plus dense approach/hold shaping, which is
+# the reset-farming setup that hurt play in other bots. flip_reset_use
+# replaces it and pays mostly for using the reset.
+#
+# Weight 80, so per event: obtain 8 (then 4, 2; nothing in the first 0.5 s of
+# an episode), dodge + goalward touch 20-80, shot on target 40, goal 80 (on
+# top of the goal term). Dense positive reward is ~3.9/step, so one full use
+# is worth ~20 steps of everything else.
+extends = "adb.toml"
+
+[weights]
+flip_reset = 0.0
+flip_reset_use = 80.0
+
+[flip_reset_use]
+obtain = 0.1
+obtain_decay = 0.5
+max_obtains_per_flight = 3
+grace_s = 0.5
+min_ball_height = 300.0
+min_underside_cos = 0.5
+dodge_window_s = 1.5
+touch_window_s = 0.6
+use_weight = 1.0
+use_full_speed = 2000.0
+follow_s = 3.0
+shot_bonus = 0.5
+min_shot_speed = 500.0
+goal_bonus = 1.0
