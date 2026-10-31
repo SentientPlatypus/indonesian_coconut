@@ -1,0 +1,72 @@
+# FR5 learner settings: PPO from the behavior-cloned FR4-final actor
+# (tools/bc, EXPERIMENTS.md FR5). Rewards fr4.toml. @RUN@ is filled in by
+# experiments/fr5_launch.sh. 300M steps from 1431.6M.
+reward_config = "@RUN@/cfg/experiments/fr4.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = 100_000
+mini_batch_size = 50_000
+epochs = 2
+policy_lr = 5e-5
+critic_lr = 5e-5
+# Lower than FR4's 0.025: the cloned skill lives in a sharper distribution.
+entropy = 0.015
+gamma = 0.995
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 20
+iterations = @ITERATIONS@
+# FR4's critic, but the actor changed: 10M steps of critic-only warm-up.
+critic_warmup_steps = 1_441_600_000
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = 1_531_600_000
+decay_steps = 200_000_000
+min_scale = 0.4
+
+[opponents]
+chance = 0.25
+past_versions_weight = 1.0
+[[opponents.fixed]]
+name = "1v1.pt"
+checkpoint = "@RUN@/opponents/1v1"
+weight = 1.0
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 1.0
+
+[[state_setters]]
+kind = "kickoff"
+weight = 0.30
+[[state_setters]]
+kind = "random"
+weight = 0.1
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.1
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.05
+[[state_setters]]
+kind = "wall_air_dribble"
+weight = 0.15
+# Even the scripted expert succeeds only ~55% at level 0 (60% was the old
+# advance bar, so no run could leave level 0): advance at 35%, back off at 12%.
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.30
+advance = 0.35
+back_off = 0.12

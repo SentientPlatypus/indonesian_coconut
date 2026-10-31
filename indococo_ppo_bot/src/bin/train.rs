@@ -7,6 +7,8 @@
 //! indococo-train export <checkpoint_dir> <out.safetensors>
 //! indococo-train record <reward.toml> <out.jsonl> <steps> [checkpoint_dir]
 //! indococo-train rates  <setters.toml> <candidate_ckpt> <opponent_ckpt|self> <steps> [threads]
+//! indococo-train curr <level> <episodes> <policy> [threads] [data_prefix] [noise]   # FR5 BC tools
+//! indococo-train normal-obs <ckpt> <setters.toml> <steps> <threads> <out.f32>
 //! ```
 
 use std::collections::BTreeMap;
@@ -35,6 +37,9 @@ use rlgymppo::{
     PpoLearnerConfig, SelfPlayConfig, SkillTrackerConfig, TrainPrecision, default_adamw_optimizer,
 };
 use serde::{Deserialize, Serialize};
+
+#[path = "../bc_cli.rs"]
+mod bc_cli;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -789,6 +794,8 @@ fn main() {
     };
     match arg(0) {
         "train" => train(Path::new(arg(1))),
+        "curr" => bc_cli::curr(&args[1..]),
+        "normal-obs" => bc_cli::normal_obs(&args[1..]),
         "import" => import(Path::new(arg(1)), Path::new(arg(2))),
         "export" => export(Path::new(arg(1)), Path::new(arg(2))),
         "record" => record(

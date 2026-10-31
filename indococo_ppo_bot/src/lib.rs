@@ -13,6 +13,7 @@ pub mod consts;
 pub mod curriculum;
 pub mod env;
 pub mod events;
+pub mod expert;
 pub mod math;
 pub mod obs;
 pub mod resets;

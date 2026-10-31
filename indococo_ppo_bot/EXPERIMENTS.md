@@ -398,3 +398,66 @@ Parity checks:
 - 200 games in pool_eval: the converted file beat the previous 1v1.pt 135-65 (67.5% ±3.3).
 
 master f571bf7 replaced `rlbot_submission/policies/1v1.pt` (sha256 15e16300…53f68). The previous version is at tag `pre-aud-1v1` (sha256 e1823a33…c4a24e).
+
+## Round 6: FR5 (behavior-cloned flip resets, then PPO)
+
+### Why
+
+FR2-FR4 never left curriculum level 0: the PPO policy earned a reset ~4% of
+level-0 episodes, doing nothing earns 18%, and the continuous scripted
+aligner 56%. FR5 first teaches the skill by imitation, then lets PPO refine it.
+
+### Phase A: discrete expert (`src/expert.rs`)
+
+Level-0 earned success (480 episodes, same setups; `indococo-train curr`):
+
+| policy | success | uses per success |
+|---|---|---|
+| no input | 17.9% | 0 |
+| aligner, nearest table action | 39.6-43.3% | 0 |
+| one-step lookahead, alignment score | 31.0-34.2% | 0 |
+| lookahead + 4-step aligner rollout (final expert) | 51.7-55.4% | 98% |
+| continuous aligner (per tick, reference) | 56% | - |
+
+Discretizing the aligner costs about a quarter of its success; a short
+lookahead recovers almost all of it. The use phase only worked once two
+RocketSim facts were handled: wheels on the ball count as ground, so the
+first jump press jumps off the ball (a second press dodges), and the
+table's directional jump actions all carry `handbrake = true`.
+Expert success by level: L1 44.5%, L2 15.4%, L3 5.3%, L4 3.1%, L5 1.2%
+(no input: 10.2%, 3.1%, 0.6%, 0.2%, 0%). The old advance bar (60% over the
+window) is above even the expert at level 0, which is one reason FR2-FR4
+never advanced; FR5 advances at 35% and backs off below 12%.
+
+### Pretraining (`tools/bc/bc_pretrain.py`)
+
+Data: 712k expert-labelled flier states (L0 8k episodes, L1 5.5k, L2 3k,
+L3 2k; 10-15% random executed actions in most of them, labels always the
+expert's) and 600k normal-play observations from FR4-final (sampled actions,
+the FR4 setter mix without the curriculum). Loss: cross-entropy to the
+expert on curriculum states + KL(FR4-final || student) on normal states,
+Adam, batch 4096+4096.
+
+| actor | steps, lr | label acc | L0 greedy | L0 sampled | uses/success (greedy) | 200-game h2h vs FR4-final |
+|---|---|---|---|---|---|---|
+| FR4-final | - | - | 1.9% | 2.9% | 11% | - |
+| bc_v1 | 3k, 5e-5 | 12% | 19.6% | 10.2% | 81% | - |
+| **bc_v2** | 10k, 1e-4 | 19% | **31.5%** | 18.3% | 89% | **47.0%** (94-106, se 3.5) |
+| bc_v3 (+ DAgger data from v2) | 15k, 1e-4 | 18% | 28.3% | 18.3% | 93% | 44.5% |
+
+Label accuracy stays low because the lookahead expert breaks near-ties
+between similar actions; what matters is the success rate. bc_v2 went to
+phase B: 16x FR4's level-0 success greedy, ~6x sampled, uses the regained
+flip on ~90% of its resets, and stays within one standard error of FR4-final
+head to head.
+
+### Phase B: PPO (`experiments/train_fr5.toml`, `experiments/fr5_launch.sh`)
+
+Warm start at 1431.6M: bc_v2 actor, FR4-final critic and return stats, 10M
+steps of critic-only warm-up, then 290M steps of PPO with `fr4.toml`
+rewards, entropy 0.015 (FR4: 0.025), curriculum 30% of episodes (advance
+35%, back off 12%), fixed opponents 1v1.pt and FR4-final. Run folder
+`~/ippo_runs/exp_FR5`, tmux `ippo_FR5`; after training the script runs the
+1000-game h2h vs FR4-final and AUD-final (seed 424242), the 400-game pool,
+`rates` and `curr` (L0-2, greedy and sampled) into `~/ippo_runs/fr5_final`.
+No BC auxiliary loss during PPO (it needs a framework change).

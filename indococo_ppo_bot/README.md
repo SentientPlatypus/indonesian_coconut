@@ -35,6 +35,8 @@ indococo_ppo_bot/
     resets.rs             flip reset detection: per physics tick in training, step-level fallback
     curriculum.rs         reset_curriculum setter: adaptive levels shared by all envs, earned-reset tracking
     events.rs             flip reset / bump / demo / has_flip counters
+    expert.rs             FR5 scripted flip reset expert in the 90-action space (lookahead reset + dodge use)
+    bc_cli.rs             FR5 `curr` / `normal-obs` subcommands (included by bin/train.rs)
     rewards/
       mod.rs              StepReward trait (reset / get_rewards on StateView)
       combined.rs         weighted sum, implements rlgym_rs Reward, logs Reward/, RewardAbs/, RewardNonzero/<term>
@@ -45,16 +47,18 @@ indococo_ppo_bot/
       flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs,
       reset_align.rs      (reset_align: potential-based wheels-to-ball alignment shaping)
                           experiment terms (built only when weighted; see EXPERIMENTS.md)
-    bin/train.rs          indococo-train: train | import | export | record | rates
+    bin/train.rs          indococo-train: train | import | export | record | rates | curr | normal-obs
     bin/rlbot.rs          indococo-rlbot: RLBot v5 client, Burn CPU (flex) inference
   tests/
     reward_parity.rs      one test per reward term vs. Python on recorded states
     flip_reset_sim.rs     flip reset detection against RocketSim (resets, landings, setters)
+    expert_sim.rs         FR5 expert: level-0 earned resets well above idle, and used
     fixtures/e8b2_rewards.jsonl
   experiments/            experiment reward configs, train templates, run_experiments.sh, status.py,
                           rates_mix.toml (setter mix for `indococo-train rates`)
   tools/parity.py         regenerates the fixture with the Python classes (needs master)
   tools/eval_loop.sh      pool evals + keep-best during training
+  tools/bc/bc_pretrain.py FR5 behavior cloning: CE to expert labels + KL to the frozen actor on normal play
   tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal
   config/E8b_shell_contact_strong.json  E8B2 experiment config (input to parity.py)
 ```
@@ -228,6 +232,30 @@ line: resets per minute (new and old detector), uses per minute, and the
 share of episodes, and of setter episodes where the candidate starts in the
 air, with a reset (`flier_early_reset_share`: within 3 s;
 `flier_earned_reset_share`: after 0.33 s of control and within 3 s). Run it from the repository root.
+
+### Behavior cloning data (FR5)
+
+`src/expert.rs` is a scripted flip reset player restricted to the 90 table
+actions. Reset phase: every air action is simulated for one step on a
+scratch arena, followed by up to four steps of the discretized wheels-to-ball
+aligner; the earliest reset wins, otherwise the best wheel alignment. Use
+phase (after the reset): every dodge, alone or after a jump off the ball and
+a release, is simulated a few steps ahead, and the one whose touch sends the
+ball fastest toward the opponent goal is taken; otherwise it turns the nose
+to the ball.
+
+```sh
+# Level-0 earned success (and uses) of a policy: expert | nearest | idle | greedy:<ckpt> | sample:<ckpt>
+indococo-train curr 0 480 expert 16
+# Expert-labelled curriculum data (<prefix>.obs.f32 / .act.u8 / .phase.u8); noise = random executed actions.
+indococo-train curr 0 6000 expert 32 data/curr_L0 0.15
+# DAgger: the actor drives, the expert labels.
+indococo-train curr 0 3000 sample:<ckpt> 32 data/dag_L0 0
+# Normal-play observations of a checkpoint (for the distillation term).
+indococo-train normal-obs <ckpt> normal_mix.toml 600000 30 data/normal.f32
+python tools/bc/bc_pretrain.py --actor actor.safetensors --curr data/curr_L0 ... --normal data/normal.f32 --out bc.pt
+indococo-train import bc.pt <out_dir>    # -> <out_dir>/1/actor.bpk
+```
 
 The defaults use LibTorch CUDA with a bf16 critic and an f32 policy. On the
 L4 box, a warm-started run reaches about 78k sps.
