@@ -7,6 +7,9 @@ Indonesian Coconut is a 1v1 Rocket League bot trained with PPO on a discrete
 [indococo-ppo](https://github.com/SentientPlatypus/indococo-ppo), a Rust stack
 built on RocketSim and Burn. Its reward set, observations and actions match
 the E8B2 Python policy (`1v1.pt`), which it warm-starts from.
+indococo-ppo trains about 1.7x faster than upstream rlgymppo_rs (40.8k → 70.1k
+steps/s on one L4 with TF32 + bf16 critic; see
+[its benchmark](https://github.com/SentientPlatypus/indococo-ppo#speedup-at-a-glance)).
 
 The Python policy beat Nexto 42–11 and Element 47–3 in RLBot matches
 ([replay](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30)).
