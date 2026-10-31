@@ -17,6 +17,7 @@ The Python policy beat Nexto 42–11 and Element 47–3 in RLBot matches
 |---|---|
 | [`indococo_ppo_bot/`](indococo_ppo_bot/README.md) | The Rust bot: rewards (one module each, with parity tests against Python), obs/actions, the trainer (`train`, `import`, `export`, `record`) and the RLBot client. **Start here.** |
 | `rlbot_indococo_ppo/` | RLBot v5 package: `bot.toml`, Linux and Windows binaries, `weights/actor.bpk`. |
+| [`checkpoints_to_test/`](checkpoints_to_test/README.md) | Ready-to-copy RLBot folders for candidate bots, e.g. `rlbot_indococo_ppo_adb_832M/` (ADB 832M, 63.6% vs 430M). |
 | `collision_meshes/` | RocketSim soccar meshes. The trainer loads them from the repo root; the RLBot binary embeds them. |
 | `assets/` | README images. |
 
