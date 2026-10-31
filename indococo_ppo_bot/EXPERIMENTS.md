@@ -329,11 +329,11 @@ ball on ~6.7% of steps, and no goal-from-aerial metric existed.
 - `airdribble` 40 -> 50: goal-direction and push floors 0, pays only within
   0.5 s of the carrier's last touch.
 - `aerial_distance` 40 -> 38: ball progress toward goal only.
-- Try 1 (`exp_AUD_try1`, stopped at about 25M steps): with `airdribble_seq`
+- Try 1 (`exp_AUD_try1`, stopped at 846.2M, 14.6M steps in): with `airdribble_seq`
   20, `airdribble` 20, `aerial_distance` 15 the four terms were 3.8% of
   |reward| (target 8-12%), too little aerial pay. The run uses x2.5:
   `airdribble_seq` 50, `airdribble` 50, `aerial_distance` 38, with the same
-  structural reworks.
+  structural reworks; at 15.5M steps the four terms are 9.0% of |reward|.
 - New metric `Events/Aerial Goals per min` (and `Events/Goals per min`).
 
 Arms: AUD and CTRL (`adb.toml` unchanged), each 300M steps from ADB-best
