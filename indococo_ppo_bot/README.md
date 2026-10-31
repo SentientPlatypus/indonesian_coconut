@@ -43,7 +43,7 @@ indococo_ppo_bot/
       mech.rs             shared mechanic helpers (+ unit tests)
       <one file per reward>   goal.rs, goal_prob.rs, ... ang_vel.rs
       flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs,
-      reset_align.rs
+      reset_align.rs      (reset_align: potential-based wheels-to-ball alignment shaping)
                           experiment terms (built only when weighted; see EXPERIMENTS.md)
     bin/train.rs          indococo-train: train | import | export | record | rates
     bin/rlbot.rs          indococo-rlbot: RLBot v5 client, Burn CPU (flex) inference
@@ -172,9 +172,9 @@ logs `Curriculum/level` (the shared level), `Curriculum/success` and
 ### Reset curriculum
 
 `reset_curriculum` (`src/curriculum.rs`) starts one car in the air under an
-elevated ball with its jump and flip used. Each parameter blends linearly
+elevated ball with its jump and flip used. Each parameter blends by `t = (level / top)^1.5`
 from the easy end (level 0: 40-80 uu wheel gap, wheels within 10 degrees,
-closing at 60-120 uu/s while spinning at 2-3.5 rad/s, so the wheels only meet
+closing at 60-120 uu/s while spinning at 1.5-2.5 rad/s, so the wheels only meet
 the ball if the agent cancels the spin) to the hard end (top level: 500-800
 uu gap, wheels up to 90 degrees off, 200-700 uu/s velocity mismatch, balls
 up to 1500 uu and 600 uu/s). An episode succeeds when the flier gets an
