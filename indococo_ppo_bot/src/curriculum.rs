@@ -4,8 +4,8 @@
 //! used. Level 0 puts the ball almost on the wheels (40-80 uu gap, wheels
 //! within 10 degrees, nearly matched velocity); the top level is as hard as
 //! `air_reset` (500-800 uu gap, wheels up to 90 degrees off, 200-700 uu/s
-//! velocity mismatch, higher and faster balls). Every parameter is a linear
-//! blend between the two ends by `level / (levels - 1)`.
+//! velocity mismatch, higher and faster balls). Every parameter blends between
+//! the two ends by `t = (level / (levels - 1))^ease` (ease 1.5).
 //!
 //! An episode is a **success** when the flier gets an *earned* flip reset:
 //! the per-tick detector ([`crate::resets`]) fires after at least
@@ -134,6 +134,9 @@ pub struct ResetCurriculum {
     pub window: u32,
     pub advance: f32,
     pub back_off: f32,
+    /// Blend exponent: `t = (level / top)^ease`; above 1 makes the first
+    /// levels gentler steps.
+    pub ease: f32,
     pub review: f32,
     pub fixed_level: Option<usize>,
     pub min_control_s: f32,
@@ -174,6 +177,7 @@ impl Default for ResetCurriculum {
             window: 200,
             advance: 0.6,
             back_off: 0.25,
+            ease: 1.5,
             review: 0.2,
             fixed_level: None,
             min_control_s: 0.3,
@@ -184,7 +188,7 @@ impl Default for ResetCurriculum {
                 max_tilt_deg: 15.0,
                 velocity_mismatch: [0.0, 30.0],
                 closing_speed: [60.0, 120.0],
-                spin: [2.0, 3.5],
+                spin: [1.5, 2.5],
                 ball_height: [600.0, 800.0],
                 carry_speed: [0.0, 100.0],
                 ball_vz: [-50.0, 50.0],
@@ -230,7 +234,7 @@ impl ResetCurriculum {
     #[must_use]
     pub fn at(&self, level: usize) -> Difficulty {
         let t = if self.levels > 1 {
-            level.min(self.levels - 1) as f32 / (self.levels - 1) as f32
+            (level.min(self.levels - 1) as f32 / (self.levels - 1) as f32).powf(self.ease)
         } else {
             0.0
         };

@@ -8,19 +8,23 @@
 #   from "ball almost on the wheels" to air_reset difficulty;
 # * reset_align: dense, improvement-only wheels-to-ball alignment shaping
 #   near an elevated ball, at most 1 per flight and episode_cap per episode.
-# flip_reset_use stays the main payoff (weight 80, as in FR2); the base
+# flip_reset_use stays the main payoff (scaled up with the shaping; see
+# [weights]); the base
 # flip_reset term stays off.
 extends = "fr2.toml"
 
 [weights]
 flip_reset = 0.0
-flip_reset_use = 80.0
-# One full approach from out of range to wheels-on-ball pays 1 * 10.
-# Measured in the smoke run as a share of |reward| (target 1-3%).
-reset_align = 10.0
+# Smoke run 1 (w=80 / 10, curriculum spin 2-3.5 rad/s): reset_align was
+# 0.016% of |reward| and level-0 success 0.8%, stuck. Scaled so reset_align is
+# ~1% of |reward| and flip_reset_use stays the bigger payoff per event:
+# use pays 150-600 per reset used, obtain 60 (then 30, 15), shot 300, goal 600;
+# one full approach to the ball pays at most 400, once per episode.
+flip_reset_use = 600.0
+reset_align = 400.0
 
 [reset_align]
 max_dist = 400.0
 min_car_height = 300.0
 min_ball_height = 300.0
-episode_cap = 2.0
+episode_cap = 1.0

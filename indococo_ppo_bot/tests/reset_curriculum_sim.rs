@@ -166,7 +166,9 @@ fn earned_resets_need_actions() {
     // Doing nothing or flailing almost never earns a reset at any level;
     // an orientation-only controller (no boost, no dodge) does at level 0.
     for (level, &(idle, random, _)) in rows.iter().enumerate() {
-        assert!(idle < 0.1 && random < 0.1, "level {level}: {idle} {random}");
+        let max_idle = if level == 0 { 0.15 } else { 0.1 };
+        assert!(idle < max_idle && random < 0.1, "level {level}: {idle} {random}");
     }
-    assert!(rows[0].2 > 0.25, "scripted level 0: {}", rows[0].2);
+    assert!(rows[0].2 > 0.4, "scripted level 0: {}", rows[0].2);
+    assert!(rows[0].2 > 3.0 * rows[0].0, "level 0 needs actions");
 }
