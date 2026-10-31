@@ -460,4 +460,18 @@ rewards, entropy 0.015 (FR4: 0.025), curriculum 30% of episodes (advance
 `~/ippo_runs/exp_FR5`, tmux `ippo_FR5`; after training the script runs the
 1000-game h2h vs FR4-final and AUD-final (seed 424242), the 400-game pool,
 `rates` and `curr` (L0-2, greedy and sampled) into `~/ippo_runs/fr5_final`.
-No BC auxiliary loss during PPO (it needs a framework change).
+
+First attempt (plain PPO): over the 10M-step critic warm-up the training
+level-0 success (sampled, against the opponent mix) held at 13-14%; in the
+first ~15M PPO steps it fell to 8% (25-report means: 14.2, 13.0, 11.9, 12.2,
+10.9, 8.2%) while policy entropy fell too (3.66 -> 3.53), so PPO was
+actively moving away from the cloned skill, not flattening it. Stopped and
+restarted from the warmed-up 1441.6M checkpoint (BC actor unchanged).
+
+Restart: a BC auxiliary loss inside PPO would need a framework change, so
+`fr5_launch.sh` alternates instead: PPO in 25M-step chunks, and after each
+chunk a short BC refresh of the latest actor (1500 steps, lr 5e-5: expert
+cross-entropy on the curriculum + DAgger data, KL to the chunk's own PPO
+actor on normal play). The PPO actor is kept as `actor_ppo.bpk` in that
+checkpoint, and `logs/bc_refresh.jsonl` records level-0 success (greedy and
+sampled) of both actors at every refresh.
