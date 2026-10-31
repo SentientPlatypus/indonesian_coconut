@@ -6,6 +6,7 @@ use rlgymppo_utils::rlgym::{GameState, Reward};
 use rlgymppo_utils::shared_info::SharedInfoReport;
 
 use super::StepReward;
+use crate::env::TickResets;
 use crate::state::StateView;
 
 /// A named, weighted reward.
@@ -60,17 +61,27 @@ impl CombinedReward {
     }
 }
 
-impl<SI: SharedInfoReport> Reward<SI> for CombinedReward {
+/// Per term, `Reward/<term>` is the mean weighted value per car-step (signed,
+/// so zero-sum terms average ~0), `RewardAbs/<term>` the mean of its absolute
+/// value and `RewardNonzero/<term>` the share of car-steps where it is non-zero.
+impl<SI: SharedInfoReport + TickResets> Reward<SI> for CombinedReward {
     fn reset(&mut self, initial_state: &GameState, _shared_info: &mut SI) {
         self.reset_view(&StateView::from_game_state(initial_state));
     }
 
     fn get_rewards(&mut self, state: &GameState, shared_info: &mut SI) -> Vec<f32> {
-        let total = self.step_view(&StateView::from_game_state(state));
+        let view = StateView::from_game_state(state).with_tick_resets(shared_info.tick_resets());
+        let total = self.step_view(&view);
         let report = shared_info.report();
         for (t, w) in self.terms.iter().zip(&self.last) {
-            let mean = w.iter().sum::<f64>() / w.len().max(1) as f64;
+            let n = w.len().max(1) as f64;
+            let mean = w.iter().sum::<f64>() / n;
+            let abs = w.iter().map(|x| x.abs()).sum::<f64>() / n;
+            let nonzero = w.iter().filter(|x| **x != 0.0).count() as f64 / n;
             report[format!("Reward/{}", t.name).as_str()] += AvgTracker::from(mean as f32);
+            report[format!("RewardAbs/{}", t.name).as_str()] += AvgTracker::from(abs as f32);
+            report[format!("RewardNonzero/{}", t.name).as_str()] +=
+                AvgTracker::from(nonzero as f32);
         }
         total.into_iter().map(|x| x as f32).collect()
     }

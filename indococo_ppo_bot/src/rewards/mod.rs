@@ -5,7 +5,7 @@
 //! order of `v4_env._reward_fn` with their weights and zero-sum wrappers into
 //! a [`CombinedReward`], which is what the environment uses.
 //!
-//! `flip_reset_gated`, `air_touch_height` and `air_dribble_bump` are
+//! `flip_reset_gated`, `air_touch_height`, `air_dribble_bump` and `flip_reset_use` are
 //! experiment terms (not in Python); they are only built when their weight
 //! is non-zero, so the E8B2 term list and the parity tests are unchanged.
 //!
@@ -32,6 +32,7 @@ pub mod face_ball;
 pub mod flick;
 pub mod flip_reset;
 pub mod flip_reset_gated;
+pub mod flip_reset_use;
 pub mod goal;
 pub mod goal_dist;
 pub mod goal_prob;

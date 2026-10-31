@@ -10,6 +10,11 @@
 //!
 //! Landing clears all stage state. This port covers the E8B2 settings
 //! (`on_ball_contact = false`, `team_aware_approach = false`).
+//!
+//! Resets come from [`crate::resets`]. The Python original (and this port
+//! before the fix) treated `on_ground()` as landing and needed a `has_flip`
+//! rise on a touch step; wheels on the ball make `on_ground()` true, so it
+//! cleared its state on the reset itself and almost never paid.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +24,8 @@ use serde::{Deserialize, Serialize};
 use super::StepReward;
 use crate::consts::{BACK_NET_Y, GOAL_HEIGHT, STEPS_PER_SECOND};
 use crate::math::safe_norm;
-use crate::state::StateView;
+use crate::resets;
+use crate::state::{CarView, StateView};
 
 /// The `fr_*` config keys.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -72,7 +78,7 @@ pub struct FlipReset {
     hold_window_steps: i64,
     hold_radius: f64,
     use_window_steps: i64,
-    prev_has_flip: Vec<bool>,
+    prev: Vec<CarView>,
     has_reset: HashSet<usize>,
     has_flipped: HashSet<usize>,
     prev_ball_vel: DVec3,
@@ -101,7 +107,7 @@ impl FlipReset {
             hold_radius: 700.0,
             use_window_steps: window_steps(p.use_window_ms),
             p,
-            prev_has_flip: Vec::new(),
+            prev: Vec::new(),
             has_reset: HashSet::new(),
             has_flipped: HashSet::new(),
             prev_ball_vel: DVec3::ZERO,
@@ -124,7 +130,7 @@ impl FlipReset {
 impl StepReward for FlipReset {
     fn reset(&mut self, initial: &StateView) {
         let n = initial.cars.len();
-        self.prev_has_flip = initial.cars.iter().map(|c| c.has_flip()).collect();
+        self.prev = initial.cars.clone();
         self.has_reset.clear();
         self.has_flipped.clear();
         self.prev_ball_vel = initial.ball.vel;
@@ -140,11 +146,11 @@ impl StepReward for FlipReset {
         self.step += 1;
 
         for (a, car) in state.cars.iter().enumerate() {
-            if car.on_ground() {
+            if car.on_world_surface() {
                 self.clear_airtime(a);
                 continue;
             }
-            let got_flip_now = car.has_flip() && !self.prev_has_flip[a];
+            let got_flip_now = resets::is_flip_reset(&self.prev[a], car, &state.ball);
             let touched = car.ball_touches > 0;
             let car_ball = ball_pos - car.pos;
             let dist = safe_norm(car_ball);
@@ -164,8 +170,7 @@ impl StepReward for FlipReset {
                 rewards[a] += self.approach_per_step * close * aim;
             }
 
-            if touched
-                && got_flip_now
+            if got_flip_now
                 && ball_high
                 && dist <= self.max_car_ball_dist
                 && wheels_cos >= self.p.min_wheels_cos
@@ -208,7 +213,7 @@ impl StepReward for FlipReset {
             }
         }
         self.prev_ball_vel = ball_vel;
-        self.prev_has_flip = state.cars.iter().map(|c| c.has_flip()).collect();
+        self.prev = state.cars.clone();
         rewards
     }
 }

@@ -48,6 +48,14 @@ pub struct CarView {
     pub demo_respawn_timer: f64,
     /// front-left, front-right, back-left, back-right.
     pub wheels_with_contact: [bool; 4],
+    /// How many of those contacts are on the ball (RocketSim counts wheels on
+    /// the ball as ground contact; see [`crate::resets`]).
+    #[serde(default)]
+    pub wheels_on_ball: u8,
+    /// Flip reset during the last step from the per-tick detector
+    /// ([`crate::resets::TickResetTracker`]); `None` without tick data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_flip_reset: Option<bool>,
     /// Seconds boost has been held continuously.
     pub boost_active_time: f64,
     pub has_jumped: bool,
@@ -68,10 +76,18 @@ impl CarView {
         self.team == BLUE_TEAM
     }
 
-    /// At least three wheels touching a surface.
+    /// At least three wheels touching a surface, the ball included (RocketSim's
+    /// rule). For flip resets use [`crate::resets`], not this.
     #[must_use]
     pub fn on_ground(&self) -> bool {
         self.wheels_with_contact.iter().filter(|&&w| w).count() >= 3
+    }
+
+    /// At least three wheels on the floor, a wall or the ceiling (not the ball).
+    #[must_use]
+    pub fn on_world_surface(&self) -> bool {
+        let contacts = self.wheels_with_contact.iter().filter(|&&w| w).count();
+        contacts.saturating_sub(usize::from(self.wheels_on_ball)) >= 3
     }
 
     /// Really in the air: no ground contact and above `AIRBORNE_MIN_Z`.
@@ -142,6 +158,17 @@ impl StateView {
         (0..self.cars.len()).filter(move |&i| self.cars[i].team != team)
     }
 
+    /// Copies the per-tick flip reset verdicts (car order) into the cars.
+    #[must_use]
+    pub fn with_tick_resets(mut self, resets: &[bool]) -> Self {
+        if resets.len() == self.cars.len() {
+            for (car, &r) in self.cars.iter_mut().zip(resets) {
+                car.tick_flip_reset = Some(r);
+            }
+        }
+        self
+    }
+
     /// Converts the simulator state of one step.
     #[must_use]
     pub fn from_game_state(state: &GameState) -> Self {
@@ -177,6 +204,8 @@ impl StateView {
                     bump_victim,
                     demo_respawn_timer: f64::from(car.demo_respawn_timer),
                     wheels_with_contact: wheels,
+                    wheels_on_ball: crate::resets::wheel_contacts(car).0,
+                    tick_flip_reset: None,
                     boost_active_time: f64::from(car.boosting_time),
                     has_jumped: car.has_jumped,
                     has_flipped: car.has_flipped,

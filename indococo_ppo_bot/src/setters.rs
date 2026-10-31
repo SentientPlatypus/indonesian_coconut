@@ -21,6 +21,10 @@
 //! With no `[[state_setters]]` the mix is [`default_mix`], the one every run
 //! so far used. To add a setter, add a variant to [`SetterKind`] and a
 //! `StateSetter` impl.
+//!
+//! [`SetterMix`] samples the mix and tells the shared info which setter
+//! started each episode ([`SetterLog`]), for the `Setters/*` metrics and the
+//! per-setter flip reset rates.
 
 use std::f32::consts::PI;
 
@@ -28,7 +32,7 @@ use rand::RngExt;
 use rlgymppo_utils::rlgym::StateSetter;
 use rlgymppo_utils::rlgym::rocketsim::{Arena, BallState, CarState, Mat3A, Vec3A};
 use rlgymppo_utils::shared_info::SharedInfoRng;
-use rlgymppo_utils::state_setters::{KickoffState, RandomState, WeightedState};
+use rlgymppo_utils::state_setters::{KickoffState, RandomState};
 use serde::Deserialize;
 
 /// Side wall `|x|`, and the car's half height when resting on a surface.
@@ -62,6 +66,23 @@ pub enum SetterKind {
     AirNearBall(AirNearBall),
     /// One car driving up a side wall with the ball on its nose.
     WallAirDribble(WallAirDribble),
+    /// One car in the air 400-800 uu from the ball, moving and facing the
+    /// wrong way: a flip reset needs steering and boost.
+    AirReset(AirReset),
+}
+
+impl SetterKind {
+    /// Metric label (the `kind` key).
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Kickoff => "kickoff",
+            Self::Random { .. } => "random",
+            Self::AirNearBall(_) => "air_near_ball",
+            Self::WallAirDribble(_) => "wall_air_dribble",
+            Self::AirReset(_) => "air_reset",
+        }
+    }
 }
 
 /// The mix used before setters were configurable: 34% kickoffs, 33% random
@@ -89,22 +110,68 @@ pub fn default_mix() -> Vec<WeightedSetter> {
     ]
 }
 
-/// Builds the weighted setter. Entries with weight 0 are dropped.
+/// Shared info that wants to know which setter started an episode.
+pub trait SetterLog {
+    /// `chosen` started the episode; `labels` are all labels in the mix.
+    fn record_setter(&mut self, chosen: &'static str, labels: &[&'static str]);
+}
+
+/// The weighted setter mix. Entries with weight 0 are dropped.
+pub struct SetterMix<SI> {
+    setters: Vec<Box<dyn StateSetter<SI> + Send>>,
+    labels: Vec<&'static str>,
+    /// Distinct labels, for the metrics.
+    distinct: Vec<&'static str>,
+    cumulative: Vec<f32>,
+}
+
+impl<SI> SetterMix<SI> {
+    /// Index of the setter for a uniform draw `u` in `[0, total weight)`.
+    fn pick(&self, u: f32) -> usize {
+        self.cumulative
+            .iter()
+            .position(|&c| u < c)
+            .unwrap_or(self.cumulative.len() - 1)
+    }
+}
+
+impl<SI: SharedInfoRng + SetterLog> StateSetter<SI> for SetterMix<SI> {
+    fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
+        let total = *self.cumulative.last().expect("non-empty mix");
+        let i = self.pick(shared_info.rng().random_range(0.0..total));
+        shared_info.record_setter(self.labels[i], &self.distinct);
+        self.setters[i].apply(arena, shared_info);
+    }
+}
+
+/// Builds the weighted setter mix.
 ///
 /// # Panics
 /// If no entry has a positive weight.
 #[must_use]
-pub fn build_mix<SI: SharedInfoRng + 'static>(mix: &[WeightedSetter]) -> WeightedState<SI> {
-    let setters: Vec<(Box<dyn StateSetter<SI> + Send>, f32)> = mix
-        .iter()
-        .filter(|s| s.weight > 0.0)
-        .map(|s| (s.kind.build::<SI>(), s.weight))
-        .collect();
+pub fn build_mix<SI: SharedInfoRng + SetterLog + 'static>(mix: &[WeightedSetter]) -> SetterMix<SI> {
+    let used: Vec<&WeightedSetter> = mix.iter().filter(|s| s.weight > 0.0).collect();
     assert!(
-        !setters.is_empty(),
+        !used.is_empty(),
         "state_setters: no entry with a positive weight"
     );
-    WeightedState::new(setters)
+    let labels: Vec<&'static str> = used.iter().map(|s| s.kind.label()).collect();
+    let mut distinct = labels.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let cumulative = used
+        .iter()
+        .scan(0.0, |acc, s| {
+            *acc += s.weight;
+            Some(*acc)
+        })
+        .collect();
+    SetterMix {
+        setters: used.iter().map(|s| s.kind.build::<SI>()).collect(),
+        labels,
+        distinct,
+        cumulative,
+    }
 }
 
 impl SetterKind {
@@ -127,6 +194,7 @@ impl SetterKind {
             },
             Self::AirNearBall(ref s) => Box::new(s.clone()),
             Self::WallAirDribble(ref s) => Box::new(s.clone()),
+            Self::AirReset(ref s) => Box::new(s.clone()),
         }
     }
 }
@@ -194,6 +262,96 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AirNearBall {
             arena.set_car_state(idx, car.core());
         }
     }
+}
+
+/// Flip reset challenge: the ball in the air and one car (random team, jump
+/// and flip used) `distance` away, below it within `max_tilt_deg` of straight
+/// down. Unlike [`AirNearBall`] nothing is lined up: the car's velocity is
+/// the ball's plus a random `velocity_mismatch` in any direction, and its
+/// wheels point up to `max_wheel_error_deg` away from the ball. Getting a
+/// reset takes steering and boost. The other car starts on the ground.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AirReset {
+    pub ball_height: [f32; 2],
+    pub distance: [f32; 2],
+    pub max_tilt_deg: f32,
+    /// Shared horizontal velocity of ball and car.
+    pub carry_speed: [f32; 2],
+    /// Extra car velocity in a random direction.
+    pub velocity_mismatch: [f32; 2],
+    pub max_wheel_error_deg: f32,
+    pub boost: [f32; 2],
+}
+
+impl Default for AirReset {
+    fn default() -> Self {
+        Self {
+            ball_height: [700.0, 1500.0],
+            distance: [400.0, 800.0],
+            max_tilt_deg: 50.0,
+            carry_speed: [0.0, 600.0],
+            velocity_mismatch: [200.0, 700.0],
+            max_wheel_error_deg: 90.0,
+            boost: [50.0, 100.0],
+        }
+    }
+}
+
+impl<SI: SharedInfoRng> StateSetter<SI> for AirReset {
+    fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
+        arena.reset_to_random_kickoff(None);
+        let rng = shared_info.rng();
+        let ball_pos = Vec3A::new(
+            rng.random_range(-2800.0..2800.0),
+            rng.random_range(-3600.0..3600.0),
+            range(rng, self.ball_height),
+        );
+        let carry = horizontal(rng) * range(rng, self.carry_speed);
+        arena.set_ball_state(ball_at(ball_pos, carry));
+        let to_ball = tilted_up(rng, self.max_tilt_deg.to_radians());
+        let mut car_pos = ball_pos - to_ball * range(rng, self.distance);
+        car_pos.z = car_pos.z.max(300.0);
+
+        let flier = rng.random_range(0..arena.num_cars());
+        for idx in 0..arena.num_cars() {
+            let rng = shared_info.rng();
+            let mut car = if idx == flier {
+                let mut car = CarState::DEFAULT;
+                car.phys.pos = car_pos;
+                car.phys.vel = carry + random_unit(rng) * range(rng, self.velocity_mismatch);
+                let wheels = tilted_toward(rng, to_ball, self.max_wheel_error_deg.to_radians());
+                car.phys.rot_mat = orientation(rng, -wheels);
+                car.has_jumped = true;
+                car.has_flipped = true;
+                car.air_time_since_jump = 2.0;
+                car
+            } else {
+                ground_car(rng)
+            };
+            car.boost = range(shared_info.rng(), self.boost);
+            arena.set_car_state(idx, car.core());
+        }
+    }
+}
+
+/// Uniform random unit vector.
+fn random_unit(rng: &mut impl RngExt) -> Vec3A {
+    let z: f32 = rng.random_range(-1.0..1.0);
+    horizontal(rng) * (1.0 - z * z).sqrt() + Vec3A::Z * z
+}
+
+/// Unit vector within `max_angle` radians of `axis` (unit), uniform in azimuth.
+fn tilted_toward(rng: &mut impl RngExt, axis: Vec3A, max_angle: f32) -> Vec3A {
+    let local = tilted_up(rng, max_angle);
+    let helper = if axis.z.abs() < 0.9 {
+        Vec3A::Z
+    } else {
+        Vec3A::X
+    };
+    let a = axis.cross(helper).normalize();
+    let b = axis.cross(a);
+    (a * local.x + b * local.y + axis * local.z).normalize()
 }
 
 /// Wall air dribble setup: one car (random team) driving up a side wall
@@ -367,6 +525,39 @@ mod tests {
         let parse = |t: &str| toml::from_str::<WeightedSetter>(t);
         assert!(parse("kind = \"teleport\"\nweight = 1.0").is_err());
         assert!(parse("kind = \"air_near_ball\"\nweight = 1.0\nheight = [1.0, 2.0]").is_err());
+    }
+
+    #[test]
+    fn mix_samples_by_weight() {
+        let mix = build_mix::<crate::env::SharedInfo>(&[
+            WeightedSetter {
+                weight: 0.25,
+                kind: SetterKind::Kickoff,
+            },
+            WeightedSetter {
+                weight: 0.0,
+                kind: SetterKind::AirNearBall(AirNearBall::default()),
+            },
+            WeightedSetter {
+                weight: 0.75,
+                kind: SetterKind::AirReset(AirReset::default()),
+            },
+        ]);
+        assert_eq!(mix.labels, ["kickoff", "air_reset"]);
+        assert_eq!(mix.pick(0.1), 0);
+        assert_eq!(mix.pick(0.3), 1);
+        assert_eq!(mix.pick(0.999), 1);
+    }
+
+    #[test]
+    fn tilted_toward_stays_within_the_cone() {
+        let mut rng = SmallRng::seed_from_u64(5);
+        for _ in 0..200 {
+            let axis = random_unit(&mut rng);
+            let v = tilted_toward(&mut rng, axis, 0.5);
+            assert!((v.length() - 1.0).abs() < 1e-4);
+            assert!(v.dot(axis) >= 0.5f32.cos() - 1e-4);
+        }
     }
 
     #[test]

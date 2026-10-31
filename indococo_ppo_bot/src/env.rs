@@ -5,7 +5,6 @@ use rand::{Rng, SeedableRng, rng};
 use rlgymppo_utils::rlgym::rocketsim::{Arena, ArenaEvent, CarBodyConfig, GameMode, Team};
 use rlgymppo_utils::rlgym::{Env, GameState, SharedInfoProvider};
 use rlgymppo_utils::shared_info::{SharedInfoReport, SharedInfoRng};
-use rlgymppo_utils::state_setters::WeightedState;
 use rlgymppo_utils::terminal::{
     AnyTerminal, GameEndedCondition, NoTouchCondition, OnGoalCondition,
 };
@@ -14,8 +13,9 @@ use rlgymppo_utils::{AvgTracker, Report, any_terminal};
 use crate::action::LookupNoMask;
 use crate::events::EventTracker;
 use crate::obs::V2DefaultObs;
+use crate::resets::TickResetTracker;
 use crate::rewards::{CombinedReward, RewardConfig};
-use crate::setters::{WeightedSetter, build_mix};
+use crate::setters::{SetterLog, SetterMix, WeightedSetter, build_mix};
 use crate::state::StateView;
 
 /// `NO_TOUCH_TIMEOUT_S = 30` (truncation).
@@ -31,6 +31,9 @@ pub struct SharedInfo {
     rng: SmallRng,
     metrics: Report,
     events: EventTracker,
+    resets: TickResetTracker,
+    /// Setter that started the current episode.
+    setter: &'static str,
 }
 
 impl Default for SharedInfo {
@@ -45,16 +48,25 @@ impl From<u64> for SharedInfo {
             rng: SmallRng::seed_from_u64(seed),
             metrics: Report::default(),
             events: EventTracker::default(),
+            resets: TickResetTracker::default(),
+            setter: "",
         }
     }
 }
 
 impl SharedInfoProvider for SharedInfo {
     fn reset(&mut self, state: &GameState) {
+        self.resets.reset(state);
         self.events.reset(StateView::from_game_state(state));
     }
 
+    fn on_tick(&mut self, arena: &Arena, _tick_events: &[ArenaEvent]) {
+        self.resets.on_tick(arena);
+    }
+
+    /// Runs before the rewards of the step (rlgym_rs `post_step` order).
     fn update(&mut self, gs: &GameState) {
+        self.resets.finish_step();
         for (info, car) in &gs.cars {
             self.metrics["Player/Distance to ball"] +=
                 AvgTracker::from(car.phys.pos.distance(gs.ball.pos));
@@ -76,13 +88,54 @@ impl SharedInfo {
     /// resets, bumps, demos and air dribble bumps per car per minute.
     fn count_events(&mut self, gs: &GameState) {
         let per_min = |hit: bool| AvgTracker::from(if hit { STEPS_PER_MINUTE } else { 0.0 });
-        for e in self.events.step(StateView::from_game_state(gs)) {
+        let view = self.view(gs);
+        for e in self.events.step(view) {
             self.metrics["Events/Has Flip Ratio"] += AvgTracker::from(e.has_flip);
             self.metrics["Events/Flip Resets per min"] += per_min(e.flip_reset);
+            self.metrics["Events/Flip Resets (old detector) per min"] +=
+                per_min(e.flip_reset_legacy);
+            self.metrics[format!("Events/Flip Resets per min @{}", self.setter).as_str()] +=
+                per_min(e.flip_reset);
             self.metrics["Events/Bumps per min"] += per_min(e.bump);
             self.metrics["Events/Demos per min"] += per_min(e.demo);
             self.metrics["Events/Air Dribble Bumps per min"] += per_min(e.air_dribble_bump);
         }
+    }
+}
+
+impl SetterLog for SharedInfo {
+    fn record_setter(&mut self, chosen: &'static str, labels: &[&'static str]) {
+        self.setter = chosen;
+        for &label in labels {
+            self.metrics[format!("Setters/{label} share").as_str()] +=
+                AvgTracker::from(label == chosen);
+        }
+    }
+}
+
+/// Shared info that can hand rewards the step's per-tick flip resets.
+pub trait TickResets {
+    /// Which cars (car order) got a flip reset during the last step.
+    fn tick_resets(&self) -> &[bool];
+}
+
+impl TickResets for SharedInfo {
+    fn tick_resets(&self) -> &[bool] {
+        self.resets.last_step()
+    }
+}
+
+impl SharedInfo {
+    /// Setter that started the current episode (its `kind`).
+    #[must_use]
+    pub fn setter(&self) -> &'static str {
+        self.setter
+    }
+
+    /// The step's [`StateView`] with the per-tick flip resets filled in.
+    #[must_use]
+    pub fn view(&self, gs: &GameState) -> StateView {
+        StateView::from_game_state(gs).with_tick_resets(self.resets.last_step())
     }
 }
 
@@ -102,7 +155,7 @@ impl SharedInfoReport for SharedInfo {
 
 /// The training environment type.
 pub type BotEnv = Env<
-    WeightedState<SharedInfo>,
+    SetterMix<SharedInfo>,
     V2DefaultObs,
     LookupNoMask,
     CombinedReward,

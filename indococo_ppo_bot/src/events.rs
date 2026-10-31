@@ -5,11 +5,13 @@
 //! [`StepEvents::between`] compares two consecutive [`StateView`]s.
 
 use crate::consts::TICKS_PER_SECOND;
+use crate::resets;
 use crate::rewards::air_dribble_bump::in_air_dribble;
 use crate::state::{CarView, StateView};
 
 /// cos(45 deg): the ball must be within 45 deg of straight under the wheels
-/// for an airborne touch to count as a flip reset.
+/// for an airborne touch to count as a flip reset (old detector, and the
+/// reward payout gates).
 pub const UNDERSIDE_MIN_COS: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
 /// What one car did between two steps.
@@ -17,8 +19,11 @@ pub const UNDERSIDE_MIN_COS: f64 = std::f64::consts::FRAC_1_SQRT_2;
 pub struct StepEvents {
     /// The car has its flip available now.
     pub has_flip: bool,
-    /// Airborne touch with the underside that gave the flip back.
+    /// Flip reset (see [`crate::resets`]).
     pub flip_reset: bool,
+    /// What the pre-fix detector counted (needed `!on_ground()`, so it missed
+    /// most resets). Kept to compare against old metrics.
+    pub flip_reset_legacy: bool,
     /// Started bumping another car (a new bump victim appeared this step).
     pub bump: bool,
     /// Demolished another car this step.
@@ -48,7 +53,8 @@ impl StepEvents {
                 let victim_demoed = new_victim.is_some_and(|v| newly_demoed[v]);
                 Self {
                     has_flip: car.has_flip(),
-                    flip_reset: is_flip_reset(before, car, cur),
+                    flip_reset: resets::is_flip_reset(before, car, &cur.ball),
+                    flip_reset_legacy: is_legacy_flip_reset(before, car, cur),
                     bump: new_victim.is_some() && !victim_demoed,
                     demo: victim_demoed,
                     demoed: car.is_demoed() && !before.is_demoed(),
@@ -100,8 +106,10 @@ impl EventTracker {
     }
 }
 
-/// Airborne, touched the ball this step, flip came back, ball under the wheels.
-fn is_flip_reset(before: &CarView, car: &CarView, state: &StateView) -> bool {
+/// The pre-fix rule: not on ground, touched the ball this step, flip came
+/// back, ball under the wheels. Wheels on the ball make `on_ground()` true,
+/// so this misses most real resets.
+fn is_legacy_flip_reset(before: &CarView, car: &CarView, state: &StateView) -> bool {
     if car.on_ground() || car.ball_touches == 0 || !car.has_flip() || before.has_flip() {
         return false;
     }
@@ -151,39 +159,45 @@ mod tests {
     }
 
     #[test]
-    fn underside_touch_that_restores_the_flip_is_a_flip_reset() {
+    fn wheels_on_the_ball_that_rearm_the_jump_are_a_flip_reset() {
         let prev = air_state();
         let mut cur = prev.clone();
         regain_flip(&mut cur.cars[0]);
-        cur.cars[0].ball_touches = 1;
+        cur.cars[0].wheels_with_contact = [true; 4];
+        cur.cars[0].wheels_on_ball = 4;
         let e = StepEvents::between(&prev, &cur);
         assert!(e[0].flip_reset && e[0].has_flip);
+        assert!(
+            !e[0].flip_reset_legacy,
+            "the old rule missed it (on_ground)"
+        );
         assert!(!e[1].flip_reset);
     }
 
     #[test]
-    fn no_flip_reset_without_touch_from_the_side_on_the_ground_or_if_held() {
+    fn no_flip_reset_from_the_side_on_a_surface_or_if_held() {
         let prev = air_state();
         let mut cur = prev.clone();
         regain_flip(&mut cur.cars[0]);
-        assert!(!StepEvents::between(&prev, &cur)[0].flip_reset, "no touch");
-
-        cur.cars[0].ball_touches = 1;
-        cur.ball.pos = DVec3::new(100.0, 0.0, 910.0); // ~48 deg off the wheel axis
-        assert!(
-            !StepEvents::between(&prev, &cur)[0].flip_reset,
-            "side touch"
-        );
+        cur.ball.pos = DVec3::new(200.0, 0.0, 950.0); // beside the car
+        assert!(!StepEvents::between(&prev, &cur)[0].flip_reset, "side");
         cur.ball.pos = DVec3::new(0.0, 0.0, 900.0);
+        assert!(StepEvents::between(&prev, &cur)[0].flip_reset, "under");
 
-        cur.cars[0].wheels_with_contact = [true; 4];
-        assert!(!StepEvents::between(&prev, &cur)[0].flip_reset, "on ground");
+        cur.cars[0].wheels_with_contact = [true; 4]; // on something that is not the ball
+        assert!(!StepEvents::between(&prev, &cur)[0].flip_reset, "surface");
         cur.cars[0].wheels_with_contact = [false; 4];
 
         let held = cur.clone();
         assert!(
             !StepEvents::between(&held, &cur)[0].flip_reset,
             "flip already held"
+        );
+        let mut tick = cur.clone();
+        tick.cars[0].tick_flip_reset = Some(false);
+        assert!(
+            !StepEvents::between(&prev, &tick)[0].flip_reset,
+            "tick detector overrides"
         );
     }
 

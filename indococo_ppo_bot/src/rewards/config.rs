@@ -26,6 +26,7 @@ use super::face_ball::FaceBall;
 use super::flick::Flick;
 use super::flip_reset::{FlipReset, FlipResetParams};
 use super::flip_reset_gated::{FlipResetGated, FlipResetGatedParams};
+use super::flip_reset_use::{FlipResetUse, FlipResetUseParams};
 use super::goal::Goal;
 use super::goal_dist::GoalDist;
 use super::goal_prob::GoalProb;
@@ -121,6 +122,7 @@ pub struct RewardWeights {
     pub flip_reset_gated: f64,
     pub air_touch_height: f64,
     pub air_dribble_bump: f64,
+    pub flip_reset_use: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -188,6 +190,7 @@ pub struct RewardConfig {
     pub flip_reset_gated: FlipResetGatedParams,
     pub air_touch_height: AirTouchHeightParams,
     pub air_dribble_bump: AirDribbleBumpParams,
+    pub flip_reset_use: FlipResetUseParams,
 }
 
 impl RewardConfig {
@@ -352,7 +355,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 3] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 4] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -370,6 +373,11 @@ impl RewardConfig {
                 "air_dribble_bump",
                 w.air_dribble_bump,
                 Box::new(AirDribbleBump::new(self.air_dribble_bump.clone())),
+            ),
+            (
+                "flip_reset_use",
+                w.flip_reset_use,
+                Box::new(FlipResetUse::new(self.flip_reset_use.clone())),
             ),
         ];
         terms.extend(

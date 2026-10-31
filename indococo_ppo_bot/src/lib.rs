@@ -6,6 +6,7 @@
 //! * [`env`]: the training environment.
 //! * [`setters`]: configurable state setters and their weighted mix.
 //! * [`events`]: behavior counters (flip resets, bumps, demos) for the metrics.
+//! * [`resets`]: flip reset detection (per tick in training) shared by events and rewards.
 
 pub mod action;
 pub mod consts;
@@ -13,6 +14,7 @@ pub mod env;
 pub mod events;
 pub mod math;
 pub mod obs;
+pub mod resets;
 pub mod rewards;
 pub mod setters;
 pub mod state;

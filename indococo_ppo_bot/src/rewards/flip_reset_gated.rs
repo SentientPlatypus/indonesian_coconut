@@ -1,10 +1,8 @@
 //! `FlipResetGated`: a sparse flip reset reward in two parts.
 //!
-//! * **Obtain** (event, `obtain_weight`): the car touches the ball and its flip
-//!   comes back (`has_flip` false -> true) while it is really in the air
-//!   (`z > min_car_z`; RocketSim counts wheels on the ball as ground contact,
-//!   so `on_ground` can't be used), the ball is above `min_ball_height`, within
-//!   `max_distance`, and within 45 deg of the car's down vector. The payout
+//! * **Obtain** (event, `obtain_weight`): a flip reset ([`crate::resets`])
+//!   while the car is above `min_car_z`, the ball is above `min_ball_height`,
+//!   within `max_distance`, and within 45 deg of the car's down vector. The payout
 //!   grows with ball height and with how squarely the wheels face the ball.
 //! * **Use** (event, `hit_weight`): after an obtained reset, the car flips and
 //!   then touches the ball within `use_window_s`. Scaled up by the ball's
@@ -18,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::StepReward;
 use crate::consts::{BACK_NET_Y, BALL_MAX_SPEED, CEILING_Z, TICKS_PER_SECOND};
 use crate::events::UNDERSIDE_MIN_COS;
+use crate::resets;
 use crate::state::{CarView, StateView};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -77,9 +76,7 @@ impl FlipResetGated {
         let p = &self.p;
         let to_ball = state.ball.pos - car.pos;
         let dist = to_ball.length();
-        let rising = car.has_flip() && !before.has_flip();
-        if !rising
-            || car.ball_touches == 0
+        if !resets::is_flip_reset(before, car, &state.ball)
             || car.pos.z <= p.min_car_z
             || state.ball.pos.z <= p.min_ball_height
             || dist > p.max_distance
@@ -109,7 +106,7 @@ impl StepReward for FlipResetGated {
         let mut rewards = vec![0.0; state.cars.len()];
         for (a, car) in state.cars.iter().enumerate() {
             let before = &self.prev[a];
-            if car.on_ground() && car.pos.z <= self.p.min_car_z {
+            if car.on_world_surface() {
                 self.stage[a] = Stage::None;
                 continue;
             }
@@ -226,7 +223,11 @@ mod tests {
             0.0,
             "side"
         );
-        assert_eq!(check(&|_, s| s.cars[0].ball_touches = 0), 0.0, "no touch");
+        assert_eq!(
+            check(&|_, s| s.cars[0].tick_flip_reset = Some(false)),
+            0.0,
+            "tick detector saw no reset"
+        );
         assert_eq!(check(&|_, s| s.ball.pos.z = 250.0), 0.0, "low ball");
         let low_car = |_: &mut StateView, s: &mut StateView| {
             s.cars[0].pos.z = 120.0;

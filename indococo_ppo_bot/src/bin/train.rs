@@ -6,8 +6,10 @@
 //! indococo-train import <1v1.pt> <checkpoints_dir>    # warm start from the Python policy
 //! indococo-train export <checkpoint_dir> <out.safetensors>
 //! indococo-train record <reward.toml> <out.jsonl> <steps> [checkpoint_dir]
+//! indococo-train rates  <setters.toml> <candidate_ckpt> <opponent_ckpt|self> <steps> [threads]
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use burn::prelude::*;
@@ -15,19 +17,24 @@ use burn::tensor::Device;
 use burn_store::{BurnToPyTorchAdapter, ModuleSnapshot, PytorchStore, SafetensorsStore};
 use indococo_bot::LAYERS;
 use indococo_bot::action::N_ACTIONS;
-use indococo_bot::env::create_env;
+use indococo_bot::env::{BotEnv, create_env};
+use indococo_bot::events::StepEvents;
 use indococo_bot::obs::OBS_SIZE;
+use indococo_bot::resets;
 use indococo_bot::rewards::RewardConfig;
+use indococo_bot::rewards::StepReward;
+use indococo_bot::rewards::flip_reset_use::{FlipResetUse, FlipResetUseParams};
 use indococo_bot::setters::{WeightedSetter, default_mix};
 use indococo_bot::state::StateView;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
+use rlgymppo::rlgym::GameState;
 use rlgymppo::rlgym::rocketsim::init_from_default;
 use rlgymppo::{
-    Actic, ComputePrecision, DecayShape, FixedOpponent, LearnerConfig, LrSchedule,
+    Actic, ComputePrecision, DecayShape, FixedOpponent, LearnerConfig, LrSchedule, Net,
     PpoLearnerConfig, SelfPlayConfig, SkillTrackerConfig, TrainPrecision, default_adamw_optimizer,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -500,6 +507,256 @@ fn record_line(state: &rlgymppo::rlgym::GameState, obs: &[Vec<f32>], reset: bool
     .to_string()
 }
 
+/// Flip reset counts of the candidate car in `rates`, for one setter label.
+#[derive(Clone, Debug, Default, Serialize)]
+struct ResetCounts {
+    car_steps: u64,
+    /// Episodes started by this setter.
+    episodes: u64,
+    /// Of those, episodes that start with the candidate in the air (the
+    /// setter's flier), and how many of them reset within `EARLY_STEPS`.
+    episodes_as_flier: u64,
+    flier_episodes_with_early_reset: u64,
+    episodes_with_reset: u64,
+    /// Episodes with a reset in their first `EARLY_STEPS` steps (3 s): the
+    /// setter's own situation, before play moves on.
+    episodes_with_early_reset: u64,
+    resets: u64,
+    resets_old_detector: u64,
+    /// Resets followed by a dodge and a goalward touch (`flip_reset_use`'s use).
+    uses: u64,
+    /// Team goals within 3 s of a reset.
+    goals_after_reset: u64,
+}
+
+impl ResetCounts {
+    fn add(&mut self, o: &Self) {
+        self.car_steps += o.car_steps;
+        self.episodes += o.episodes;
+        self.episodes_as_flier += o.episodes_as_flier;
+        self.flier_episodes_with_early_reset += o.flier_episodes_with_early_reset;
+        self.episodes_with_reset += o.episodes_with_reset;
+        self.episodes_with_early_reset += o.episodes_with_early_reset;
+        self.resets += o.resets;
+        self.resets_old_detector += o.resets_old_detector;
+        self.uses += o.uses;
+        self.goals_after_reset += o.goals_after_reset;
+    }
+
+    fn per_min(&self, n: u64) -> f64 {
+        let minutes = self.car_steps as f64 * f64::from(indococo_bot::consts::TICK_SKIP)
+            / indococo_bot::consts::TICKS_PER_SECOND
+            / 60.0;
+        if minutes > 0.0 {
+            n as f64 / minutes
+        } else {
+            0.0
+        }
+    }
+
+    fn summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "counts": self,
+            "resets_per_min": self.per_min(self.resets),
+            "resets_old_detector_per_min": self.per_min(self.resets_old_detector),
+            "uses_per_min": self.per_min(self.uses),
+            "episodes_with_reset_share": self.episodes_with_reset as f64 / self.episodes.max(1) as f64,
+            "episodes_with_early_reset_share":
+                self.episodes_with_early_reset as f64 / self.episodes.max(1) as f64,
+            "flier_early_reset_share":
+                self.flier_episodes_with_early_reset as f64 / self.episodes_as_flier.max(1) as f64,
+        })
+    }
+}
+
+/// Steps (3 s) during which a reset counts as early in its episode.
+const EARLY_STEPS: u64 = 45;
+
+/// One environment of the `rates` run, the candidate on car 0 (blue).
+struct RateSlot {
+    env: BotEnv,
+    state: GameState,
+    obs: Vec<Vec<f32>>,
+    prev: StateView,
+    label: &'static str,
+    steps_into_episode: u64,
+    flier: bool,
+    reset_this_episode: bool,
+    uses: FlipResetUse,
+    goals: FlipResetUse,
+}
+
+impl RateSlot {
+    fn new(mix: &[WeightedSetter]) -> Self {
+        let mut env = create_env(&RewardConfig::default(), mix);
+        let (state, obs, _) = env.reset();
+        let only = |use_weight, goal_bonus| {
+            FlipResetUse::new(FlipResetUseParams {
+                obtain: 0.0,
+                shot_bonus: 0.0,
+                use_weight,
+                goal_bonus,
+                ..FlipResetUseParams::default()
+            })
+        };
+        let mut slot = Self {
+            prev: StateView::from_game_state(&state),
+            label: env.get_shared_info().setter(),
+            env,
+            state,
+            obs,
+            steps_into_episode: 0,
+            flier: false,
+            reset_this_episode: false,
+            uses: only(1.0, 0.0),
+            goals: only(0.0, 1.0),
+        };
+        slot.start_episode();
+        slot
+    }
+
+    fn start_episode(&mut self) {
+        self.prev = StateView::from_game_state(&self.state);
+        self.label = self.env.get_shared_info().setter();
+        self.steps_into_episode = 0;
+        self.flier = self.prev.cars[0].pos.z > indococo_bot::state::AIRBORNE_MIN_Z;
+        self.reset_this_episode = false;
+        self.uses.reset(&self.prev);
+        self.goals.reset(&self.prev);
+    }
+
+    /// Steps with `actions` and counts the candidate's resets into `counts`.
+    fn step(&mut self, actions: &[usize], counts: &mut BTreeMap<&'static str, ResetCounts>) {
+        let res = self.env.step(&self.state, actions);
+        let view = self.env.get_shared_info().view(&res.state);
+        let c = counts.entry(self.label).or_default();
+        c.car_steps += 1;
+        if self.steps_into_episode == 0 {
+            c.episodes += 1;
+            c.episodes_as_flier += u64::from(self.flier);
+        }
+        self.steps_into_episode += 1;
+        if resets::is_flip_reset(&self.prev.cars[0], &view.cars[0], &view.ball) {
+            c.resets += 1;
+            if !self.reset_this_episode {
+                c.episodes_with_reset += 1;
+                let early = self.steps_into_episode <= EARLY_STEPS;
+                c.episodes_with_early_reset += u64::from(early);
+                c.flier_episodes_with_early_reset += u64::from(early && self.flier);
+            }
+            self.reset_this_episode = true;
+        }
+        c.resets_old_detector +=
+            u64::from(StepEvents::between(&self.prev, &view)[0].flip_reset_legacy);
+        c.uses += u64::from(self.uses.get_rewards(&view)[0] > 0.0);
+        c.goals_after_reset += u64::from(self.goals.get_rewards(&view)[0] > 0.0);
+        (self.state, self.obs, self.prev) = (res.state, res.obs, view);
+        if res.is_terminal || res.truncated {
+            let (state, obs, _) = self.env.reset();
+            (self.state, self.obs) = (state, obs);
+            self.start_episode();
+        }
+    }
+}
+
+fn load_actor(ckpt: &Path, dev: &Device) -> Net {
+    new_model(dev)
+        .actor
+        .try_load_file(ckpt.join("actor.bpk"))
+        .unwrap_or_else(|e| panic!("load actor {}: {e:?}", ckpt.display()))
+}
+
+/// Greedy actions of `actor` for a batch of observations.
+fn argmax_actions(actor: &Net, obs: &[&Vec<f32>], dev: &Device) -> Vec<usize> {
+    let flat: Vec<f32> = obs.iter().flat_map(|o| o.iter().copied()).collect();
+    let x = Tensor::<2>::from_data(TensorData::new(flat, [obs.len(), OBS_SIZE]), dev);
+    let logits = actor
+        .forward(x)
+        .into_data()
+        .try_to_vec::<f32>()
+        .expect("logits");
+    logits
+        .chunks(N_ACTIONS)
+        .map(|row| {
+            (0..N_ACTIONS)
+                .max_by(|&i, &j| row[i].total_cmp(&row[j]))
+                .expect("actions")
+        })
+        .collect()
+}
+
+fn rates_worker(
+    mix: &[WeightedSetter],
+    candidate: &Path,
+    opponent: Option<&Path>,
+    steps: usize,
+) -> BTreeMap<&'static str, ResetCounts> {
+    const ENVS: usize = 16;
+    let dev = Device::flex();
+    let cand = load_actor(candidate, &dev);
+    let opp = opponent.map(|p| load_actor(p, &dev));
+    let mut slots: Vec<RateSlot> = (0..ENVS).map(|_| RateSlot::new(mix)).collect();
+    let mut counts = BTreeMap::new();
+    for _ in 0..steps.div_ceil(ENVS) {
+        let blue: Vec<&Vec<f32>> = slots.iter().map(|s| &s.obs[0]).collect();
+        let orange: Vec<&Vec<f32>> = slots.iter().map(|s| &s.obs[1]).collect();
+        let a0 = argmax_actions(&cand, &blue, &dev);
+        let a1 = argmax_actions(opp.as_ref().unwrap_or(&cand), &orange, &dev);
+        for (i, slot) in slots.iter_mut().enumerate() {
+            slot.step(&[a0[i], a1[i]], &mut counts);
+        }
+    }
+    counts
+}
+
+/// Plays `steps` steps (greedy policies, candidate on blue) over the setter
+/// mix in `setters_toml` and prints the candidate's flip reset rates per
+/// setter and overall as one JSON line.
+fn rates(setters_toml: &Path, candidate: &Path, opponent: &str, steps: usize, threads: usize) {
+    #[derive(Deserialize)]
+    struct Mix {
+        state_setters: Vec<WeightedSetter>,
+    }
+    init_from_default(true).expect("load collision meshes");
+    let text = std::fs::read_to_string(setters_toml).expect("read setters");
+    let mix: Mix = toml::from_str(&text).expect("parse setters");
+    let opponent = (opponent != "self").then(|| PathBuf::from(opponent));
+    let per_thread = steps.div_ceil(threads);
+    let results: Vec<_> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let (mix, opp) = (&mix.state_setters, opponent.as_deref());
+                s.spawn(move || rates_worker(mix, candidate, opp, per_thread))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("worker"))
+            .collect()
+    });
+    let mut by_label: BTreeMap<&str, ResetCounts> = BTreeMap::new();
+    let mut all = ResetCounts::default();
+    for counts in &results {
+        for (label, c) in counts {
+            by_label.entry(label).or_default().add(c);
+            all.add(c);
+        }
+    }
+    let per_setter: serde_json::Map<String, serde_json::Value> = by_label
+        .iter()
+        .map(|(k, c)| ((*k).to_string(), c.summary()))
+        .collect();
+    let out = serde_json::json!({
+        "candidate": candidate,
+        "opponent": opponent.as_deref().map_or("self".into(), |p| p.display().to_string()),
+        "setters": setters_toml,
+        "steps": steps,
+        "all": all.summary(),
+        "per_setter": per_setter,
+    });
+    println!("{out}");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| -> &str {
@@ -515,6 +772,13 @@ fn main() {
             Path::new(arg(2)),
             arg(3).parse().expect("steps"),
             args.get(4).map(Path::new),
+        ),
+        "rates" => rates(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3),
+            arg(4).parse().expect("steps"),
+            args.get(5).map_or(8, |t| t.parse().expect("threads")),
         ),
         other => panic!("unknown mode {other:?}"),
     }
