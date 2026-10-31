@@ -15,3 +15,9 @@ git pull
 Filenames are stable and overwritten on each export so the folder stays two
 ~30MB files (git history still grows per export — that's the accepted cost of
 pull-and-test convenience).
+
+## Rust bot folders (indococo-ppo branch)
+
+Each `rlbot_*` folder here is a complete RLBot bot: copy it into your bot folder.
+
+- `rlbot_indococo_ppo_adb_832M/`: ADB 832M, 63.6% vs 430M, pool 84.7 (see `AB_ADB832M.md`)
