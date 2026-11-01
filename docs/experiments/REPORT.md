@@ -15,7 +15,7 @@ We moved the 1v1 bot from the Python rlgym-ppo stack to **indococo-ppo**, a Rust
 - **R3.** FR3, a staged reset curriculum with potential-based wheel-alignment shaping, never left level 0. Run 3 (41.5M steps) held about 1% success on the easiest level, below the 7.3% a car with no input gets. Run 4 (easier level 0, aerial terms zeroed in curriculum episodes, entropy 0.025) held about 5% against an 18% no-input baseline and was stopped at 895.6M so the air rewards could be audited first.
 - **R4.** AUD reworked the four air dribble terms to pay only goalward progress, with decay and caps. Warm-started from ADB-832M, its 1131.6M final beat ADB-832M **64.6%** over 1000 games with pool score **87.0**. There was no control arm, so part of that gain is just 300M more steps.
 - **R5.** FR4 put the FR3 run-4 reset curriculum on top of the AUD rewards (1131.6M → 1431.6M). It is the strongest bot so far: **63.3%** vs ADB-832M, **53.2%** vs AUD-final, pool **87.1** (Nexto 89.8). The curriculum still never left level 0 (about 4% success against 18% for no input), and **no checkpoint has used a reset**.
-- **R6.** FR5 cloned a discrete scripted reset expert (52–55% at level 0) into the policy, then ran PPO in 25M-step chunks with BC refreshes (1431.6M → 1731.6M). The skill now survives PPO in the curriculum: 27.4% level-0 success greedy, against 1.9% for FR4 and 17.9% for no input, with ~90% of resets used. It still gets **0 uses in real play**. The final h2h/pool evals accidentally scored the warm start (44.8% vs FR4, pool 82.8; see §9.5), so 1731.6M's strength is not yet measured. Not shipped.
+- **R6.** FR5 cloned a discrete scripted reset expert (52–55% at level 0) into the policy, then ran PPO in 25M-step chunks with BC refreshes (1431.6M → 1731.6M). The skill now survives PPO in the curriculum: 27.4% level-0 success greedy, against 1.9% for FR4 and 17.9% for no input, with ~90% of resets used. It still gets **0 uses in real play**. The final h2h/pool evals accidentally scored the warm start (44.8% vs FR4, pool 82.8; see §9.5), re-run on a fresh export: 1731.6M scores 44.9% vs FR4, 46.6% vs AUD, pool 83.0, 82.8% vs Nexto. Not shipped.
 
 ## 1. Setup
 
@@ -573,7 +573,7 @@ Fixes in this commit:
 - `indococo-train export` now calls `.overwrite(true)`.
 - `fr5_launch.sh` deletes the target first and aborts if export fails.
 
-The final checkpoint's h2h and pool400 should be re-run before any strength claim about 1731.6M.
+**Re-run** (fresh export of `checkpoints/1793494122`, results in `~/ippo_runs/fr5_final_fixed/`): 1731.6M scores **44.9% vs FR4-final** and **46.6% vs AUD-final** over 1000 games each (seed 424242), **pool400 83.0** with **82.8% vs Nexto**. Real-game reset uses remain 0.
 
 ### 9.6 Training-side numbers
 
@@ -588,15 +588,14 @@ The final checkpoint's h2h and pool400 should be re-run before any strength clai
 
 - **Progress:** for the first time the reset skill **survives PPO** in the curriculum. L0 is 27.4% greedy (FR4: 1.9%), above no input at every level, with about 90% of resets used.
 - **No transfer:** it does **not transfer to real games**. There were 0 uses in 300k steps, and the 7 resets came almost all from curriculum spawns.
-- **Strength:** the measured strength (44.8% vs FR4, pool 82.8) is for the warm start (9.5). The 1731.6M strength is **not yet measured**.
-- **Shipping rule:** a checkpoint ships if it uses resets in games while staying ≥48% vs FR4, or if it beats FR4 >50%. FR5 fails the first clause on transfer alone, whatever its strength. The second clause is untested until the re-run. **No `.bpk` was pushed to `checkpoints_to_test/`.**
+- **Strength:** the measured strength (44.8% vs FR4, pool 82.8) is for the warm start (9.5). The re-run 1731.6M strength is **44.9% vs FR4, 46.6% vs AUD (1000 games, seed 424242), pool400 83.0, 82.8% vs Nexto**: weaker than FR4 (pool 87.1).
+- **Shipping rule:** a checkpoint ships if it uses resets in games while staying ≥48% vs FR4, or if it beats FR4 >50%. FR5 fails the first clause on transfer alone, whatever its strength. It also fails the second (44.9% vs FR4). **No `.bpk` was pushed to `checkpoints_to_test/`.**
 
 **Next ideas:**
 1. A BC/KL term inside the PPO loss (framework change), instead of alternating chunks, so the skill isn't eroded between refreshes.
 2. More curriculum levels near real game states (car and ball from real aerial situations: off a wall, from a pop), bridging L2 and kickoff play.
 3. A reset-use reward paid only when the use leads to a shot or goal, so resets become goal-directed rather than a curriculum trick.
 4. Lowering the `reset_curriculum` setter share (27–30%) to protect normal play.
-5. Re-run the 1731.6M h2h/pool400 with the fixed export.
 
 ## 10. Summary of checkpoints
 
@@ -613,7 +612,7 @@ The final checkpoint's h2h and pool400 should be re-run before any strength clai
 | FR3 | — | R3 | stopped at level 0; no checkpoint kept | box: `exp_FR3_run4` |
 | **AUD-1132M** | 1131.6M | R4 | **64.6% vs ADB-832M** (1000 g); pool 87.0 | `checkpoints_to_test/aud_1132M.bpk` |
 | **FR4-1432M** | 1431.6M | R5 | **63.3% vs ADB-832M**, **53.2% vs AUD-1132M** (1000 g); **pool 87.1** (best) | `checkpoints_to_test/fr4_1432M.bpk` |
-| FR5-1732M | 1731.6M | R6 | L0 reset success 27.4% greedy; 0 uses in real play; h2h/pool not yet measured (§9.5) | box: `exp_FR5/checkpoints/1793494122`; not shipped |
+| FR5-1732M | 1731.6M | R6 | L0 reset success 27.4% greedy; 0 uses in real play; 44.9% vs FR4, 46.6% vs AUD, pool400 83.0, Nexto 82.8% (re-run, §9.5) | box: `exp_FR5/checkpoints/1793494122`; not shipped |
 
 ## 11. Lessons learned and threats to validity
 

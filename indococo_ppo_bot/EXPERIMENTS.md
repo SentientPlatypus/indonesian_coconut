@@ -493,9 +493,11 @@ already existed and burn-store doesn't overwrite by default), so the h2h
 scored the stale bc_v2 warm start (sha256 matches an export of
 `checkpoints/1431600000`), not 1731.6M. `curr`/`rates` are valid. Fixed:
 `export` now overwrites, and `fr5_launch.sh` removes the target and aborts on
-export failure. Re-run the h2h/pool400 for 1731.6M.
+export failure. Re-run with a fresh export (`fr5_final_fixed/`): 1731.6M
+scored 44.9% vs FR4-final, 46.6% vs AUD-final (1000 games, seed 424242),
+pool400 83.0 (Nexto 82.8%); 0 real-game reset uses.
 
-Not shipped: no reset use in games fails the keep rule (uses resets in games
+Not shipped: no reset use in games and <50% vs FR4 fails the keep rule (uses resets in games
 while >=48% vs FR4, or >50% vs FR4). Next: BC/KL term inside the PPO loss;
 curriculum levels nearer real game states; reset-use reward only when it
 leads to a shot/goal; lower the reset_curriculum share (27-30%). Full
