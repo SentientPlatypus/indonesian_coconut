@@ -33,6 +33,7 @@ cp "$SRC"/NectoFamily/nexto/{agent.py,nexto_obs.py,nexto-model.pt} "$DEST/nexto/
 cp "$SRC"/NectoFamily/necto/{agent.py,necto_obs.py,necto-model.pt} "$DEST/necto/"
 cp -r "$SRC"/Elementv5/src/{agent.py,obs.py,model.p,sequences} "$DEST/element/"
 cp -r "$SRC"/rlbotpack_v4/RLBotPack/Immortal/{agent.py,jit.pt,obs,action} "$DEST/immortal/"
+mkdir -p "$DEST/seer"; cp "$SRC"/rlbotpack_v4/RLBotPack/Seer/{helper.py,Seer.pt} "$DEST/seer/"  # needs numba, scikit-learn
 
 cp -r "$SRC"/Ripple-RLBot/{src,bots,LICENSE,NOTICE} "$DEST/ripple/"
 for b in kira:Kira dice:Dice-BotPackV5 chronos:Chronos galactus:GalactusV2; do

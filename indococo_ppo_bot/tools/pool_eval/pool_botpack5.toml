@@ -29,3 +29,8 @@ padded = 3
 name = "galactus"      # SoldierDoge/GalactusV2 201B, GalactusOBS (ball prediction), LeakyReLU, no license file
 kind = "galactus"
 path = "~/eval_bots/galactus"
+
+[[opponent]]
+name = "seer"          # Neville Walo, RLBotPack v4 RLBotPack/Seer (0033a98), LSTM, pack MIT; needs numba + scikit-learn
+kind = "seer"
+path = "~/eval_bots/seer"

@@ -298,3 +298,90 @@ class Galactus(GigaLearn):
                 pv = pv * np.concatenate([INV, INV])
             obs += list(pv[:3] / 5000) + list(pv[3:] / 2300)
         return np.asarray(obs, dtype=np.float32)
+
+
+class Seer(Agent):
+    """Seer (Neville Walo, RLBotPack v4 `RLBotPack/Seer`): 1v1 LSTM (512) policy.
+
+    Runs the bot's own `helper.py` (Seer_Network, invert_*, impute_features,
+    one-hot action encoding; needs numba + scikit-learn) on a v4-packet view of
+    the RocketSim state, mirroring its `bot.py`:
+    - packet fields: location, euler (pitch, yaw, roll; RLBot convention via
+      RLGym's quat_to_euler), velocity, angular velocity, demo timer (seconds
+      demolished, counting up), boost 0-100, has_wheel_contact, has_flip;
+      orange plays inverted (bot index != 0).
+    - pad `timer` as in RLBot v4: seconds since pickup, 0 when active
+      (RocketSim keeps the countdown; converted with 4 s / 10 s respawn).
+    - has_flip: not double_jumped (v4 sets it after a dodge too) and not
+      (jumped and > 1.5 s since last wheel contact), wheel contact sampled at
+      decisions like the bot does.
+    - LSTM state and prev action reset per game; greedy actions; tick skip 8.
+    """
+
+    tick_skip = 8
+
+    def __init__(self, directory: str) -> None:
+        super().__init__()
+        import torch
+
+        self._helper = load_module(os.path.join(directory, "helper.py"), "seer_helper")
+        self.model = self._helper.Seer_Network()
+        self.model.load_state_dict(torch.load(os.path.join(directory, "Seer.pt"), map_location="cpu"))
+        self.model.eval()
+
+    def reset(self, view: AgentView) -> None:
+        import torch
+
+        super().reset(view)
+        self.state = (torch.zeros(1, 1, 512), torch.zeros(1, 1, 512))
+        self.prev_action = np.array([1.0, 2.0, 2.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        self.last_contact = {}
+        self.demo = {}
+        self.last_tick = view.tick
+
+    def _player(self, cid, car, tick, inverted) -> np.ndarray:
+        p = car.physics
+        pitch, yaw, roll = p.euler_angles
+        t = tick / 120.0
+        if car.on_ground or cid not in self.last_contact:
+            self.last_contact[cid] = t
+        timeout = (t - self.last_contact[cid]) > self._helper.flip_timeout and car.has_jumped
+        double_jumped = car.has_double_jumped or car.has_flipped
+        has_flip = (not double_jumped) and not timeout
+        a = np.array([*p.position, pitch, yaw, roll, *p.linear_velocity, *p.angular_velocity,
+                      self.demo.get(cid, 0.0), car.boost_amount, float(car.on_ground), float(has_flip)],
+                     dtype=np.float32)
+        return self._helper.invert_player_data(a) if inverted else a
+
+    def decide(self, view: AgentView) -> np.ndarray:
+        import torch
+
+        s, h = view.state, self._helper
+        dt = (view.tick - self.last_tick) / 120.0
+        self.last_tick = view.tick
+        for cid, car in s.cars.items():
+            self.demo[cid] = self.demo.get(cid, 0.0) + dt if car.is_demoed else 0.0
+        inverted = view.car.team_num == 1
+        opp = next(c for c in s.cars if c != view.car_id)
+        me_a = self._player(view.car_id, view.car, view.tick, inverted)
+        op_a = self._player(opp, s.cars[opp], view.tick, inverted)
+        cd = np.asarray(s.boost_pad_timers, dtype=np.float64)
+        from rlgym.rocket_league.common_values import BOOST_LOCATIONS
+
+        respawn = np.where(np.asarray(BOOST_LOCATIONS)[:, 2] > 72, 10.0, 4.0)
+        pads = np.where(cd > 0, respawn - cd, 0.0).astype(np.float32)
+        if inverted:
+            pads = h.invert_boost_data(pads)
+        b = s.ball
+        ball = np.array([*b.position, *b.linear_velocity, *b.angular_velocity], dtype=np.float32)
+        if inverted:
+            ball = h.invert_ball_data(ball)
+        enc = h.get_action_encoding(self.prev_action.reshape(1, -1))
+        x = h.impute_features(me_a, op_a, pads, ball, enc.reshape(-1)).reshape(1, -1)
+        with torch.no_grad():
+            actions, _, _, self.state = self.model(torch.tensor(x, dtype=torch.float32), self.state,
+                                                   torch.zeros(1), True)
+        a = actions.numpy()[0]
+        self.prev_action = a.astype(np.float32)
+        sy = a[1] * 0.5 - 1.0
+        return np.array([a[0] - 1.0, sy, a[2] * 0.5 - 1.0, sy, a[3] - 1.0, a[4], a[5], a[6]], dtype=np.float64)

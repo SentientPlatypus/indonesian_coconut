@@ -643,7 +643,7 @@ Nov 1 2026) ships several stronger ML bots with weights.
 | Swishy | bccessnadev/RLBot-Swishy | GigaLearn | hoops | skipped: hoops only |
 | ChadGPT | thecosmicskye/ChadGPT | bf16 sharded relational model | 3v3 hivemind | skipped: 3v3 only |
 | TensorBot (v4, v5) | HappyBavarian07/TensorBot-v5 | torch `.pt`, blue/orange models | ? | skipped: separate per-team models, undocumented obs |
-| Seer | RLBot/RLBotPack | LSTM `.pt` | yes | skipped: raw packet fields, needs packet shim |
+| Seer | RLBot/RLBotPack (v4) `RLBotPack/Seer` | LSTM state dict `Seer.pt` | yes | **added** (packet shim, see below) |
 | Omus, Monkey, Vector, Engine | RLBot/RLBotPack | SB3 zip | yes | skipped: old SB3 bots, weaker than Necto |
 
 ### Setup
@@ -666,7 +666,23 @@ Nexto, Kira 29-11, Dice 34-6, Chronos 27-13, Galactus 17-3).
 | **GalactusV2** | **15.5 ± 1.8 (62-338)** | **17.8 ± 1.9 (71-329)** |
 | mean (5 bots) | 48.9 | 49.5 |
 
+| Seer | 100.0 (400-0) | 99.5 ± 0.4 (398-2) |
+
 A repeat FR4-final vs Galactus run gave 70-330 (17.5%). No timeouts.
+
+Seer (added the same day): Neville Walo's 1v1 LSTM bot from the v4 pack
+(commit 0033a98, pack license MIT; the RLRL source repo named in its bot.cfg
+is not public). The adapter runs its own `helper.py` (network, feature
+imputation, one-hot previous action) on a v4-packet view: RLBot euler angles
+(RLGym `quat_to_euler`, checked: facing +y gives yaw pi/2, right side down
+gives positive roll), demo timer counting up, v4 pad timers (seconds since
+pickup), its own has_flip rule, LSTM state reset per game, greedy actions.
+Sanity: beats zero and random 6-0, but loses to every old pool bot (Nexto
+2-38, Necto 1-19, Immortal 3-17, Element 4-15-1 over 20-40 games, symmetric
+by side). Feeding pad cooldowns instead of v4 pad timers changed nothing
+(6-34 vs Element). Seer is a 2022 bot, older than Necto, so this is probably
+its real strength, but a shim mismatch can't be fully ruled out. Either way
+it is too weak to be a useful benchmark (FR6-final 400-0).
 Figure: `docs/experiments/figures/botpack5_bench.png`
 (`make_figures_botpack5.py`; data `docs/experiments/data/botpack5_bench.jsonl`).
 

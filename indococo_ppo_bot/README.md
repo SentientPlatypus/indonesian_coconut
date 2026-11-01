@@ -60,7 +60,7 @@ indococo_ppo_bot/
   tools/eval_loop.sh      pool evals + keep-best during training
   tools/bc/bc_pretrain.py FR5/FR6 behavior cloning: CE to expert labels + KL to the frozen (or --teacher) actor on normal play
   tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal;
-                          pool_botpack5.toml: RLBot v5 botpack Ripple, Kira, Dice, Chronos, Galactus
+                          pool_botpack5.toml: RLBot v5 botpack Ripple, Kira, Dice, Chronos, Galactus + v4 Seer
   config/E8b_shell_contact_strong.json  E8B2 experiment config (input to parity.py)
 ```
 
@@ -321,9 +321,9 @@ README for the protocol and per-bot details.
 
 A second pool, `tools/pool_eval/pool_botpack5.toml`, holds the ML bots of the
 RLBot v5 botpack (Ripple v1.1, and the GigaLearn bots Kira, Dice, Chronos and
-GalactusV2), run through `poolkit/botpack5.py`. It is kept out of `pool.toml`
+GalactusV2) plus Seer from the v4 pack, run through `poolkit/botpack5.py`. It is kept out of `pool.toml`
 so the historical pool score stays comparable; pass `--pool
-tools/pool_eval/pool_botpack5.toml` to use it. Ripple needs `onnxruntime`.
+tools/pool_eval/pool_botpack5.toml` to use it. Ripple needs `onnxruntime`; Seer needs `numba` and `scikit-learn` (with numpy pinned to 1.26.4 for rlgym).
 
 ```bash
 python tools/pool_eval/pool_eval.py --candidate checkpoints/<n> --games 400 --procs 32

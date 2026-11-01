@@ -19,7 +19,7 @@ for f in ("botpack5_ref_pool400.jsonl", "botpack5_bench.jsonl"):
         r = json.loads(line)
         rows.setdefault((r["candidate"], r["opponent"]), r)
 opps = ["1v1.pt", "ppo_430M", "necto", "element", "immortal", "nexto",
-        "chronos", "kira", "dice", "ripple", "galactus"]
+        "seer", "chronos", "kira", "dice", "ripple", "galactus"]
 x = np.arange(len(opps))
 fig, ax = plt.subplots(figsize=(11, 4.2))
 for k, (cand, col) in enumerate((("FR6final", "tab:blue"), ("FR4final", "tab:orange"))):
@@ -29,7 +29,7 @@ for k, (cand, col) in enumerate((("FR6final", "tab:blue"), ("FR4final", "tab:ora
 ax.axhline(50, color="k", lw=0.8, ls="--")
 ax.axvline(5.5, color="gray", lw=0.8)
 ax.text(2.5, 103, "pool.toml (old pool)", ha="center")
-ax.text(8.5, 103, "pool_botpack5.toml (RLBot v5 botpack)", ha="center")
+ax.text(9, 103, "pool_botpack5.toml (RLBot v5 botpack)", ha="center")
 ax.set_xticks(x, opps)
 ax.set_ylim(0, 110)
 ax.set_ylabel("win % (decisive, 400 games, ±1 se)")

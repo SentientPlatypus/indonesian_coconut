@@ -9,3 +9,5 @@
 {"time": "2026-11-01T14:46:16-05:00", "candidate": "FR4final", "opponent": "galactus", "games": 400, "wins": 71, "losses": 329, "timeouts": 0, "win_rate_decisive": 0.1775, "se": 0.0191, "seed": 424242}
 {"time": "2026-11-01T14:47:48-05:00", "candidate": "FR6final", "opponent": "galactus", "games": 400, "wins": 62, "losses": 338, "timeouts": 0, "win_rate_decisive": 0.155, "se": 0.0181, "seed": 424242}
 {"time": "2026-11-01T14:49:25-05:00", "candidate": "FR4final", "opponent": "galactus", "games": 400, "wins": 70, "losses": 330, "timeouts": 0, "win_rate_decisive": 0.175, "se": 0.019, "seed": 424242}
+{"time": "2026-11-01T15:14:56-05:00", "candidate": "FR6final", "opponent": "seer", "games": 400, "wins": 400, "losses": 0, "timeouts": 0, "win_rate_decisive": 1.0, "se": 0.0, "seed": 424242}
+{"time": "2026-11-01T15:16:20-05:00", "candidate": "FR4final", "opponent": "seer", "games": 400, "wins": 398, "losses": 2, "timeouts": 0, "win_rate_decisive": 0.995, "se": 0.0035, "seed": 424242}
