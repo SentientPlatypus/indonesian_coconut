@@ -17,6 +17,16 @@ Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh eng
 ### aud.pt
 The AUD 1132M policy (same weights as `aud_1132M.bpk`) converted to the Python `DiscreteFF` state_dict format with `indococo_ppo_bot/tools/bpk_to_pt/`. It's byte-identical to `rlbot_submission/policies/1v1.pt` on master (sha256 `15e16300…53f68`). To test it in the Python bot: `cp checkpoints_to_test/aud.pt rlbot_submission/policies/1v1.pt`.
 
+### fr6_2632M.bpk
+
+| | |
+|---|---|
+| Lineage | FR6 arm (FR4-final + behaviour cloning of a scripted reset expert, then 1.2B steps of PPO in 50M chunks, each followed by a BC refresh anchored to FR4-final), 2631.6M steps (trainer dir `1793540902`) |
+| H2H | **48.0%** vs FR4-final (480-520), **47.6%** vs AUD-final (476-524), over 1000 games each |
+| Pool | **85.0**: 1v1.pt 65.8, 430M 69.3, Nexto 85.8, Necto 96.5, Element 98.3, Immortal 94.5 |
+| Flip resets | First checkpoint here that *uses* resets: on `rates_fr3.toml` (300k steps) 9 resets, **4 uses**, 0 goals after a reset. All 4 uses came in `reset_curriculum` start states; kickoff-started play had 1 reset and 0 uses. Curriculum level-0 success 29.8% greedy (FR4: 1.9%), ~94% of resets used. |
+| sha256 | `4fe4736eeb0a92dce7c7347945d9e8b693856427720ec3a435c2b885df9cefb5` |
+
 ### fr4_1432M.bpk
 
 | | |

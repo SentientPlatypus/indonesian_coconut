@@ -1,6 +1,6 @@
 # Teaching a PPO Rocket League bot flip resets and air dribble bumps: experiment report
 
-*indonesian_coconut, `indococo-ppo` branch. Training runs of Oct 30–31, 2026 on one NVIDIA L4. All times are America/New_York (ET).*
+*indonesian_coconut, `indococo-ppo` branch. Training runs of Oct 30 – Nov 1, 2026 on one NVIDIA L4. All times are America/New_York (ET).*
 
 Every number below comes from the run logs on the training box (`~/ippo_runs`), copied into [`data/`](data/). Anything that was not logged says **not recorded**. [`make_figures.py`](make_figures.py) rebuilds every figure from `data/`, and [`extract_data.py`](extract_data.py) rebuilds `data/` from a copy of `~/ippo_runs`.
 
@@ -16,6 +16,7 @@ We moved the 1v1 bot from the Python rlgym-ppo stack to **indococo-ppo**, a Rust
 - **R4.** AUD reworked the four air dribble terms to pay only goalward progress, with decay and caps. Warm-started from ADB-832M, its 1131.6M final beat ADB-832M **64.6%** over 1000 games with pool score **87.0**. There was no control arm, so part of that gain is just 300M more steps.
 - **R5.** FR4 put the FR3 run-4 reset curriculum on top of the AUD rewards (1131.6M → 1431.6M). It is the strongest bot so far: **63.3%** vs ADB-832M, **53.2%** vs AUD-final, pool **87.1** (Nexto 89.8). The curriculum still never left level 0 (about 4% success against 18% for no input), and **no checkpoint has used a reset**.
 - **R6.** FR5 cloned a discrete scripted reset expert (52–55% at level 0) into the policy, then ran PPO in 25M-step chunks with BC refreshes (1431.6M → 1731.6M). The skill now survives PPO in the curriculum: 27.4% level-0 success greedy, against 1.9% for FR4 and 17.9% for no input, with ~90% of resets used. It still gets **0 uses in real play**. The final h2h/pool evals accidentally scored the warm start (44.8% vs FR4, pool 82.8; see §9.5), re-run on a fresh export: 1731.6M scores 44.9% vs FR4, 46.6% vs AUD, pool 83.0, 82.8% vs Nexto. Not shipped.
+- **R7.** FR6 started from FR4-final plus BC and anchored every BC refresh to the fixed FR4-final (1431.6M → 2631.6M, 15% reset practice). Its final is the **first checkpoint to use resets in play**: 4 uses in 300k `rates_fr3.toml` steps (0 goals after), all from curriculum-style spawns. Strength held level with FR4: **48.0%** vs FR4-final, 47.6% vs AUD-final (1000 games), pool 85.0 (Nexto 85.8). Shipped as `fr6_2632M.bpk` (keep rule: uses > 0 and ≥ 48% vs FR4).
 
 ## 1. Setup
 
@@ -597,7 +598,61 @@ Fixes in this commit:
 3. A reset-use reward paid only when the use leads to a shot or goal, so resets become goal-directed rather than a curriculum trick.
 4. Lowering the `reset_curriculum` setter share (27–30%) to protect normal play.
 
-## 10. Summary of checkpoints
+## 10. R7: FR6, keep FR4's strength and anchor the cloned skill to FR4 (1431.6M → 2631.6M)
+
+**Why.** FR5 (§9) learned the reset in the curriculum but never used one in real play and lost strength (44.9% vs FR4). Three likely causes: the adaptive curriculum never left level 0 while `rates_fr3.toml` spawns level-2 states; each BC refresh distilled toward the *current* actor, so normal play drifted; and 27–30% of episodes were reset practice. Full design in `indococo_ppo_bot/EXPERIMENTS.md`, Round 7 (commit `20e4e2e`).
+
+### 10.1 Design
+
+- **Start:** FR4-final, behaviour-cloned for 3000 steps on the FR5 expert data plus DAgger sets, with KL 5 to the *fixed* FR4-final on normal play (`fr6_bc/t_fr4_kl5`): 52.5% vs FR4 (200 g), L0 20.6% / L2 4.4% greedy, 0 resets in 100k rates steps. Starting from FR5 instead kept more skill but lost too much strength (33–40.5% vs FR4).
+- **Training:** `fr4.toml` rewards, reset practice cut to 15% (fixed curriculum levels 1/2/3 at 4/5/3% plus `air_reset` 3%), FR4-final opponent weight 1.5, entropy 0.015, LR held to 2131.6M then cosine to 0.4×. 24 PPO chunks of 50M steps; after each, a 1500-step BC refresh whose KL teacher is always FR4-final, then a mid-run check (100k-step `rates_fr3.toml` + 200-game h2h vs FR4-final) into `logs/mid.jsonl`.
+- About 62.8k steps/s; training ran 2:40 AM → 8:50 AM ET Nov 1, final evals finished 9:09 AM ET.
+
+### 10.2 Mid-run checks (`data/fr6_mid.csv`)
+
+![FR6 mid-run](figures/fr6_mid.png)
+
+Every chunk's rates check had 1–9 resets per 100k steps and 20 of 24 had at least one use (0–4 per chunk), but **0 goals after a reset in every check**. The 200-game h2h vs FR4-final wandered between 43.0% and 58.0% (mean 48.8%, ±3.5 per point) with no trend: the FR4 anchor held strength roughly flat rather than improving it. The 58% point at 2191.6M had 0 uses.
+
+![FR6 training](figures/fr6_training.png)
+
+Training-side, the reset rate drifted down slowly (about 0.033 → 0.027/min), entropy jumps after each BC refresh and decays back within the chunk, and goals per min and air ratio stayed flat.
+
+### 10.3 Final evaluation (`~/ippo_runs/fr6_final/`, seed 424242)
+
+Final checkpoint `exp_FR6/checkpoints/1793540902` (`cumulative_timesteps = 2631600000`), whose `actor.bpk` is the post-chunk BC-refreshed actor (the pure PPO actor is kept as `actor_ppo.bpk`). The export was deleted and rewritten before evaluation (`final_policy.safetensors`, sha256 `36142c12…ed3ab`, written 8:50 AM ET), so the §9.5 stale-export bug does not apply.
+
+**Strength:**
+
+| measure | FR6-final | FR4-final | FR5-final (re-run) |
+|---|---|---|---|
+| h2h vs FR4-final, 1000 games | **48.0%** (480-520, ±1.6) | — | 44.9% |
+| h2h vs AUD-final, 1000 games | 47.6% (476-524, ±1.6) | 53.2% | 46.6% |
+| pool score (400 games/opponent) | 85.0 | 87.1 | 83.0 |
+| vs 1v1.pt / 430M / Nexto | 65.8 / 69.3 / 85.8 | 68.0 / 71.0 / 89.8 | — / — / 82.8 |
+| vs Necto / Element / Immortal | 96.5 / 98.3 / 94.5 | 98.0 / 99.5 / 96.5 | — |
+
+**Real play** (`rates_fr3.toml`, 300k steps, self-play): 1073 episodes, **9 resets (0.027/min), 4 uses (0.012/min)**, 0 goals after a reset. By setter: `reset_curriculum` 8 resets / 4 uses, kickoff 1 reset / 0 uses, `air_reset` 0 / 0. Earned-reset share of flier episodes 2.5% (FR5: 1.8%). This is the first checkpoint with nonzero uses on this mix (FR4: 0.003/min, 0 uses; FR5: 0.021/min, 0 uses). Caveat: all 4 uses start from curriculum-style spawns, so the bot still does not set up and use a reset from kickoff play.
+
+**Curriculum skill** (960 episodes per row):
+
+| level | greedy | sampled | used/success (greedy) | FR5-final greedy | no input |
+|---|---|---|---|---|---|
+| L0 | **29.8%** | 18.5% | 94% | 27.4% | 17.9% |
+| L1 | 22.0% | 12.0% | 93% | 18.4% | 10.2% |
+| L2 | 9.5% | 6.4% | 93% | 8.5% | 3.1% |
+
+![FR6 levels](figures/fr6_levels.png)
+
+### 10.4 Verdict
+
+- **Keep rule met, just:** real-game uses > 0 (4) and 48.0% vs FR4-final over 1000 games (bar ≥ 48%). Pushed as `checkpoints_to_test/fr6_2632M.bpk` (sha256 `4fe4736e…cefb5`).
+- **Strength:** statistically level with FR4 (48.0 ± 1.6), slightly behind AUD and 2.1 pool points below FR4 (Nexto 85.8 vs 89.8). Anchoring every BC refresh to FR4 fixed FR5's strength loss but 1.2B more steps bought no improvement.
+- **Skill:** the cloned skill survives and is slightly better than FR5 at every level, and the bot now completes the reset-then-dodge sequence in game-like spawns, but it is rare (0.012 uses/min), never from kickoff play, and never yet leads to a goal.
+
+**Next ideas:** a use reward paid only when the use leads to a shot or goal; curriculum spawns derived from real aerial situations (wall pops, ground-to-air) to bridge into kickoff play; a BC/KL term inside the PPO loss instead of alternating chunks.
+
+## 11. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
 |---|---|---|---|---|
@@ -613,8 +668,9 @@ Fixes in this commit:
 | **AUD-1132M** | 1131.6M | R4 | **64.6% vs ADB-832M** (1000 g); pool 87.0 | `checkpoints_to_test/aud_1132M.bpk` |
 | **FR4-1432M** | 1431.6M | R5 | **63.3% vs ADB-832M**, **53.2% vs AUD-1132M** (1000 g); **pool 87.1** (best) | `checkpoints_to_test/fr4_1432M.bpk` |
 | FR5-1732M | 1731.6M | R6 | L0 reset success 27.4% greedy; 0 uses in real play; 44.9% vs FR4, 46.6% vs AUD, pool400 83.0, Nexto 82.8% (re-run, §9.5) | box: `exp_FR5/checkpoints/1793494122`; not shipped |
+| **FR6-2632M** | 2631.6M | R7 | first checkpoint with real-play reset uses (4 per 300k steps, 0 goals after); 48.0% vs FR4, 47.6% vs AUD (1000 g); pool 85.0 | `checkpoints_to_test/fr6_2632M.bpk` |
 
-## 11. Lessons learned and threats to validity
+## 12. Lessons learned and threats to validity
 
 1. **100-game evals are noisy** (±5 pts per opponent). The same 430.8M checkpoint scored 81.5 and 80.8 in two 100-game pool evals and 79.0 over 400 games. Periodic keep-best decisions near the threshold are partly luck, so only the 1000-game h2hs (±1.6) should rank close candidates. ADB vs X0 at 52.1% is not significant.
 2. **Self-play zero-sum effects.**
@@ -628,8 +684,9 @@ Fixes in this commit:
 7. **Single seed per run.** Every training run is one seed, so run-to-run variance is not recorded.
 8. **Headless ≠ RLBot.** Headless evals apply actions on the tick they are chosen, while RLBot runs them a few ticks late. Nexto's headless numbers may differ from live matches.
 
-## 12. Future work
+## 13. Future work
 
+- FR6 (§10) got the first real-play uses at FR4-level strength, but only from curriculum-style spawns and with no goals after a reset; see §10.4.
 - FR5 (§9) solved the curriculum-level skill with behaviour cloning but not transfer to real play; see §9.7 for the next ideas. Earlier notes on the curriculum (failed three times, FR3 runs 3–4, FR4):
   - behaviour cloning or a warm-up from the scripted aligner, which gets 54.7% at L0;
   - a separate reset-specialist policy, distilled later (an idea from Discord);
@@ -656,6 +713,8 @@ Fixes in this commit:
 | `metrics_exp_FR5.csv` | FR5 training metrics (both attempts, column `attempt`) |
 | `fr5_bc_refresh.csv` | FR5 level-0 success of the PPO and BC actors at every refresh |
 | `reward_shares_FR5.csv` | FR5 \|reward\| shares, last 20 iterations |
+| `metrics_exp_FR6.csv` | FR6 training metrics, 10-iteration means |
+| `fr6_mid.csv` | FR6 mid-run checks: rates counts and 200-game h2h vs FR4-final per chunk |
 | `metric_keys_used.txt` | the metric keys used |
 
 **Metric keys used:**
@@ -680,3 +739,5 @@ Fixes in this commit:
 - FR5-final (1731.6M) h2h and pool400: the run scored the stale warm-start export (§9.5).
 
 FR5 figures (`fr5_*.png`, `reward_share_exp_FR5.png`) and the three FR5 CSVs are made by [`make_figures_fr5.py`](make_figures_fr5.py) from `exp_FR5/logs/{metrics,bc_refresh}.jsonl`.
+
+FR6 figures (`fr6_*.png`) and the two FR6 CSVs are made by [`make_figures_fr6.py`](make_figures_fr6.py) from `exp_FR6/logs/{metrics,mid}.jsonl` and `fr6_final/curr.jsonl`.

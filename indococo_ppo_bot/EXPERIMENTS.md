@@ -536,3 +536,24 @@ FR4+BC keeps strength and still has a cloned skill. Chosen: FR4-final + BC (KL 5
   then a mid-run eval into `logs/mid.jsonl` (rates 100k steps + 200-game h2h vs FR4-final).
 - Final evals into `fr6_final/` (FR5 conventions; export target deleted first, aborts on failure).
 - Keep rule: real-game uses > 0 and >= 48% vs FR4-final over 1000 games, or > 50% vs FR4.
+
+### FR6 result
+Training ended at 2631.6M (checkpoint dir `exp_FR6/checkpoints/1793540902`, BC-refreshed actor;
+fresh export, final evals in `fr6_final/`, seed 424242):
+
+| measure | FR6-final | FR4-final |
+|---|---|---|
+| h2h vs FR4-final (1000 g) | **48.0%** (480-520) | — |
+| h2h vs AUD-final (1000 g) | 47.6% (476-524) | 53.2% |
+| pool400 | 85.0 (1v1.pt 65.8, 430M 69.3, Nexto 85.8, Necto 96.5, Element 98.3, Immortal 94.5) | 87.1 |
+| rates_fr3 300k | 9 resets, **4 uses**, 0 goals after reset (all uses in reset_curriculum spawns; kickoff 1 reset, 0 uses) | 0 uses |
+| curr L0/L1/L2 greedy | 29.8 / 22.0 / 9.5% (~93% used) | 1.9% L0 |
+
+Mid-run (24 chunks): 1-9 resets and 0-4 uses per 100k steps, 0 goals after reset in every
+check, 200-game h2h vs FR4 43-58% (mean 48.8%), no trend.
+
+Shipped: meets the keep rule (uses > 0 and >= 48% vs FR4, at exactly 48.0%) as
+`checkpoints_to_test/fr6_2632M.bpk`. First checkpoint that uses resets in play, but rarely,
+never from kickoff play, and never yet into a goal. Next: use reward only when it leads to a
+shot/goal; spawns from real aerial situations; BC/KL term inside the PPO loss. Full write-up:
+`docs/experiments/REPORT.md` section 10.
