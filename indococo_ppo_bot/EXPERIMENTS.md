@@ -605,5 +605,15 @@ on FR6-final as reference, curriculum L0-2). After the finals the driver
 continues automatically (FR7b, FR7c, FR7d: 1.0B each from the best chunk by
 normal-play uses+goals with h2h_FR4_200 >= 0.48) so the GPU never idles.
 
+Restart, Nov 1 11:12 AM ET: the first attempt (9:18 AM to 11:10 AM ET) never got
+past chunk 1. The driver seeded the start checkpoint in a dir named by the step
+count (`2631600000`), but trainer checkpoint dirs are named by unix time
+(~1.79e9) and both the trainer and the driver pick the highest name, so every
+chunk resumed from the start dir, trained the same 50M steps, and the BC refresh
+was applied to the start actor, not the PPO result (5 chunks, mid h2h vs FR4 0.43
+to 0.495). The launcher now names the seeded dir after START_CK's own timestamp
+and dies if a chunk's steps do not advance. The bad attempt is kept in
+`~/ippo_runs/exp_FR7_bugged`; FR7 restarted from FR6-final.
+
 ### Results
 (pending)

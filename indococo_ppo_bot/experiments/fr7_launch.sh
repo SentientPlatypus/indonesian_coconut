@@ -32,16 +32,22 @@ bc() { # bc <in.safetensors> <out_dir> <steps>
 cd /home/ubuntu/indonesian_coconut; mkdir -p $SNAP
 [[ -s $SNAP/train.f32 ]] || $B snapshots $C/experiments/snap_setters.toml $FR6 ${SNAP_STEPS:-2000000} 16 $SNAP/train.f32 > $SNAP/train.json || die "snapshots train"
 [[ -s $SNAP/eval.f32 ]] || $B snapshots $C/experiments/snap_setters.toml $FR4 ${SNAP_EVAL_STEPS:-500000} 16 $SNAP/eval.f32 > $SNAP/eval.json || die "snapshots eval"
-if [[ ! -d $X/checkpoints/$START ]]; then
+# Checkpoint dirs are named by unix time and the trainer resumes from the
+# highest name, so the seeded start dir takes the START_CK dir name (an older
+# timestamp), never the step count: a step count above unix time made the
+# first FR7 attempt retrain chunk 1 from the start dir forever.
+INIT=$(basename "${START_CK:-x}")
+if ! ls $X/checkpoints 2>/dev/null | grep -qE '^[0-9]+$'; then
   [[ -n "${START_CK:-}" ]] || die "START_CK not set"
+  [[ "$INIT" =~ ^[0-9]+$ ]] && (( INIT < $(date +%s) )) || die "START_CK name $INIT is not a past unix time"
   cp -r $C/experiments $C/config $X/cfg/ 2>/dev/null || { mkdir -p $X/cfg; cp -r $C/experiments $C/config $X/cfg/; }
   cp $B $X/indococo-train
   W=$X/bc_init; mkdir -p $W; export_to $START_CK $W/start.safetensors
   if [[ "${INIT_BC:-}" == keep ]]; then mkdir -p $W/ck/1; cp $START_CK/actor.bpk $W/ck/1/;
   elif [[ -n "${INIT_BC:-}" ]]; then cp -r $INIT_BC $W/ck; else bc $W/start.safetensors $W ${INIT_STEPS:-3000}; fi
-  mkdir -p $X/checkpoints/$START; cp $W/ck/1/actor.bpk $X/checkpoints/$START/
-  cp $START_CK/critic.bpk $X/checkpoints/$START/
-  sed -E "s/^cumulative_timesteps = .*/cumulative_timesteps = $START/" $START_CK/stats.toml > $X/checkpoints/$START/stats.toml
+  mkdir -p $X/checkpoints/$INIT; cp $W/ck/1/actor.bpk $X/checkpoints/$INIT/
+  cp $START_CK/critic.bpk $X/checkpoints/$INIT/
+  sed -E "s/^cumulative_timesteps = .*/cumulative_timesteps = $START/" $START_CK/stats.toml > $X/checkpoints/$INIT/stats.toml
   cp -r $R/exp_FR4/opponents/1v1 $X/opponents/1v1
   mkdir -p $X/opponents/FR4_final && cp $FR4/actor.bpk $X/opponents/FR4_final/
   mkdir -p $X/opponents/FR6_final && cp $FR6/actor.bpk $X/opponents/FR6_final/
@@ -61,7 +67,8 @@ while :; do
   echo "$(date '+%F %T %Z') FR7 train: $left iterations from $now" | tee -a $X/logs/train.log
   $B train $X/train_fr7.toml 2>&1 | tee -a $X/logs/train.log
   [[ ${PIPESTATUS[0]} -eq 0 ]] || die "train failed"
-  ck=$X/checkpoints/$(latest); now=$(steps_of $(latest))
+  prev=$now; ck=$X/checkpoints/$(latest); now=$(steps_of $(latest))
+  (( now > prev )) || die "steps did not advance ($prev -> $now); latest checkpoint $(latest)"
   W=$X/bc_refresh/$now; mkdir -p $W
   export_to $ck $W/actor_ppo.safetensors
   if [[ -z "${NO_REFRESH:-}" ]]; then
