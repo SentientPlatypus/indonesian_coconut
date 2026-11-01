@@ -615,8 +615,29 @@ to 0.495). The launcher now names the seeded dir after START_CK's own timestamp
 and dies if a chunk's steps do not advance. The bad attempt is kept in
 `~/ippo_runs/exp_FR7_bugged`; FR7 restarted from FR6-final.
 
-### Results
-(pending)
+### Results (2026-11-01, REPORT.md §11)
+Trained 11:12 AM -> 4:30 PM ET, finals done 4:51 PM ET. Seed 424242, fresh exports.
+- FR7-final (3631.6M, `exp_FR7/checkpoints/1793568505`): 47.2% vs FR4-final,
+  48.6% vs FR6-final (1000 g), pool400 84.9 (Nexto 85.3). rates_fr3 300k:
+  9 resets / 2 uses / 0 goals_after_reset (uses from reset_curriculum);
+  rates_fr7 300k: 4 / 1 / 0, kickoff+random+replay 0 / 0 / 0 (FR6-final on
+  the same mix: 2 / 0 / 0). Curriculum greedy L0 29.0%, L1 22.6%, L2 10.2%.
+- Mid-run (20 checks, 150k steps each): 37 resets, 8 uses, 1 goal after a
+  reset (3491.6M, from a reset_curriculum spawn, the first ever); only
+  normal-play use was 1 kickoff use at 2891.6M; replay episodes never reset.
+  h2h vs FR4 (200 g) 42.5-56.0%, mean 50.0%.
+- 3491.6M chunk (`fr7_keep/3492M`, evals in `fr7_keep/3492M/eval`): 52.5% vs
+  FR4, 51.3% vs FR6 (1000 g), pool400 85.9; rates_fr3 300k 9 / 1 / 0,
+  rates_fr7 300k 2 / 0 / 0.
+- Push rule: not met. Final < 48% vs FR4; 3491.6M is strong enough but has
+  no normal-play uses or goals on the 300k checks and fewer uses than FR6.
+  Nothing pushed to checkpoints_to_test.
+- Verdict: real-play spawns plus the outcome-gated reward kept strength but
+  did not move resets into normal play.
+- Follow-up: driver auto-started FR7b at 4:51 PM ET from 2891.6M
+  (`exp_FR7/checkpoints/1793554256`, the chunk with the kickoff use), same
+  config, 1.0B steps (~7 h), then FR7c/FR7d.
+
 
 ## Benchmark: RLBot v5 botpack ML bots (2026-11-01)
 
