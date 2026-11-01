@@ -1,0 +1,27 @@
+# FR7: flip resets from normal play that lead to shots/goals.
+# On top of fr4.toml (AUD air rewards + flip_reset_use 600 + reset_align 400):
+# * the reset-use payout moves from "any goalward dodge touch" to the outcome:
+#   use_weight 1.0 -> 0.4, shot_bonus 0.5 -> 1.5, goal_bonus 1.0 -> 3.0
+#   (a reset that ends in a goal now pays 4.9x weight vs 2.5x before; a bare
+#   use pays at most 0.4x).
+# * earned resets in normal play pay double: flip_reset_use x2 in kickoff,
+#   random and replay (real-play aerial states) episodes, x0.5 in the
+#   synthetic reset_curriculum/air_reset drills.
+extends = "fr4.toml"
+
+[flip_reset_use]
+use_weight = 0.4
+shot_bonus = 1.5
+goal_bonus = 3.0
+
+[setter_scale.kickoff]
+flip_reset_use = 2.0
+[setter_scale.random]
+flip_reset_use = 2.0
+[setter_scale.replay]
+flip_reset_use = 2.0
+airdribble_seq = 0.5
+[setter_scale.reset_curriculum]
+flip_reset_use = 0.5
+[setter_scale.air_reset]
+flip_reset_use = 0.5

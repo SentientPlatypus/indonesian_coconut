@@ -1,0 +1,15 @@
+# FR7: self-play mix used by `indococo-train snapshots` to harvest real
+# aerial states (only kickoff/random episodes are recorded).
+[[state_setters]]
+kind = "kickoff"
+weight = 0.5
+[[state_setters]]
+kind = "random"
+weight = 0.25
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.25
+ball_speed = true
+cars_on_ground = true

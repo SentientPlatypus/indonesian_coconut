@@ -73,6 +73,9 @@ pub enum SetterKind {
     AirReset(AirReset),
     /// Adaptive flip reset curriculum ([`crate::curriculum`]).
     ResetCurriculum(crate::curriculum::ResetCurriculum),
+    /// A state recorded from real self-play (`indococo-train snapshots`):
+    /// aerial situations near the ball from kickoff and random episodes.
+    Replay(Replay),
 }
 
 impl SetterKind {
@@ -86,6 +89,7 @@ impl SetterKind {
             Self::WallAirDribble(_) => "wall_air_dribble",
             Self::AirReset(_) => "air_reset",
             Self::ResetCurriculum(_) => "reset_curriculum",
+            Self::Replay(_) => "replay",
         }
     }
 }
@@ -204,6 +208,7 @@ impl SetterKind {
             Self::AirNearBall(ref s) => Box::new(s.clone()),
             Self::WallAirDribble(ref s) => Box::new(s.clone()),
             Self::AirReset(ref s) => Box::new(s.clone()),
+            Self::Replay(ref s) => Box::new(s.clone()),
             Self::ResetCurriculum(ref s) => {
                 crate::curriculum::configure(s.adapt());
                 Box::new(s.clone())
@@ -583,6 +588,120 @@ mod tests {
             assert!((m.z_axis - -up).length() < 1e-5);
             assert!((m.determinant() - 1.0).abs() < 1e-4);
             assert!(m.x_axis.dot(m.z_axis).abs() < 1e-5);
+        }
+    }
+}
+
+/// Floats per snapshot record: ball pos/vel/ang_vel (9), then per car
+/// pos, vel, ang_vel, rot_mat columns (18), boost, has_jumped,
+/// has_double_jumped, has_flipped, air_time_since_jump, flip_time (6).
+pub const SNAPSHOT_CAR: usize = 24;
+pub const SNAPSHOT_LEN: usize = 9 + 2 * SNAPSHOT_CAR;
+
+/// Encodes a 1v1 game state as one snapshot record.
+#[must_use]
+pub fn encode_snapshot(ball: &BallState, cars: &[&CarState]) -> Vec<f32> {
+    let mut v = Vec::with_capacity(SNAPSHOT_LEN);
+    for x in [ball.phys.pos, ball.phys.vel, ball.phys.ang_vel] {
+        v.extend_from_slice(&x.to_array());
+    }
+    for c in cars {
+        let m = c.phys.rot_mat;
+        for x in [c.phys.pos, c.phys.vel, c.phys.ang_vel, m.x_axis, m.y_axis, m.z_axis] {
+            v.extend_from_slice(&x.to_array());
+        }
+        v.extend_from_slice(&[
+            c.boost,
+            f32::from(u8::from(c.has_jumped)),
+            f32::from(u8::from(c.has_double_jumped)),
+            f32::from(u8::from(c.has_flipped)),
+            c.air_time_since_jump,
+            c.flip_time,
+        ]);
+    }
+    v
+}
+
+static SNAPSHOTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<f32>>>>> =
+    std::sync::OnceLock::new();
+
+/// Loads (once per process) a raw little-endian f32 snapshot file.
+///
+/// # Panics
+/// If the file is missing, empty or not a whole number of records.
+fn snapshots(path: &str) -> std::sync::Arc<Vec<f32>> {
+    let map = SNAPSHOTS.get_or_init(Default::default);
+    let mut map = map.lock().expect("snapshots lock");
+    map.entry(path.to_string())
+        .or_insert_with(|| {
+            let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("replay {path}: {e}"));
+            let v: Vec<f32> = bytes
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            assert!(
+                !v.is_empty() && v.len() % SNAPSHOT_LEN == 0 && bytes.len() % 4 == 0,
+                "replay {path}: not a snapshot file"
+            );
+            std::sync::Arc::new(v)
+        })
+        .clone()
+}
+
+/// Real-play replay setter: a random recorded snapshot, mirrored (180 deg
+/// about z, cars swapped) half the time, with small position/velocity noise.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Replay {
+    pub path: String,
+    pub pos_noise: f32,
+    pub vel_noise: f32,
+}
+
+impl Default for Replay {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            pos_noise: 30.0,
+            vel_noise: 50.0,
+        }
+    }
+}
+
+impl<SI: SharedInfoRng> StateSetter<SI> for Replay {
+    fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
+        arena.reset_to_random_kickoff(None);
+        let data = snapshots(&self.path);
+        let rng = shared_info.rng();
+        let n = data.len() / SNAPSHOT_LEN;
+        let r = &data[rng.random_range(0..n) * SNAPSHOT_LEN..][..SNAPSHOT_LEN];
+        let mirror = rng.random_bool(0.5);
+        let f = if mirror { Vec3A::new(-1.0, -1.0, 1.0) } else { Vec3A::ONE };
+        let v3 = |i: usize| Vec3A::new(r[i], r[i + 1], r[i + 2]) * f;
+        let mut noise = |s: f32| {
+            Vec3A::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0)) * s
+        };
+        let mut ball = BallState::DEFAULT;
+        ball.phys.pos = v3(0) + noise(self.pos_noise);
+        ball.phys.pos.z = ball.phys.pos.z.max(100.0);
+        ball.phys.vel = v3(3) + noise(self.vel_noise);
+        ball.phys.ang_vel = v3(6);
+        arena.set_ball_state(ball);
+        for idx in 0..arena.num_cars().min(2) {
+            let src = if mirror { 1 - idx } else { idx };
+            let o = 9 + src * SNAPSHOT_CAR;
+            let mut car = CarState::DEFAULT;
+            car.phys.pos = v3(o);
+            car.phys.vel = v3(o + 3);
+            car.phys.ang_vel = v3(o + 6);
+            car.phys.rot_mat = Mat3A::from_cols(v3(o + 9), v3(o + 12), v3(o + 15));
+            car.boost = r[o + 18];
+            car.has_jumped = r[o + 19] > 0.5;
+            car.has_double_jumped = r[o + 20] > 0.5;
+            car.has_flipped = r[o + 21] > 0.5;
+            car.air_time_since_jump = r[o + 22];
+            car.flip_time = r[o + 23];
+            arena.set_car_state(idx, car.core());
         }
     }
 }

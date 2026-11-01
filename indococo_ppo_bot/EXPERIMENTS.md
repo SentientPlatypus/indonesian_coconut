@@ -557,3 +557,53 @@ Shipped: meets the keep rule (uses > 0 and >= 48% vs FR4, at exactly 48.0%) as
 never from kickoff play, and never yet into a goal. Next: use reward only when it leads to a
 shot/goal; spawns from real aerial situations; BC/KL term inside the PPO loss. Full write-up:
 `docs/experiments/REPORT.md` section 10.
+
+## Round 8: FR7 (resets from real play that lead to shots/goals)
+
+### Why
+FR6-final (2631.6M, 48.0% vs FR4) was the first bot to use resets in games,
+but all 4 uses (300k-step rates) came from practice setters, none from
+kickoff play, and 0 goals after a reset. Its synthetic setups (air_reset,
+reset_curriculum) do not look like the aerials the bot reaches on its own,
+and `flip_reset_use` paid most of its value for any goalward dodge touch.
+
+### Changes (config-gated, `experiments/fr7.toml`, `train_fr7.toml`, `fr7_launch.sh`)
+- **Real-play practice:** new `replay` setter + `indococo-train snapshots`
+  (README "Real-play snapshots"). 1M steps of FR6-final self-play
+  (kickoff/random) gave 11,786 aerial-near-ball states (`fr7_snap/train.f32`),
+  each taken 0-1 s before the car is under the ball. 18% of training
+  episodes start there. Eval states come from FR4-final self-play
+  (`fr7_snap/eval.f32`, 5,758 states) so evals don't replay training states.
+- **Outcome-gated reset reward:** `flip_reset_use` use_weight 1.0 -> 0.4,
+  shot_bonus 0.5 -> 1.5, goal_bonus 1.0 -> 3.0.
+- **Earned resets in normal play pay more:** `setter_scale` flip_reset_use
+  x2 in kickoff/random/replay episodes, x0.5 in reset_curriculum/air_reset.
+- Synthetic drills 15% -> 8% (curr L1/L2 3% each, air_reset 2%); kickoff
+  38%, random 26%, wall_air_dribble 6%, air_near_ball 4%.
+- FR6-final added as a fixed opponent (weight 1.0, FR4 1.5, 1v1.pt 1.0).
+- Kept from FR6: BC refresh after each 50M chunk (expert CE + KL 5 to fixed
+  FR4-final), 10M critic warm-up, cosine LR (hold 600M).
+- Mid-run (`logs/mid.jsonl`): `rates_fr7.toml` 150k steps split by setter
+  (kickoff, random, replay, air_reset, reset_curriculum) + 200-game h2h vs FR4.
+- Not done: the BC/KL-inside-PPO-loss framework change (deferred; the
+  per-chunk BC refresh already anchors strength and the framework pin is
+  unchanged).
+
+### Small tests (2026-11-01)
+- `snapshots` 50k steps on FR6-final: 337 states in 9 s (16 threads).
+- `rates` 60k steps of FR6-final on rates_fr7 with those states: replay
+  episodes start with the car airborne 46% of the time (49/106 vs 0/136 for
+  kickoffs); FR6-final gets 0 resets anywhere in 60k steps, so the baseline
+  on real-play states is ~0.
+- First FR7 PPO iterations: 59.7k sps, setter shares as configured.
+
+### Run
+Warm start FR6-final (actor + critic, step 2631.6M) -> 3631.6M. Runs dir
+`~/ippo_runs/exp_FR7`, finals `~/ippo_runs/fr7_final` (1000-game h2h vs
+FR4-final and FR6-final, pool400, rates_fr3 + rates_fr7 300k, rates_fr7 300k
+on FR6-final as reference, curriculum L0-2). After the finals the driver
+continues automatically (FR7b, FR7c, FR7d: 1.0B each from the best chunk by
+normal-play uses+goals with h2h_FR4_200 >= 0.48) so the GPU never idles.
+
+### Results
+(pending)

@@ -1,0 +1,22 @@
+# FR7 rates mix: normal play (kickoff, random), real-play replay states,
+# plus the FR3 practice setters for comparison. Uses from kickoff/random
+# are "non-practice" uses; replay counts separately.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.35
+[[state_setters]]
+kind = "random"
+weight = 0.2
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "replay"
+weight = 0.25
+path = "/home/ubuntu/ippo_runs/fr7_snap/eval.f32"
+[[state_setters]]
+kind = "air_reset"
+weight = 0.1
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.1
+fixed_level = 2

@@ -47,7 +47,7 @@ indococo_ppo_bot/
       flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs,
       reset_align.rs      (reset_align: potential-based wheels-to-ball alignment shaping)
                           experiment terms (built only when weighted; see EXPERIMENTS.md)
-    bin/train.rs          indococo-train: train | import | export | record | rates | curr | normal-obs
+    bin/train.rs          indococo-train: train | import | export | record | rates | snapshots | curr | normal-obs
     bin/rlbot.rs          indococo-rlbot: RLBot v5 client, Burn CPU (flex) inference
   tests/
     reward_parity.rs      one test per reward term vs. Python on recorded states
@@ -138,6 +138,8 @@ ball_height = [600.0, 1600.0]
 kind = "air_reset"     # car 400-800 uu from the ball, velocity and wheels off: a reset needs steering
 weight = 0.1
 [[state_setters]]
+kind = "replay"        # FR7: a recorded real-play state (path = snapshot file from `indococo-train snapshots`), mirrored half the time, small noise
+...
 kind = "reset_curriculum" # adaptive: ball almost on the wheels -> air_reset difficulty (src/curriculum.rs)
 weight = 0.1
 [[state_setters]]
@@ -232,6 +234,21 @@ line: resets per minute (new and old detector), uses per minute, and the
 share of episodes, and of setter episodes where the candidate starts in the
 air, with a reset (`flier_early_reset_share`: within 3 s;
 `flier_earned_reset_share`: after 0.33 s of control and within 3 s). Run it from the repository root.
+
+### Real-play snapshots (FR7)
+`indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>`
+self-plays a checkpoint (greedy, 5% random actions) over a setter mix and,
+in kickoff/random episodes only, records the game state whenever a car is
+off the ground above 300 uu with the ball above it (>400 uu, within 1000 uu),
+taken 0-15 steps (0-1 s) before that moment so the policy still has to set the
+reset up (30-step cooldown per car). Records are raw little-endian f32,
+`SNAPSHOT_LEN` = 57 floats (ball pos/vel/ang_vel, then per car pos, vel,
+ang_vel, rotation columns, boost, has_jumped, has_double_jumped, has_flipped,
+air_time_since_jump, flip_time; `setters::encode_snapshot`). The `replay`
+setter samples them (label `replay` in metrics, rates and `setter_scale`).
+Data flow: FR6-final self-play -> `fr7_snap/train.f32` (training setter),
+FR4-final self-play -> `fr7_snap/eval.f32` (rates_fr7.toml), so the eval
+states are not the training states. ~340 snapshots per 50k steps.
 
 ### Behavior cloning data (FR5)
 

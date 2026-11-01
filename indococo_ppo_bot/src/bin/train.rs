@@ -8,6 +8,7 @@
 //! indococo-train record <reward.toml> <out.jsonl> <steps> [checkpoint_dir]
 //! indococo-train rates  <setters.toml> <candidate_ckpt> <opponent_ckpt|self> <steps> [threads]
 //! indococo-train curr <level> <episodes> <policy> [threads] [data_prefix] [noise]   # FR5 BC tools
+//! indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>  # FR7 replay states
 //! indococo-train normal-obs <ckpt> <setters.toml> <steps> <threads> <out.f32>
 //! ```
 
@@ -806,6 +807,13 @@ fn main() {
             arg(3).parse().expect("steps"),
             args.get(4).map(Path::new),
         ),
+        "snapshots" => snapshots(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3).parse().expect("steps"),
+            arg(4).parse().expect("threads"),
+            Path::new(arg(5)),
+        ),
         "rates" => rates(
             Path::new(arg(1)),
             Path::new(arg(2)),
@@ -920,4 +928,99 @@ mod tests {
         assert_eq!(c.opponents.fixed[0].checkpoint, Path::new("opponents/1v1"));
         assert_eq!(c.state_setters.len(), 2);
     }
+}
+
+/// Steps of history kept per env for `snapshots` (a recorded state is taken
+/// 0..=SNAP_LAG steps before the trigger, so the policy still has to set up).
+const SNAP_LAG: usize = 15;
+
+/// One car in a reset-shaped aerial spot: off the ground above 300 uu, the
+/// ball above it (higher than 400 uu) within 1000 uu.
+fn aerial_spot(state: &GameState, i: usize) -> bool {
+    let car = &state.cars[i].1;
+    let (c, b) = (car.phys.pos, state.ball.phys.pos);
+    let wheels = car.wheels_with_contact().iter().any(Option::is_some);
+    !wheels && c.z > 300.0 && b.z > 400.0 && b.z > c.z + 50.0 && (b - c).length() < 1000.0
+}
+
+fn snapshots_worker(mix: &[WeightedSetter], ckpt: &Path, steps: usize, seed: u64) -> Vec<f32> {
+    const ENVS: usize = 16;
+    let dev = Device::flex();
+    let actor = load_actor(ckpt, &dev);
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut envs: Vec<_> = (0..ENVS)
+        .map(|_| {
+            let mut env = create_env(&RewardConfig::default(), mix);
+            let (state, obs, _) = env.reset();
+            (env, state, obs, std::collections::VecDeque::<Vec<f32>>::new(), [0u64; 2], 0u64)
+        })
+        .collect();
+    let mut out = Vec::new();
+    for _ in 0..steps.div_ceil(ENVS) {
+        let obs: Vec<&Vec<f32>> = envs.iter().flat_map(|e| e.2.iter()).collect();
+        let acts = argmax_actions(&actor, &obs, &dev);
+        for (k, (env, state, o, hist, cool, t)) in envs.iter_mut().enumerate() {
+            let label = env.get_shared_info().setter();
+            let cars: Vec<_> = state.cars.iter().map(|(_, c)| c).collect();
+            hist.push_back(indococo_bot::setters::encode_snapshot(&state.ball, &cars));
+            if hist.len() > SNAP_LAG + 1 {
+                hist.pop_front();
+            }
+            *t += 1;
+            if matches!(label, "kickoff" | "random") {
+                for i in 0..2 {
+                    if aerial_spot(state, i) && *t >= cool[i] {
+                        let lag = rng.random_range(0..hist.len());
+                        out.extend_from_slice(&hist[hist.len() - 1 - lag]);
+                        cool[i] = *t + 30;
+                    }
+                }
+            }
+            let a: Vec<usize> = (0..2)
+                .map(|i| {
+                    if rng.random_bool(0.05) { rng.random_range(0..N_ACTIONS) } else { acts[k * 2 + i] }
+                })
+                .collect();
+            let res = env.step(state, &a);
+            (*state, *o) = (res.state, res.obs);
+            if res.is_terminal || res.truncated {
+                let (s2, o2, _) = env.reset();
+                (*state, *o) = (s2, o2);
+                hist.clear();
+                *cool = [0; 2];
+                *t = 0;
+            }
+        }
+    }
+    out
+}
+
+/// Self-play `ckpt` over the setter mix and record aerial states near the
+/// ball from kickoff/random episodes (see [`aerial_spot`]) for the `replay`
+/// setter. Writes raw little-endian f32 records of `SNAPSHOT_LEN`.
+fn snapshots(setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize, out: &Path) {
+    #[derive(Deserialize)]
+    struct Mix {
+        state_setters: Vec<WeightedSetter>,
+    }
+    init_from_default(true).expect("load collision meshes");
+    let mix: Mix = toml::from_str(&std::fs::read_to_string(setters_toml).expect("read setters"))
+        .expect("parse setters");
+    let per = steps.div_ceil(threads);
+    let all: Vec<f32> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..threads)
+            .map(|t| {
+                let m = &mix.state_setters;
+                s.spawn(move || snapshots_worker(m, ckpt, per, 1000 + t as u64))
+            })
+            .collect();
+        hs.into_iter().flat_map(|h| h.join().expect("worker")).collect()
+    });
+    let bytes: Vec<u8> = all.iter().flat_map(|x| x.to_le_bytes()).collect();
+    std::fs::write(out, bytes).expect("write snapshots");
+    println!(
+        "{{\"snapshots\":{},\"steps\":{steps},\"out\":\"{}\"}}",
+        all.len() / indococo_bot::setters::SNAPSHOT_LEN,
+        out.display()
+    );
 }
