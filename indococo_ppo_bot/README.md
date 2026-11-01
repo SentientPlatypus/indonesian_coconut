@@ -58,7 +58,7 @@ indococo_ppo_bot/
                           rates_mix.toml (setter mix for `indococo-train rates`)
   tools/parity.py         regenerates the fixture with the Python classes (needs master)
   tools/eval_loop.sh      pool evals + keep-best during training
-  tools/bc/bc_pretrain.py FR5 behavior cloning: CE to expert labels + KL to the frozen actor on normal play
+  tools/bc/bc_pretrain.py FR5/FR6 behavior cloning: CE to expert labels + KL to the frozen (or --teacher) actor on normal play
   tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal
   config/E8b_shell_contact_strong.json  E8B2 experiment config (input to parity.py)
 ```
@@ -204,7 +204,7 @@ up to 1500 uu and 600 uu/s). An episode succeeds when the flier gets an
 *earned* flip reset: after 0.33 s of control and within 3 s. The level is
 process-wide; after 200 attempts at the current level a success rate above
 60% moves up a level and below 25% moves down. 20% of episodes replay an
-easier level. `fixed_level` pins it (tests, evals). `tests/reset_curriculum_sim.rs`
+easier level. `fixed_level` pins it (tests, evals; FR6 trains on several fixed-level setters at once, which never move the shared level). `tests/reset_curriculum_sim.rs`
 checks every level's states in RocketSim and that doing nothing or random
 input almost never earns a reset, while a scripted wheel-alignment
 controller does at level 0.
@@ -256,6 +256,14 @@ indococo-train normal-obs <ckpt> normal_mix.toml 600000 30 data/normal.f32
 python tools/bc/bc_pretrain.py --actor actor.safetensors --curr data/curr_L0 ... --normal data/normal.f32 --out bc.pt
 indococo-train import bc.pt <out_dir>    # -> <out_dir>/1/actor.bpk
 ```
+
+`bc_pretrain.py --teacher <fixed.safetensors>` anchors the normal-play KL to a
+fixed actor instead of the starting one (FR6 uses FR4-final with `--kl 5`), so
+repeated refreshes pull normal play back toward a strong player. FR6's driver
+(`experiments/fr6_launch.sh`) loops: PPO for 50M steps -> export -> BC refresh
+-> import over `actor.bpk` (PPO actor kept as `actor_ppo.bpk`) -> `rates` +
+200-game h2h vs FR4-final appended to `logs/mid.jsonl`; `experiments/fr6_status.sh`
+prints that progress. Exports always delete the target first and abort on error.
 
 The defaults use LibTorch CUDA with a bf16 critic and an f32 policy. On the
 L4 box, a warm-started run reaches about 78k sps.

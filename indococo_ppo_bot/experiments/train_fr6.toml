@@ -1,0 +1,82 @@
+# FR6 learner settings (EXPERIMENTS.md FR6). Rewards fr4.toml (flip_reset_use
+# 600 with shot/goal bonus, potential reset_align). @RUN@ / @ITERATIONS@ /
+# @START@ are filled in by fr6_launch.sh.
+# Changes vs FR5: reset practice 30% -> 15% and spread over fixed levels 1-3
+# plus air_reset (FR5's adaptive curriculum never left level 0, while the
+# rates eval pins level 2), more kickoffs/open play to protect game strength.
+reward_config = "@RUN@/cfg/experiments/fr4.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = 100_000
+mini_batch_size = 50_000
+epochs = 2
+policy_lr = 5e-5
+critic_lr = 5e-5
+entropy = 0.015
+gamma = 0.995
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+# New setter mix: 10M steps of critic-only warm-up from the start.
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = 400_000_000
+min_scale = 0.4
+
+[opponents]
+chance = 0.25
+past_versions_weight = 1.0
+[[opponents.fixed]]
+name = "1v1.pt"
+checkpoint = "@RUN@/opponents/1v1"
+weight = 1.0
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 1.5
+
+[[state_setters]]
+kind = "kickoff"
+weight = 0.40
+[[state_setters]]
+kind = "random"
+weight = 0.15
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.15
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.05
+[[state_setters]]
+kind = "wall_air_dribble"
+weight = 0.10
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.04
+fixed_level = 1
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.05
+fixed_level = 2
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.03
+fixed_level = 3
+[[state_setters]]
+kind = "air_reset"
+weight = 0.03

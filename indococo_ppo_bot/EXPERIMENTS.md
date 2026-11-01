@@ -500,3 +500,37 @@ while >=48% vs FR4, or >50% vs FR4). Next: BC/KL term inside the PPO loss;
 curriculum levels nearer real game states; reset-use reward only when it
 leads to a shot/goal; lower the reset_curriculum share (27-30%). Full
 write-up: `docs/experiments/REPORT.md` section 9.
+
+## Round 7: FR6 (keep FR4's game strength, practice the levels the eval uses)
+
+### Why
+FR5 never used a reset in games and lost strength. Fresh re-eval of FR5 1731.6M
+(`fr5_final_fixed/`, the original numbers scored a stale export): 44.9% vs
+FR4-final, 46.6% vs AUD-final (1000 games, seed 424242), pool400 83.0 (Nexto
+82.8). Diagnosis: (1) the adaptive curriculum never left level 0 while
+`rates_fr3.toml` pins level 2; (2) each BC refresh distilled toward the
+*current* actor, so normal play drifted with nothing pulling it back;
+(3) reset practice was 27-30% of episodes.
+
+### Small tests (`fr6_bc/`, 3000 BC steps, use-phase weight 3, KL to FIXED FR4-final)
+Expert data: FR5 sets + new DAgger sets from FR5-final at L1/L2/L3 + expert L4.
+
+| start | KL | curr L0 / L2 greedy | rates 100k resets/uses | h2h vs FR4 (200 g) |
+|---|---|---|---|---|
+| FR5-final | 2 | 30.2% / 9.6% | 3 / 2 | 33.0% |
+| FR5-final | 5 | 30.6% / 10.6% | 5 / 1 | 40.5% |
+| FR4-final | 5 | 20.6% / 4.4% | 0 / 0 | 52.5% |
+
+The FR5 actor's skill comes with weaker play that the BC anchor doesn't fix;
+FR4+BC keeps strength and still has a cloned skill. Chosen: FR4-final + BC (KL 5).
+
+### Setup (`experiments/train_fr6.toml`, `experiments/fr6_launch.sh`)
+- Start: FR4-final actor after the BC above (`fr6_bc/t_fr4_kl5`), FR4 critic, 10M critic warm-up; 1431.6M -> 2631.6M.
+- Rewards: `fr4.toml` unchanged (flip_reset_use 600 with shot/goal bonus, reset_align 400).
+- Setters: kickoff 0.40, random 0.15+0.15, air_near_ball 0.05, wall_air_dribble 0.10,
+  reset_curriculum **fixed** levels 1/2/3 at 0.04/0.05/0.03, air_reset 0.03 (reset practice 15%).
+- FR4-final opponent weight 1.5 (was 1.0); entropy 0.015; LR hold to 2131.6M then cosine to 0.4x.
+- Every 50M: BC refresh (1500 steps, `bc_pretrain.py --teacher` = FR4-final, KL 5, use weight 3)
+  then a mid-run eval into `logs/mid.jsonl` (rates 100k steps + 200-game h2h vs FR4-final).
+- Final evals into `fr6_final/` (FR5 conventions; export target deleted first, aborts on failure).
+- Keep rule: real-game uses > 0 and >= 48% vs FR4-final over 1000 games, or > 50% vs FR4.
