@@ -475,3 +475,28 @@ cross-entropy on the curriculum + DAgger data, KL to the chunk's own PPO
 actor on normal play). The PPO actor is kept as `actor_ppo.bpk` in that
 checkpoint, and `logs/bc_refresh.jsonl` records level-0 success (greedy and
 sampled) of both actors at every refresh.
+
+### FR5 result
+
+Training ended at 1731.6M (checkpoint dir `exp_FR5/checkpoints/1793494122`;
+11 BC refreshes, 1466.6M-1716.6M). PPO-only greedy level-0 success after each
+25M chunk climbed from 7.9% to 25.2% (BC-refreshed actor flat at ~30%), so
+the cloned skill now survives PPO. Final checkpoint (`fr5_final/curr.jsonl`,
+960 eps): L0/L1/L2 greedy 27.4/18.4/8.5%, sampled 19.1/12.3/4.6%, ~91% of
+resets used. Real play (`rates_fr3.toml`, 300k steps): 7 resets in 1067
+episodes, **0 uses**. The curriculum level never left 0 in training (train L0
+success ~9% over the last 100M vs the 35% bar).
+
+**Eval bug:** the final export failed (`logs/final_policy.safetensors`
+already existed and burn-store doesn't overwrite by default), so the h2h
+(44.8% vs FR4-final, 44.1% vs AUD-final) and pool400 (82.8, Nexto 85.5)
+scored the stale bc_v2 warm start (sha256 matches an export of
+`checkpoints/1431600000`), not 1731.6M. `curr`/`rates` are valid. Fixed:
+`export` now overwrites, and `fr5_launch.sh` removes the target and aborts on
+export failure. Re-run the h2h/pool400 for 1731.6M.
+
+Not shipped: no reset use in games fails the keep rule (uses resets in games
+while >=48% vs FR4, or >50% vs FR4). Next: BC/KL term inside the PPO loss;
+curriculum levels nearer real game states; reset-use reward only when it
+leads to a shot/goal; lower the reset_curriculum share (27-30%). Full
+write-up: `docs/experiments/REPORT.md` section 9.

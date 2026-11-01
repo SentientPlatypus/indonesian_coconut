@@ -8,6 +8,9 @@ distilling the frozen original on normal-play observations so 1v1 play is kept.
 
 Loss = CE(student, expert action) on curriculum states
      + kl * KL(teacher || student) on normal states.
+--teacher anchors the KL to a fixed actor (FR6: FR4-final, the strongest
+game player) instead of the starting actor, so repeated refreshes pull
+normal play back toward it rather than letting it drift.
 Writes a plain state_dict (.pt) that `indococo-train import` reads, and
 bc_log.jsonl next to it.
 """
@@ -48,12 +51,14 @@ def main():
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--kl", type=float, default=1.0)
     ap.add_argument("--use-weight", type=float, default=1.0, help="weight of use-phase labels")
+    ap.add_argument("--teacher", default=None,
+                    help="fixed anchor actor (.safetensors) for the normal-play KL; default: --actor itself")
     a = ap.parse_args()
     dev = "cuda"
     torch.backends.cuda.matmul.allow_tf32 = True
     sd = load_st(a.actor)
     student, teacher = net(), net()
-    student.load_state_dict(sd); teacher.load_state_dict(sd)
+    student.load_state_dict(sd); teacher.load_state_dict(load_st(a.teacher) if a.teacher else sd)
     student.to(dev); teacher.to(dev).eval()
     xs, ys, ws = [], [], []
     for p in a.curr:

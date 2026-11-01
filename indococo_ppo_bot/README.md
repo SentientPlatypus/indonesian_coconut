@@ -92,7 +92,7 @@ git show master:rlbot_submission/policies/1v1.pt > 1v1.pt
 indococo-train import 1v1.pt runs/e8b2/checkpoints
 # 2. Train. Set paths in a copy of config/train.toml; resumes from the latest checkpoint.
 TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 indococo-train train runs/e8b2/train.toml
-# 3. Export the policy to safetensors for the Python eval tools.
+# 3. Export the policy to safetensors for the Python eval tools (overwrites <out>).
 indococo-train export runs/e8b2/checkpoints/<n> policy.safetensors
 ```
 

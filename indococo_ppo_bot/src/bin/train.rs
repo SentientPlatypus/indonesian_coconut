@@ -419,7 +419,9 @@ fn export(ckpt: &Path, out: &Path) {
         .actor
         .try_load_file(ckpt.join("actor.bpk"))
         .expect("load actor");
-    let mut store = SafetensorsStore::from_file(out).with_to_adapter(BurnToPyTorchAdapter);
+    let mut store = SafetensorsStore::from_file(out)
+        .overwrite(true)
+        .with_to_adapter(BurnToPyTorchAdapter);
     for (to, from) in KEY_MAP {
         store = store.with_key_remapping(format!("^{}", regex_escape(from)), to);
     }

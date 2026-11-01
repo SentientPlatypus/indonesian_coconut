@@ -56,7 +56,8 @@ F=$R/fr5_final; mkdir -p $F; PY=/home/ubuntu/coco-venv/bin/python; T=$C/tools/po
 last=$(ls $X/checkpoints | grep -E '^[0-9]+$' | sort -n | tail -1)
 echo $X/checkpoints/$last > $F/FINAL_CKPT
 CAND=$X/logs/final_policy.safetensors
-$X/indococo-train export $X/checkpoints/$last $CAND > /dev/null
+rm -f $CAND
+$X/indococo-train export $X/checkpoints/$last $CAND > /dev/null || { echo "export failed"; exit 1; }
 cp $R/fr4_final/opp_AUD.toml $F/
 printf '[[opponent]]\nname = "FR4_final"\nkind = "indococo"\npath = "%s"\n' $R/exp_FR4/logs/final_policy.safetensors > $F/opp_FR4.toml
 for o in FR4 AUD; do

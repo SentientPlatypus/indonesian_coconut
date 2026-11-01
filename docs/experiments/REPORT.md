@@ -15,6 +15,7 @@ We moved the 1v1 bot from the Python rlgym-ppo stack to **indococo-ppo**, a Rust
 - **R3.** FR3, a staged reset curriculum with potential-based wheel-alignment shaping, never left level 0. Run 3 (41.5M steps) held about 1% success on the easiest level, below the 7.3% a car with no input gets. Run 4 (easier level 0, aerial terms zeroed in curriculum episodes, entropy 0.025) held about 5% against an 18% no-input baseline and was stopped at 895.6M so the air rewards could be audited first.
 - **R4.** AUD reworked the four air dribble terms to pay only goalward progress, with decay and caps. Warm-started from ADB-832M, its 1131.6M final beat ADB-832M **64.6%** over 1000 games with pool score **87.0**. There was no control arm, so part of that gain is just 300M more steps.
 - **R5.** FR4 put the FR3 run-4 reset curriculum on top of the AUD rewards (1131.6M → 1431.6M). It is the strongest bot so far: **63.3%** vs ADB-832M, **53.2%** vs AUD-final, pool **87.1** (Nexto 89.8). The curriculum still never left level 0 (about 4% success against 18% for no input), and **no checkpoint has used a reset**.
+- **R6.** FR5 cloned a discrete scripted reset expert (52–55% at level 0) into the policy, then ran PPO in 25M-step chunks with BC refreshes (1431.6M → 1731.6M). The skill now survives PPO in the curriculum: 27.4% level-0 success greedy, against 1.9% for FR4 and 17.9% for no input, with ~90% of resets used. It still gets **0 uses in real play**. The final h2h/pool evals accidentally scored the warm start (44.8% vs FR4, pool 82.8; see §9.5), so 1731.6M's strength is not yet measured. Not shipped.
 
 ## 1. Setup
 
@@ -469,7 +470,135 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 ![FR4 setters](figures/reset_by_setter_exp_FR4.png)
 ![FR4 shares](figures/reward_share_exp_FR4.png)
 
-## 9. Summary of checkpoints
+## 9. R6: FR5, behaviour-cloned flip resets, then PPO (1431.6M → 1731.6M)
+
+**Why.** FR2–FR4 never left curriculum level 0. The PPO policy earned a reset in about 4% of level-0 episodes, against 18% for no input and 56% for the continuous scripted aligner. Two causes: (a) the old advance bar (60% over the window) was above even the scripted expert, and (b) PPO never found the skill by exploration. FR5 teaches the skill by imitation first, then lets PPO refine it. The design details are in `EXPERIMENTS.md`, Round 6, and commits `1806811` and `9304207`.
+
+### 9.1 Phase A: a discrete scripted expert (`src/expert.rs`)
+
+The policy acts through the 90-action lookup table, held for 8 ticks, so the continuous aligner can't be cloned directly. The expert is a one-step look-ahead over the table plus a 4-step aligner rollout. Level-0 earned success (480 episodes):
+
+| policy | L0 success | uses per success |
+|---|---|---|
+| no input | 17.9% | 0 |
+| aligner, nearest table action | 39.6–43.3% | 0 |
+| one-step look-ahead, alignment score | 31.0–34.2% | 0 |
+| **look-ahead + 4-step aligner rollout (final expert)** | **51.7–55.4%** | **98%** |
+| continuous aligner (per tick, reference) | 56% | — |
+
+Expert by level: L1 44.5%, L2 15.4%, L3 5.3%, L4 3.1%, L5 1.2% (no input: 10.2, 3.1, 0.6, 0.2, 0%).
+
+**Two simulator fixes** were needed before the expert could *use* a reset:
+
+1. RocketSim treats wheels on the ball as ground, so the first jump press after a reset jumps off the ball (a normal jump). The dodge needs a *second* press, so the expert double-presses.
+2. Every directional-jump action in the lookup table has `handbrake = true`. The expert's use phase has to pick those actions knowing that.
+
+**Curriculum thresholds:** advance 60% → **35%**, back off → **12%**, set from the expert's own L0/L1 rates.
+
+### 9.2 Behaviour-cloning pretraining (`tools/bc/bc_pretrain.py`)
+
+Data: 712k expert-labelled flier states (L0–L3, 10–15% random executed actions) plus 600k normal-play observations from FR4-final. Loss: expert cross-entropy on curriculum states + KL(FR4-final ‖ student) on normal play.
+
+| actor | L0 greedy | L0 sampled | uses/success | 200-game h2h vs FR4-final |
+|---|---|---|---|---|
+| FR4-final | 1.9% | 2.9% | 11% | — |
+| bc_v1 (3k steps) | 19.6% | 10.2% | 81% | — |
+| **bc_v2 (10k steps)** | **31.5%** | 18.3% | 89% | 47.0% ± 3.5 |
+| bc_v3 (+DAgger) | 28.3% | 18.3% | 93% | 44.5% |
+
+bc_v2 was used for phase B: 16× FR4's greedy level-0 success, and it uses the regained flip on about 90% of its resets.
+
+### 9.3 Phase B: PPO from the BC actor
+
+`experiments/train_fr5.toml`, `experiments/fr5_launch.sh`. bc_v2 actor, FR4-final critic and return stats, 10M steps of critic-only warm-up, then PPO with the `fr4.toml` rewards, entropy 0.015, curriculum about 30% of episodes, fixed opponents 1v1.pt and FR4-final. Trained at about 63k steps/s.
+
+**First attempt, plain PPO (stopped).** During the critic warm-up, training L0 success held at 13–14%. In the first ~15M PPO steps it fell to about 8% while entropy also fell (3.66 → 3.53), so PPO was actively moving away from the cloned skill. Stopped at 1461.5M and restarted from the warmed-up 1441.6M checkpoint (red in the figures below).
+
+**Restart, chunked PPO + BC refresh.** PPO runs in 25M-step chunks. After each chunk, a 1500-step BC refresh (lr 5e-5, expert CE + KL to the chunk's own PPO actor on normal play) replaces the actor. Both actors are scored on 480 level-0 episodes at every refresh (`logs/bc_refresh.jsonl`, `data/fr5_bc_refresh.csv`):
+
+| steps | PPO greedy | PPO sampled | BC greedy | BC sampled |
+|---|---|---|---|---|
+| 1466.6M | 7.9% | 10.8% | 31.0% | 19.6% |
+| 1491.6M | 11.9 | 8.7 | 29.2 | 21.7 |
+| 1516.6M | 15.0 | 10.4 | 30.2 | 19.0 |
+| 1541.6M | 16.3 | 15.6 | 26.0 | 20.2 |
+| 1566.6M | 11.5 | 9.6 | 31.2 | 14.0 |
+| 1591.6M | 19.6 | 15.2 | 32.5 | 22.5 |
+| 1616.6M | 17.7 | 15.4 | 29.6 | 18.3 |
+| 1641.6M | 20.2 | 18.1 | 30.8 | 21.7 |
+| 1666.6M | 14.2 | 12.5 | 29.2 | 17.3 |
+| 1691.6M | 20.2 | 15.8 | 33.5 | 19.4 |
+| 1716.6M | **25.2** | 17.3 | 31.2 | 21.2 |
+
+The PPO actor's *post-chunk* success climbed from 7.9% to 25.2% greedy, and its uses per success from 58% to 92%. So each chunk now loses less of the skill than the one before: the skill increasingly survives PPO rather than being re-injected each time. The BC actor stayed flat at about 30% greedy, which is the ceiling the BC data gives. The last chunk (1716.6M → 1731.6M) had no refresh after it, so the final checkpoint is a pure PPO actor.
+
+![FR5 BC refresh](figures/fr5_bc_refresh.png)
+![FR5 curriculum](figures/fr5_training_curriculum.png)
+
+**The curriculum level never left 0.** Training L0 success (sampled, against the opponent mix) averaged 8.7% over the last 100M steps, below the 35% advance bar. The setter share was 30% (27.5% in the last report). Note that the eval-time greedy numbers are much higher than these training numbers.
+
+### 9.4 Final evaluation (`~/ippo_runs/fr5_final/`, seed 424242)
+
+Final checkpoint: `exp_FR5/checkpoints/1793494122` (the directory name is a timestamp; `cumulative_timesteps = 1731600000`).
+
+**Curriculum skill** (`indococo-train curr`, 960 episodes per row, valid for 1731.6M):
+
+| level | greedy | sampled | used/success (greedy) | expert | no input |
+|---|---|---|---|---|---|
+| L0 | **27.4%** | 19.1% | 92% | 52–55% | 17.9% |
+| L1 | 18.4% | 12.3% | 95% | 44.5% | 10.2% |
+| L2 | 8.5% | 4.6% | 88% | 15.4% | 3.1% |
+
+![FR5 levels](figures/fr5_levels.png)
+
+**Real play** (`rates_fr3.toml`, 300k steps, self-play, 1731.6M): 1067 episodes, **7 resets** (0.021/min; 6 in `reset_curriculum` episodes, 1 at kickoff, 0 in `air_reset`), earned-reset share of flier episodes 1.8%, **0 uses**, 0 goals after a reset. FR4 measured 0.003/min with 0 uses on the same mix.
+
+**Strength.** ⚠️ **These numbers measure the wrong actor; see 9.5.**
+
+| measure | value | (FR4-final, for reference) |
+|---|---|---|
+| h2h vs FR4-final, 1000 games | 44.8% (448-552, ±1.6) | — |
+| h2h vs AUD-final, 1000 games | 44.1% (441-559, ±1.6) | 53.2% |
+| pool score (400 games/opponent) | 82.8 | 87.1 |
+| vs 1v1.pt / 430M / Nexto | 59.2 / 61.8 / 85.5 | 68.0 / 71.0 / 89.8 |
+| vs Necto / Element / Immortal | 97.2 / 98.5 / 94.8 | 98.0 / 99.5 / 96.5 |
+
+### 9.5 Eval bug: h2h and pool scored the warm start, not 1731.6M
+
+`fr5_launch.sh` exports the final checkpoint to `logs/final_policy.safetensors` and then hands that file to `pool_eval.py`. That file already existed from launch (6:10 PM ET Oct 31). burn-store's `SafetensorsStore` refuses to overwrite by default, so `indococo-train export` panicked *after* training had saved the final checkpoint. Its stderr went to the tmux pane, and the script didn't check the exit code. The evals then ran on the stale file.
+
+Checked on the box: `logs/final_policy.safetensors` has sha256 `1f78503a…`, the same as an export of `checkpoints/1431600000` (the bc_v2 warm start). A fresh export of the 1731.6M checkpoint is `aa05d62d…`. So **the 44.8% / 44.1% / 82.8 numbers belong to the bc_v2 actor at 1431.6M**. That fits bc_v2's earlier 47.0% ± 3.5 over 200 games vs FR4. `rates` and `curr` load the checkpoint directory directly, so they are valid for 1731.6M.
+
+Fixes in this commit:
+- `indococo-train export` now calls `.overwrite(true)`.
+- `fr5_launch.sh` deletes the target first and aborts if export fails.
+
+The final checkpoint's h2h and pool400 should be re-run before any strength claim about 1731.6M.
+
+### 9.6 Training-side numbers
+
+**Reward share** (last 20 iterations): goal 25.2%, vel_ball_to_goal 15.6%, goal_dist 11.0%, face_ball 8.8%; the air terms are airdribble 3.0%, airdribble_seq 1.7%, aerial_distance 0.4%; reset_align 2.6%, **flip_reset_use 0.06%**. That last figure confirms the use reward almost never fires in the training mix.
+
+**Events**, last 100M steps (FR4's last 100M in brackets): goals 1.05/min (1.03), aerial goals 0.28 (0.27), air dribble bumps 0.42 (0.36), bumps 1.59 (1.45), demos 0.28 (0.22), in-air ratio 0.49 (0.50), entropy 3.43.
+
+![FR5 events](figures/fr5_events.png)
+![FR5 shares](figures/reward_share_exp_FR5.png)
+
+### 9.7 Verdict
+
+- **Progress:** for the first time the reset skill **survives PPO** in the curriculum. L0 is 27.4% greedy (FR4: 1.9%), above no input at every level, with about 90% of resets used.
+- **No transfer:** it does **not transfer to real games**. There were 0 uses in 300k steps, and the 7 resets came almost all from curriculum spawns.
+- **Strength:** the measured strength (44.8% vs FR4, pool 82.8) is for the warm start (9.5). The 1731.6M strength is **not yet measured**.
+- **Shipping rule:** a checkpoint ships if it uses resets in games while staying ≥48% vs FR4, or if it beats FR4 >50%. FR5 fails the first clause on transfer alone, whatever its strength. The second clause is untested until the re-run. **No `.bpk` was pushed to `checkpoints_to_test/`.**
+
+**Next ideas:**
+1. A BC/KL term inside the PPO loss (framework change), instead of alternating chunks, so the skill isn't eroded between refreshes.
+2. More curriculum levels near real game states (car and ball from real aerial situations: off a wall, from a pop), bridging L2 and kickoff play.
+3. A reset-use reward paid only when the use leads to a shot or goal, so resets become goal-directed rather than a curriculum trick.
+4. Lowering the `reset_curriculum` setter share (27–30%) to protect normal play.
+5. Re-run the 1731.6M h2h/pool400 with the fixed export.
+
+## 10. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
 |---|---|---|---|---|
@@ -484,8 +613,9 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 | FR3 | — | R3 | stopped at level 0; no checkpoint kept | box: `exp_FR3_run4` |
 | **AUD-1132M** | 1131.6M | R4 | **64.6% vs ADB-832M** (1000 g); pool 87.0 | `checkpoints_to_test/aud_1132M.bpk` |
 | **FR4-1432M** | 1431.6M | R5 | **63.3% vs ADB-832M**, **53.2% vs AUD-1132M** (1000 g); **pool 87.1** (best) | `checkpoints_to_test/fr4_1432M.bpk` |
+| FR5-1732M | 1731.6M | R6 | L0 reset success 27.4% greedy; 0 uses in real play; h2h/pool not yet measured (§9.5) | box: `exp_FR5/checkpoints/1793494122`; not shipped |
 
-## 10. Lessons learned and threats to validity
+## 11. Lessons learned and threats to validity
 
 1. **100-game evals are noisy** (±5 pts per opponent). The same 430.8M checkpoint scored 81.5 and 80.8 in two 100-game pool evals and 79.0 over 400 games. Periodic keep-best decisions near the threshold are partly luck, so only the 1000-game h2hs (±1.6) should rank close candidates. ADB vs X0 at 52.1% is not significant.
 2. **Self-play zero-sum effects.**
@@ -499,9 +629,9 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 7. **Single seed per run.** Every training run is one seed, so run-to-run variance is not recorded.
 8. **Headless ≠ RLBot.** Headless evals apply actions on the tick they are chosen, while RLBot runs them a few ticks late. Nexto's headless numbers may differ from live matches.
 
-## 11. Future work
+## 12. Future work
 
-- The reset curriculum failed three times (FR3 runs 3–4, FR4), always below the no-input baseline. Next options:
+- FR5 (§9) solved the curriculum-level skill with behaviour cloning but not transfer to real play; see §9.7 for the next ideas. Earlier notes on the curriculum (failed three times, FR3 runs 3–4, FR4):
   - behaviour cloning or a warm-up from the scripted aligner, which gets 54.7% at L0;
   - a separate reset-specialist policy, distilled later (an idea from Discord);
   - a curriculum-only pretraining phase, or paying only for earned resets above the no-input rate.
@@ -524,6 +654,9 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 | `reward_shares.csv` | per-term \|reward\| shares, last 20 and last 1000 iterations |
 | `fr3_level_baselines.csv` | FR3 per-level baselines |
 | `sps_benchmark.csv` | throughput benchmark |
+| `metrics_exp_FR5.csv` | FR5 training metrics (both attempts, column `attempt`) |
+| `fr5_bc_refresh.csv` | FR5 level-0 success of the PPO and BC actors at every refresh |
+| `reward_shares_FR5.csv` | FR5 \|reward\| shares, last 20 iterations |
 | `metric_keys_used.txt` | the metric keys used |
 
 **Metric keys used:**
@@ -544,4 +677,7 @@ So the air dribble shaping pays about 700× more than the reset payoff (13.3 / 0
 - the old detector in R1 runs (R1's `Events/Flip Resets per min` *is* the old detector);
 - signed-vs-abs reward shares for R0/R1;
 - seed variance;
-- a CTRL arm for AUD (dropped), so AUD's reward effect can't be separated from more training.
+- a CTRL arm for AUD (dropped), so AUD's reward effect can't be separated from more training;
+- FR5-final (1731.6M) h2h and pool400: the run scored the stale warm-start export (§9.5).
+
+FR5 figures (`fr5_*.png`, `reward_share_exp_FR5.png`) and the three FR5 CSVs are made by [`make_figures_fr5.py`](make_figures_fr5.py) from `exp_FR5/logs/{metrics,bc_refresh}.jsonl`.
