@@ -51,11 +51,49 @@ decisive win rate over the opponents.
 | Immortal | github.com/RLBot/RLBotPack `RLBotPack/Immortal` | MIT (pack) | TorchScript `jit.pt` | ExpandAdvancedObs / 90-row table | 6 | yes |
 | zero / random | `poolkit/agent.py` | | | | 8 | sanity baselines |
 
-Not in the pool: Seer (RLBotPack, LSTM fed raw RLBot packet fields such as
-euler angles and per-wheel contact; would need its own packet shim), Ripple
-and Tecko (no public weights found). `fetch_bots.sh` pins the commits; the
-weights stay in `~/eval_bots`, not in this repo, because the Necto family and
-Element repos state no license.
+Not in `pool.toml`: Seer (RLBotPack, LSTM fed raw RLBot packet fields such as
+euler angles and per-wheel contact; would need its own packet shim).
+`fetch_bots.sh` pins the commits; the weights stay in `~/eval_bots`, not in
+this repo, because the Necto family, Element and the GigaLearn bots state no
+license and Ripple is CC BY-NC-SA 4.0.
+
+## RLBot v5 botpack pool (`pool_botpack5.toml`)
+
+The v5 botpack (github.com/RLBot/botpack @ ef7fb02, 2026-11-01) added several
+ML bots. The ones that play 1v1 soccar with a reproducible obs are in a
+second pool file, so `pool.toml` scores stay comparable with older runs.
+Adapters are in `poolkit/botpack5.py`.
+
+| bot | source (pinned commit) | license | weights | obs / actions | tick skip | headless |
+|---|---|---|---|---|---|---|
+| Ripple v1.1 | github.com/Rolv-Arild/Ripple-RLBot (7ca4273) | CC BY-NC-SA 4.0 | ONNX policy + BC base (`onnxruntime`) | its own `obs.py` (attention: self, others, 5 ball-pred slices from RocketSim, 6-step action queue, pads) / 276-row lookup `act.py` | 4, 5-decision action delay queue | its own code via v1compat; action mode fixed to `kl` (first arm of its per-episode bandit), stochastic kickoffs |
+| Kira | github.com/stepkrav06/Kira (ba73b05) | none stated | GigaLearn TorchScript `SHARED_HEAD.lt` + `POLICY.lt` | GigaLearn `AdvancedObs` (109) / `DefaultAction` 90 + mask | 8, action delay 7 | ported from C++ |
+| Dice | github.com/V1XT1/Dice-BotPackV5 (8819829) | none stated | same, LeakyReLU | `AdvancedObsPadded(2)` (167) | 8 / 7 | ported |
+| Chronos | github.com/KingJake3113/Chronos (4f8fdd2) | none stated | same, ReLU | `AdvancedObsPadded(3)` (225) | 8 / 7 | ported |
+| GalactusV2 | github.com/SoldierDoge/GalactusV2 (217324c) | none stated | same, LeakyReLU | `GalactusOBS(3)` (258): padded obs + nearest big pad + 5 ball-prediction samples | 8 / 7 | ported; predictions from a ball-only RocketSim arena |
+
+GigaLearn notes: the `.lt` files are TorchScript modules without `forward`;
+`load_gigalearn_seq` rebuilds Linear -> LayerNorm -> activation from their
+parameters (GigaLearn `Models.h`), with the activation from the bot's
+`RLBotMain.cpp`. Greedy argmax over masked logits, as `InferAction(...,
+deterministic=true)`. `has_jumped`, `air_time_since_jump` and pad timers
+come from RocketSim directly (what they trained on); their RLBot clients
+approximate some of these from packets. The padded obs shuffles empty slots
+like the C++ does.
+
+Not added (yet): Fury (GGLBot fork with a custom 400-line obs, kickoff
+helpers and its own action parser), Wisp v2 / Willo 24k (Python GigaLearn
+ports with their own obs using RLBot ball prediction and ETA features; Willo
+is 3v3-focused), Ducky (RocketForge, `agent_setup.json` pipeline), Swishy
+(hoops only), ChadGPT (3v3 hivemind), TensorBot (v4/v5, team-specific
+models), Seer (see above), and the SB3 bots of the v4 pack (Omus, Monkey,
+Vector, Engine).
+
+Adapter checks for the new bots: each beats `zero` and `random` 6-0, and
+each beats Nexto and Immortal with roughly equal blue/orange results in
+20-game cross checks (Ripple 29-11 vs Nexto, Kira 29-11, Dice 34-6,
+Chronos 27-13, Galactus 17-3 of 20), which a mis-signed or mis-ordered obs
+would not.
 
 Adapter checks: every public bot beats `zero` and `random` in all test games,
 1v1.pt against itself is 18-22 over 40 jittered games, and the public bots

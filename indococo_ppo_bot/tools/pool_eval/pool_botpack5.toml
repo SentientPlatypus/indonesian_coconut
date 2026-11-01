@@ -1,0 +1,31 @@
+# RLBot v5 botpack ML bots (github.com/RLBot/botpack @ ef7fb02, Nov 2026), kept
+# separate from pool.toml so the historical pool score stays comparable.
+# Fetch with fetch_bots.sh; adapters in poolkit/botpack5.py.
+
+[[opponent]]
+name = "ripple"        # Rolv, Ripple v1.1, ONNX, CC BY-NC-SA 4.0; selection mode fixed to kl
+kind = "ripple"
+path = "~/eval_bots/ripple"
+
+[[opponent]]
+name = "kira"          # stepkrav06/Kira, GigaLearn AdvancedObs, no license file
+kind = "gigalearn"
+path = "~/eval_bots/kira"
+
+[[opponent]]
+name = "dice"          # V1XT1/Dice-BotPackV5, GigaLearn AdvancedObsPadded(2), LeakyReLU, no license file
+kind = "gigalearn"
+path = "~/eval_bots/dice"
+padded = 2
+activation = "leaky_relu"
+
+[[opponent]]
+name = "chronos"       # KingJake3113/Chronos, GigaLearn AdvancedObsPadded(3), no license file
+kind = "gigalearn"
+path = "~/eval_bots/chronos"
+padded = 3
+
+[[opponent]]
+name = "galactus"      # SoldierDoge/GalactusV2 201B, GalactusOBS (ball prediction), LeakyReLU, no license file
+kind = "galactus"
+path = "~/eval_bots/galactus"

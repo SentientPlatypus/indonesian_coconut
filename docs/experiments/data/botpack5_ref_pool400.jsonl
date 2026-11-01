@@ -1,0 +1,12 @@
+{"time": "2026-11-01T09:08:04-05:00", "candidate": "FR6final", "opponent": "1v1.pt", "games": 400, "wins": 263, "losses": 137, "timeouts": 0, "win_rate_decisive": 0.6575, "se": 0.0237, "seed": 424242}
+{"time": "2026-11-01T09:08:04-05:00", "candidate": "FR6final", "opponent": "ppo_430M", "games": 400, "wins": 277, "losses": 123, "timeouts": 0, "win_rate_decisive": 0.6925, "se": 0.0231, "seed": 424242}
+{"time": "2026-11-01T09:08:04-05:00", "candidate": "FR6final", "opponent": "nexto", "games": 400, "wins": 343, "losses": 57, "timeouts": 0, "win_rate_decisive": 0.8575, "se": 0.0175, "seed": 424242}
+{"time": "2026-11-01T09:08:04-05:00", "candidate": "FR6final", "opponent": "necto", "games": 400, "wins": 386, "losses": 14, "timeouts": 0, "win_rate_decisive": 0.965, "se": 0.0092, "seed": 424242}
+{"time": "2026-11-01T09:08:04-05:00", "candidate": "FR6final", "opponent": "element", "games": 400, "wins": 393, "losses": 7, "timeouts": 0, "win_rate_decisive": 0.9825, "se": 0.0066, "seed": 424242}
+{"time": "2026-11-01T09:08:04-05:00", "candidate": "FR6final", "opponent": "immortal", "games": 400, "wins": 378, "losses": 22, "timeouts": 0, "win_rate_decisive": 0.945, "se": 0.0114, "seed": 424242}
+{"time": "2026-10-31T18:27:15-04:00", "candidate": "FR4final", "opponent": "1v1.pt", "games": 400, "wins": 272, "losses": 128, "timeouts": 0, "win_rate_decisive": 0.68, "se": 0.0233, "seed": 424242}
+{"time": "2026-10-31T18:27:15-04:00", "candidate": "FR4final", "opponent": "ppo_430M", "games": 400, "wins": 284, "losses": 116, "timeouts": 0, "win_rate_decisive": 0.71, "se": 0.0227, "seed": 424242}
+{"time": "2026-10-31T18:27:15-04:00", "candidate": "FR4final", "opponent": "nexto", "games": 400, "wins": 359, "losses": 41, "timeouts": 0, "win_rate_decisive": 0.8975, "se": 0.0152, "seed": 424242}
+{"time": "2026-10-31T18:27:15-04:00", "candidate": "FR4final", "opponent": "necto", "games": 400, "wins": 392, "losses": 8, "timeouts": 0, "win_rate_decisive": 0.98, "se": 0.007, "seed": 424242}
+{"time": "2026-10-31T18:27:15-04:00", "candidate": "FR4final", "opponent": "element", "games": 400, "wins": 398, "losses": 2, "timeouts": 0, "win_rate_decisive": 0.995, "se": 0.0035, "seed": 424242}
+{"time": "2026-10-31T18:27:15-04:00", "candidate": "FR4final", "opponent": "immortal", "games": 400, "wins": 386, "losses": 14, "timeouts": 0, "win_rate_decisive": 0.965, "se": 0.0092, "seed": 424242}

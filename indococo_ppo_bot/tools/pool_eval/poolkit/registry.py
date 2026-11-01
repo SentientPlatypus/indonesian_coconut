@@ -18,6 +18,11 @@ def make_agent(kind: str, path: str = "", **options) -> Agent:
 
         return {"nexto": bots.Nexto, "necto": bots.Necto, "element": bots.Element,
                 "immortal": bots.Immortal}[kind](path)
+    if kind in ("ripple", "gigalearn", "galactus"):
+        from . import botpack5
+
+        return {"ripple": botpack5.Ripple, "gigalearn": botpack5.GigaLearn,
+                "galactus": botpack5.Galactus}[kind](path, **options)
     if kind == "zero":
         return ZeroAgent()
     if kind == "random":

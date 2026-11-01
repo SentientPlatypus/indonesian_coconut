@@ -59,7 +59,8 @@ indococo_ppo_bot/
   tools/parity.py         regenerates the fixture with the Python classes (needs master)
   tools/eval_loop.sh      pool evals + keep-best during training
   tools/bc/bc_pretrain.py FR5/FR6 behavior cloning: CE to expert labels + KL to the frozen (or --teacher) actor on normal play
-  tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal
+  tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal;
+                          pool_botpack5.toml: RLBot v5 botpack Ripple, Kira, Dice, Chronos, Galactus
   config/E8b_shell_contact_strong.json  E8B2 experiment config (input to parity.py)
 ```
 
@@ -317,6 +318,12 @@ Doc comments that name Python modules (`v4_env._reward_fn`,
 `tools/pool_eval/` plays a checkpoint against a pool of bots headless:
 1v1.pt, saved PPO checkpoints, Nexto, Necto, Element and Immortal. See its
 README for the protocol and per-bot details.
+
+A second pool, `tools/pool_eval/pool_botpack5.toml`, holds the ML bots of the
+RLBot v5 botpack (Ripple v1.1, and the GigaLearn bots Kira, Dice, Chronos and
+GalactusV2), run through `poolkit/botpack5.py`. It is kept out of `pool.toml`
+so the historical pool score stays comparable; pass `--pool
+tools/pool_eval/pool_botpack5.toml` to use it. Ripple needs `onnxruntime`.
 
 ```bash
 python tools/pool_eval/pool_eval.py --candidate checkpoints/<n> --games 400 --procs 32

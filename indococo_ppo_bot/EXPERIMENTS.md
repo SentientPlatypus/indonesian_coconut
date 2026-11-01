@@ -617,3 +617,64 @@ and dies if a chunk's steps do not advance. The bad attempt is kept in
 
 ### Results
 (pending)
+
+## Benchmark: RLBot v5 botpack ML bots (2026-11-01)
+
+### Why
+The old pool (Nexto, Necto, Element, Immortal) is saturated: FR4/FR6 win
+86-99% against it, so it no longer tells strong checkpoints apart. The RLBot v5
+botpack (github.com/RLBot/botpack @ ef7fb02, "Add 8 new Nexto+ bots", merged
+Nov 1 2026) ships several stronger ML bots with weights.
+
+### Survey (bots with a trained policy file)
+| bot | repo | format | 1v1 | status |
+|---|---|---|---|---|
+| Nexto, Necto | VirxEC/NectoFamily | TorchScript | yes | already in pool.toml |
+| Element | VirxEC/Elementv5 | pickled torch | yes | already in pool.toml |
+| Immortal | RLBot/RLBotPack (v4) | TorchScript | yes | already in pool.toml |
+| Ripple v1.1 (v1.0 too) | Rolv-Arild/Ripple-RLBot | ONNX (+BC base) | yes | **added** |
+| Kira | stepkrav06/Kira | GigaLearn TorchScript | yes | **added** |
+| Dice | V1XT1/Dice-BotPackV5 | GigaLearn | yes | **added** |
+| Chronos | KingJake3113/Chronos | GigaLearn | yes | **added** |
+| GalactusV2 | SoldierDoge/GalactusV2 | GigaLearn | yes | **added** |
+| Fury 200B | HappyBavarian07/FuryBotpack | GigaLearn | yes | skipped: custom 400-line obs + kickoff code + own action parser |
+| Wisp v2, Willo 24k | NicEastvillage/RLBot-Wisp-v2-py, RLBot-Willo-24k | GigaLearn (Python runtime) | Wisp yes, Willo 3s-focused | skipped for now: obs needs RLBot ball prediction + ETA features via its packet adapter |
+| Ducky | bccessnadev/RLBot-Ducky | RocketForge/GigaLearn | ? | skipped: RocketForge `agent_setup.json` pipeline |
+| Swishy | bccessnadev/RLBot-Swishy | GigaLearn | hoops | skipped: hoops only |
+| ChadGPT | thecosmicskye/ChadGPT | bf16 sharded relational model | 3v3 hivemind | skipped: 3v3 only |
+| TensorBot (v4, v5) | HappyBavarian07/TensorBot-v5 | torch `.pt`, blue/orange models | ? | skipped: separate per-team models, undocumented obs |
+| Seer | RLBot/RLBotPack | LSTM `.pt` | yes | skipped: raw packet fields, needs packet shim |
+| Omus, Monkey, Vector, Engine | RLBot/RLBotPack | SB3 zip | yes | skipped: old SB3 bots, weaker than Necto |
+
+### Setup
+`tools/pool_eval/pool_botpack5.toml` (separate from `pool.toml` so old pool
+scores stay comparable), adapters in `poolkit/botpack5.py`, weights fetched by
+`fetch_bots.sh` (not committed: Ripple is CC BY-NC-SA 4.0, the GigaLearn bots
+state no license). Same protocol as pool400: 400 games per opponent (200 seeds
+x both sides), seed 424242, first goal wins. Ripple runs with its action mode
+fixed to `kl` (its bandit's first arm). Sanity: every new bot beats zero and
+random 6-0 and beats Nexto and Immortal side-symmetrically (Ripple 29-11 vs
+Nexto, Kira 29-11, Dice 34-6, Chronos 27-13, Galactus 17-3).
+
+### Results (400 games each, decisive win %, ±1 se)
+| opponent | FR6-final | FR4-final |
+|---|---|---|
+| Chronos | 67.2 ± 2.4 (269-131) | 68.5 ± 2.3 (274-126) |
+| Kira | 53.0 ± 2.5 (212-188) | 54.8 ± 2.5 (219-181) |
+| Dice | 53.0 ± 2.5 (212-188) | 54.5 ± 2.5 (218-182) |
+| Ripple v1.1 (kl) | 55.8 ± 2.5 (223-177) | 52.0 ± 2.5 (208-192) |
+| **GalactusV2** | **15.5 ± 1.8 (62-338)** | **17.8 ± 1.9 (71-329)** |
+| mean (5 bots) | 48.9 | 49.5 |
+
+A repeat FR4-final vs Galactus run gave 70-330 (17.5%). No timeouts.
+Figure: `docs/experiments/figures/botpack5_bench.png`
+(`make_figures_botpack5.py`; data `docs/experiments/data/botpack5_bench.jsonl`).
+
+### Takeaways
+- Kira, Dice and Ripple are near coin flips: they separate checkpoints far
+  better than the old pool.
+- GalactusV2 (201B steps) beats both our best checkpoints about 5 to 1. It is
+  the first bot in any of our pools that we clearly lose to, and the obvious
+  target for the next benchmark and for a fixed training opponent (it would
+  need a Rust port of GalactusOBS + ball prediction to train against).
+- FR6-final and FR4-final are within noise of each other on this pool.
