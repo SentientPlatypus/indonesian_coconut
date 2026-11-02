@@ -1,0 +1,32 @@
+# TV2: 2v2 (INDOCOCO_TEAM_SIZE=2) on the FR7c rewards with a lower reset
+# reward (Chronos: a low reset weight kept half the resets and made the team
+# modes much stronger): flip_reset_use 600 -> 300, x1.0 in every setter
+# (FR7c: x2 normal play, x3 -> x0.5 drills). Warm start: FR7 3491.6M widened
+# to 132 inputs (tools/team/widen_1v1.py). EXPERIMENTS.md TV2.
+extends = "fr7.toml"
+
+[weights]
+air_touch_height = 8.0
+flip_reset_use = 300.0
+
+[air_touch_height]
+min_ball_height = 300.0
+decay = 0.7
+goal_bonus = 1.0
+wall_margin = 300.0
+episode_cap = 2.0
+
+[setter_scale.kickoff]
+flip_reset_use = 1.0
+[setter_scale.random]
+flip_reset_use = 1.0
+[setter_scale.replay]
+flip_reset_use = 1.0
+airdribble_seq = 0.5
+[setter_scale.reset_curriculum]
+flip_reset_use = 1.0
+air_touch_height = 0.0
+[setter_scale.air_reset]
+flip_reset_use = 1.0
+[setter_scale.air_near_ball]
+flip_reset_use = 1.0

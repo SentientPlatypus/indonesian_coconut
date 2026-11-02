@@ -1,0 +1,55 @@
+# TV2 learner settings (2v2, EXPERIMENTS.md TV2). Run with INDOCOCO_TEAM_SIZE=2.
+# @RUN@ / @ITERATIONS@ / @WARM@ / @THREADS@ / @GAMES@ filled in by tv2_launch.sh.
+# Self-play with past versions only: the fixed 1v1 opponents (1v1.pt, FR4,
+# FR6) do not take 2v2 inputs. The critic is new (import), so the first 20M
+# steps are critic-only.
+reward_config = "@RUN@/cfg/experiments/tv2.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = @THREADS@
+pools = 2
+games = @GAMES@
+timesteps_per_iteration = 100_000
+mini_batch_size = 50_000
+epochs = 2
+policy_lr = 5e-5
+critic_lr = 1e-4
+entropy = 0.012
+gamma = 0.995
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[opponents]
+chance = 0.2
+past_versions_weight = 1.0
+
+[[state_setters]]
+kind = "kickoff"
+weight = 0.55
+[[state_setters]]
+kind = "random"
+weight = 0.15
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.15
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.05
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.05
+fixed_level = 1
+[[state_setters]]
+kind = "air_reset"
+weight = 0.05

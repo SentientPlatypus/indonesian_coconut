@@ -9,7 +9,8 @@ use rlgymppo_utils::rlgym::{Action, GameState};
 /// Number of discrete actions.
 pub const N_ACTIONS: usize = 90;
 
-type Inner = DefaultAction<2, 8, 0>;
+/// Room for up to 3v3 (6 cars); 1v1 uses 2 of the slots.
+type Inner = DefaultAction<6, 8, 0>;
 
 /// `LookupTableAction` + `RepeatAction(repeats=8)`, all actions always valid.
 #[derive(Default)]

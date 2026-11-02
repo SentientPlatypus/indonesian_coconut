@@ -218,13 +218,17 @@ pub type BotEnv = Env<
     SharedInfo,
 >;
 
-/// A 1v1 Octane arena with the configured rewards and reset mix
+/// An Octane arena (1v1, or [`crate::obs::team_size`] per team) with the configured rewards and reset mix
 /// (see [`crate::setters`]; [`crate::setters::default_mix`] is the old fixed one).
 #[must_use]
 pub fn create_env(rewards: &RewardConfig, setters: &[WeightedSetter]) -> BotEnv {
     let mut arena = Arena::new(GameMode::Soccar);
-    arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
-    arena.add_car(Team::Orange, CarBodyConfig::OCTANE);
+    // Blue, Orange, Blue, Orange...: cars 0 and 1 stay one blue and one
+    // orange, as the 1v1 setters (replay, mirrors) expect.
+    for _ in 0..crate::obs::team_size() {
+        arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+        arena.add_car(Team::Orange, CarBodyConfig::OCTANE);
+    }
     Env::new(
         arena,
         build_mix(setters),

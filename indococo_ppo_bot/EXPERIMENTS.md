@@ -715,3 +715,85 @@ Figure: `docs/experiments/figures/botpack5_bench.png`
   target for the next benchmark and for a fixed training opponent (it would
   need a Rust port of GalactusOBS + ball prediction to train against).
 - FR6-final and FR4-final are within noise of each other on this pool.
+
+## Round 9: FR7c (Discord recipe + reset reward audit) and TV2 (2v2)
+
+### Why
+FR7/FR7b held ~FR4 strength but resets stayed rare in normal play (FR7b:
+first normal-play use at 3401.6M, while the 200-game h2h vs FR4 slid to 42%).
+The Nov 1 Discord read (RLGym server) gave a common recipe: air dribbles
+first (touch height + aerial distance), ~20% reset setters with a very high
+reset reward ramped down once resets show up, lower entropy (Chronos: double
+resets back within ~50M steps), a farming alarm at ~0.1% of steps, and,
+first, check the reset reward for bugs (Galactus V2: after fixing a reset
+reward bug, resets grew exponentially within 100M steps).
+
+### Reset reward audit (2026-11-01)
+Checked against RocketSim 0.3.3 source (`car/base.rs`) and the tick tracker:
+* Detection is right: RocketSim re-arms `has_flipped`/`has_double_jumped`
+  only when >= 3 wheels have contact (`is_on_ground`), ball contact
+  included; `resets.rs` requires a re-armed flag, wheels on the ball and no
+  other wheel contact, car > 150 uu and ball > 250 uu, so ground jumps, floor
+  and wall landings never fire (unit + RocketSim tests). One verdict per
+  re-arm, so no double counting while the wheels stay on the ball. Tracker
+  car order = `GameState` car order (both `0..num_cars`), also in 2v2.
+  rlgym_rs runs `SharedInfo::update` (closes the tick tracker's step) before
+  rewards, so the reward sees the same step's resets.
+* After a reset the flip never expires (RocketSim keeps
+  `air_time_since_jump` at 0 while `has_jumped` is false), as in the game.
+* The obtain part is paid in normal play too (0.1 x 600 x 2 in
+  kickoff/random/replay), not only drills.
+* **Bug 1 (fixed):** `flip_reset_use` waited for a touch in a step AFTER
+  the dodge step. A dodge that hits the ball inside the same 8-tick step,
+  the usual way a reset is spent at contact range, was never paid as a use
+  and never counted in `rates` (`uses` reuses this reward). Now paid on the
+  dodge step. Test `dodge_and_touch_in_the_same_step_counts_as_a_use`.
+* **Bug 2 (fixed):** a second reset while the first was still "usable"
+  reset the shot/goal-paid flags, so tapping the ball again with the wheels
+  re-paid the same shot (1.5) and goal (3.0) bonus (the ICBM quick-multiple-
+  reset farm). Flags now carry over from any reset inside its 3 s follow
+  window. Test `a_second_reset_does_not_repay_the_same_shot`.
+* Note: the shot/goal bonus pays within 3 s of a reset whether or not the
+  reset was used (by design since FR7: "reset that leads to a shot").
+* Scale: in FR7b, flip_reset_use paid on 6e-6 of car-steps
+  (|reward| 0.0005/step) against reset_align 0.19 and the air terms ~0.7, so
+  the event reward is a tiny share of the signal; the 20% setters and x3
+  drill scale target that.
+
+### FR7c changes (`fr7c.toml`, `train_fr7c.toml`, `fr7c_launch.sh`)
+| | FR7 / FR7b | FR7c |
+|---|---|---|
+| start | FR6-final / FR7 2891.6M | best 1000-g h2h vs FR4: FR7 3491.6M (52.5%) unless FR7b final is higher |
+| flip_reset_use | 600; use 0.4, shot 1.5, goal 3.0 | same weights, audit fixes in code |
+| reset scale, normal play (kickoff/random/replay) | x2 | x2 |
+| reset scale, drills (reset_curriculum, air_reset, air_near_ball) | x0.5 (air_near_ball x1) | x3.0 -> x1.0 (>= 2 normal resets in a chunk, or 300M) -> x0.5 (600M) |
+| air_touch_height | 0 | 8 (min ball 300, decay 0.7, wall/ceiling margin 300 uu, cap 2.0 per car per episode; 0 in reset_curriculum) |
+| airdribble / airdribble_seq / aerial_distance | 50 / 50 / 38 (goalward) | unchanged |
+| setters | kickoff 38, random 13+13, replay 18, wall_air_dribble 6, air_near_ball 4, reset_curriculum L1 3 + L2 3, air_reset 2 (practice 8%) | kickoff 34, random 12+12, replay 18, wall_air_dribble 4, air_near_ball 4, reset_curriculum L1 6 + L2 6, air_reset 4 (practice 20%) |
+| entropy | 0.015 | 0.012 |
+| farming alarm | none | flip_reset_use nonzero on > 0.1% of car-steps in a chunk: FARM_ALARM, drills x0.5, normal x1.0 |
+| guard | follow-up pick needs >= 48% | plus: 2 chunks < 45% -> roll back to the best >= 48% chunk, halve drills |
+| KL anchor | BC refresh, KL 5 to FR4-final | same |
+Follow-ups FR7d, FR7e run the same config from the best chunk.
+Push rule as FR7 (>= 48% vs FR4 over 1000 games and normal-play uses or a
+goal after a reset), name `fr7c_<N>M.bpk`.
+
+### TV2: 2v2 (`tv2.toml`, `train_tv2.toml`, `tv2_launch.sh`)
+* Team mode via `INDOCOCO_TEAM_SIZE=2` (README "Team mode"), obs 132.
+* Seed: FR7 3491.6M, input layer widened (`tools/team/widen_1v1.py`), new
+  critic with 20M critic-only steps.
+* Rewards: FR7c rewards with flip_reset_use 300 (half) and x1.0 everywhere
+  (Chronos: a low reset weight kept half the resets and made team play much
+  stronger).
+* Setters: kickoff 55, random 15+15, air_near_ball 5, reset_curriculum L1 5,
+  air_reset 5. Self-play with past versions (20%); no 1v1 fixed opponents.
+* Eval: `indococo-train h2h` 200 games per chunk vs the seed and the previous
+  chunk, with resets/uses per side; 1000 games at the end. No 2v2 Nexto/Necto
+  pool yet (`tools/pool_eval` is a 1v1 harness).
+* Shares the L4 with FR7c (see below).
+
+### Same box or queued? (measured 2026-11-01 ~8:30 PM ET)
+FR7b alone: median 64.8k steps/s (24 threads). With a 2v2 run beside it on
+8 threads: FR7b 43.2k, 2v2 34.3k (critic warm-up phase), together 77.5k
+(+20% total), GPU 100%, 10.7 GB of 23 GB. Both run: FR7 runs ~1/3 slower,
+but the box does more total work and 2v2 starts now instead of in ~7 h.

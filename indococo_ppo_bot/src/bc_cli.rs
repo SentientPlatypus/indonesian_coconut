@@ -50,7 +50,7 @@ fn parse_pol(s: &str) -> Pol {
 
 fn logits(actor: &Net, obs: &[&Vec<f32>], dev: &Device) -> Vec<Vec<f32>> {
     let flat: Vec<f32> = obs.iter().flat_map(|o| o.iter().copied()).collect();
-    let x = Tensor::<2>::from_data(TensorData::new(flat, [obs.len(), OBS_SIZE]), dev);
+    let x = Tensor::<2>::from_data(TensorData::new(flat, [obs.len(), obs_size()]), dev);
     actor
         .forward(x)
         .into_data()
@@ -401,7 +401,7 @@ pub fn normal_obs(args: &[String]) {
     let mut f = std::fs::File::create(&args[4]).expect("out");
     let mut n = 0;
     for o in &outs {
-        n += o.len() / OBS_SIZE;
+        n += o.len() / obs_size();
         let bytes: Vec<u8> = o.iter().flat_map(|x| x.to_le_bytes()).collect();
         f.write_all(&bytes).expect("w");
     }

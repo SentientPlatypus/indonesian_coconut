@@ -28,8 +28,9 @@ indococo_ppo_bot/
     lib.rs                LAYERS = [2048, 2048, 1024, 1024] (both nets)
     consts.rs             rlgym common_values, STEPS_PER_SECOND = 15, TICK_SKIP = 8
     state.rs              StateView: f64 mirror of rlgym GameState/Car (+ derived props)
-    obs.rs                V2DefaultObs (92)
-    action.rs             90-action lookup table
+    obs.rs                V2DefaultObs (92 in 1v1; 52 + 40 x team size: 132 in 2v2, 172 in 3v3)
+                          team_size() from INDOCOCO_TEAM_SIZE (default 1), read once per process
+    action.rs             90-action lookup table (action buffer sized for up to 6 cars)
     env.rs                arena, terminals, metrics (Events/*, Setters/*), per-tick hook -> BotEnv
     setters.rs            configurable state setters, SetterMix (logs which setter started an episode)
     resets.rs             flip reset detection: per physics tick in training, step-level fallback
@@ -47,7 +48,7 @@ indococo_ppo_bot/
       flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs,
       reset_align.rs      (reset_align: potential-based wheels-to-ball alignment shaping)
                           experiment terms (built only when weighted; see EXPERIMENTS.md)
-    bin/train.rs          indococo-train: train | import | export | record | rates | snapshots | curr | normal-obs
+    bin/train.rs          indococo-train: train | import | export | record | rates | snapshots | curr | normal-obs | h2h
     bin/rlbot.rs          indococo-rlbot: RLBot v5 client, Burn CPU (flex) inference
   tests/
     reward_parity.rs      one test per reward term vs. Python on recorded states
@@ -58,6 +59,7 @@ indococo_ppo_bot/
                           rates_mix.toml (setter mix for `indococo-train rates`)
   tools/parity.py         regenerates the fixture with the Python classes (needs master)
   tools/eval_loop.sh      pool evals + keep-best during training
+  tools/team/widen_1v1.py  1v1 actor -> 2v2/3v3 actor: widen the input layer, 1v1 opponent block -> first opponent
   tools/bc/bc_pretrain.py FR5/FR6 behavior cloning: CE to expert labels + KL to the frozen (or --teacher) actor on normal play
   tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal;
                           pool_botpack5.toml: RLBot v5 botpack Ripple, Kira, Dice, Chronos, Galactus + v4 Seer
@@ -235,6 +237,40 @@ line: resets per minute (new and old detector), uses per minute, and the
 share of episodes, and of setter episodes where the candidate starts in the
 air, with a reset (`flier_early_reset_share`: within 3 s;
 `flier_earned_reset_share`: after 0.33 s of control and within 3 s). Run it from the repository root.
+
+### Team mode (2v2, TV2)
+Set `INDOCOCO_TEAM_SIZE=2` (or 3) for the whole process: `create_env` adds
+Blue, Orange, Blue, Orange (cars 0/1 stay one blue and one orange for the
+1v1-shaped setters), the observation grows by 20 floats per extra car
+(allies first, then opponents, as `DefaultObs`) and `new_model` takes
+`obs_size()` inputs. The flip reset tracker, rewards and per-team opponent
+self-play are per car and need no change. The `replay` setter and `rates`
+are still 1v1-only (TV2 does not use them). Warm start: export a 1v1 actor,
+`tools/team/widen_1v1.py` widens its input layer (ally and extra opponent
+columns start at 0, so the step-0 policy is the 1v1 policy), then
+`INDOCOCO_TEAM_SIZE=2 indococo-train import <pt> <dir>`.
+`indococo-train h2h <ckptA> <ckptB> <games> [threads]` plays kickoff games in
+the process's team mode (A blue in even envs, orange in odd; goal or 300 s,
+3% random actions) and prints wins, losses, draws, `win_rate_decisive` and
+flip resets / goalward uses per side. Data flow of a TV2 run
+(`experiments/tv2_launch.sh`): FR7 3491.6M actor.safetensors ->
+widen -> import -> `tv2_init/seed` -> 50M-step PPO chunks (self-play with
+past versions, no fixed 1v1 opponents, no BC refresh) -> per chunk 200-game
+h2h vs the seed and vs the previous chunk (`logs/mid.jsonl`) -> 1000-game
+final h2h vs the seed (`tv2_final/h2h_seed.json`).
+
+### FR7c pipeline (reset ramp, farming alarm, 48% guard)
+`experiments/fr7c_launch.sh` (started by the FR7b auto-chain: fr7_launch.sh
+hands any RUN=FR7c.. over to it) seeds from the best 1000-game h2h vs FR4
+(FR7 3491.6M or FR7b final), then per 50M chunk: render `fr7c.toml` into
+`fr7c_live.toml` with the current reset scales (`ramp.env`: drills x3.0 ->
+x1.0 once a chunk shows >= 2 normal-play resets or after 300M steps -> x0.5
+after 600M; normal play x2.0), PPO (`train_fr7c.toml`), BC refresh with the
+KL anchor to FR4-final, 150k-step rates + 200-game h2h vs FR4, then the
+farming alarm (flip_reset_use paying on > 0.1% of car-steps: `FARM_ALARM`,
+drills x0.5, normal x1.0) and the 48% guard (two chunks < 45%: roll back to
+the best >= 48% chunk under a new timestamp dir name, halve the drill
+scale). `mid.jsonl` also logs `reset_pay_share`, `drill`, `normal`.
 
 ### Real-play snapshots (FR7)
 `indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>`

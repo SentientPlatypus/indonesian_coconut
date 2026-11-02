@@ -474,6 +474,29 @@ mod extends_tests {
     }
 
     #[test]
+    fn fr7c_renders_and_builds() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let text = std::fs::read_to_string(dir.join("fr7c.toml"))
+            .unwrap()
+            .replace("@NORMAL@", "2.0")
+            .replace("@DRILL@", "3.0");
+        let live = dir.join(format!("fr7c_test_{}.toml", std::process::id()));
+        std::fs::write(&live, text).unwrap();
+        let cfg = RewardConfig::from_file(&live);
+        std::fs::remove_file(&live).unwrap();
+        let cfg = cfg.unwrap();
+        assert_eq!(cfg.weights.air_touch_height, 8.0);
+        assert_eq!(cfg.weights.flip_reset_use, 600.0);
+        assert_eq!(cfg.air_touch_height.wall_margin, 300.0);
+        assert_eq!(cfg.flip_reset_use.goal_bonus, 3.0);
+        assert_eq!(cfg.setter_scale["air_reset"]["flip_reset_use"], 3.0);
+        assert_eq!(cfg.setter_scale["kickoff"]["flip_reset_use"], 2.0);
+        // fr4's drill zeroing survives the extends chain.
+        assert_eq!(cfg.setter_scale["reset_curriculum"]["airdribble"], 0.0);
+        let _ = cfg.build();
+    }
+
+    #[test]
     fn aud_reworks_air_terms_and_adb_keeps_e8b2_behaviour() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
         let adb = RewardConfig::from_file(&dir.join("adb.toml")).unwrap();

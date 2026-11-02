@@ -14,6 +14,12 @@
 #   and a 200-game h2h vs FR4-final, logged to logs/mid.jsonl.
 # Phase C: final evals into fr7_final (FR5 conventions).
 set -u
+# FR7c and later follow-ups run the FR7c config (fr7c_launch.sh), which picks
+# its own start checkpoint (best h2h vs FR4 of FR7 3491.6M / FR7b final).
+# FR7_OLD_CONFIG=1 keeps the FR7 config for them.
+if [[ "${RUN:-FR7}" =~ ^FR7[c-z]$ && -z "${FR7_OLD_CONFIG:-}" ]]; then
+  unset START START_CK INIT_BC FOLLOWUP_N; exec bash "$(dirname "$0")/fr7c_launch.sh"
+fi
 R=/home/ubuntu/ippo_runs; RUN=${RUN:-FR7}; X=$R/exp_$RUN; C=$R/code/indococo_ppo_bot; B=$R/code/bin/indococo-train-fr7
 START=${START:-2631600000}; END=${END:-$((START + 1000000000))}; CHUNK=${CHUNK:-50000000}
 KL=${KL:-5.0}; USEW=${USEW:-3.0}; REFRESH_STEPS=${REFRESH_STEPS:-1500}

@@ -192,9 +192,37 @@ pub struct V2DefaultObs;
 
 /// Observation size for 1v1.
 pub const OBS_SIZE: usize = 92;
+
+/// Cars per team for this process: `INDOCOCO_TEAM_SIZE` (1, 2 or 3; default 1).
+/// Read once, so a training or eval process is either 1v1 or team mode.
+#[must_use]
+pub fn team_size() -> usize {
+    static TS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *TS.get_or_init(|| {
+        let n = std::env::var("INDOCOCO_TEAM_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+        assert!((1..=3).contains(&n), "INDOCOCO_TEAM_SIZE must be 1..=3, got {n}");
+        n
+    })
+}
+
+/// Observation size for `n` cars per team: 52 + 20 per car (1v1 92, 2v2 132, 3v3 172).
+#[must_use]
+pub const fn obs_size_for(n: usize) -> usize {
+    52 + 40 * n
+}
+
+/// Observation size for this process ([`team_size`]).
+#[must_use]
+pub fn obs_size() -> usize {
+    obs_size_for(team_size())
+}
+
 impl<SI> Obs<SI> for V2DefaultObs {
     fn get_obs_space(&self, _si: &SI) -> usize {
-        OBS_SIZE
+        obs_size()
     }
     fn reset(&mut self, _s: &GameState, _si: &mut SI) {}
     fn build_obs(&mut self, state: &GameState, _si: &mut SI) -> FullObs {

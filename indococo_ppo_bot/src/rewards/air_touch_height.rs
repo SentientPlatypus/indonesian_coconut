@@ -8,12 +8,17 @@
 //! speed toward the opponent goal over `BALL_MAX_SPEED` (clamped to [0, 1]).
 //! The decay keeps a single long dribble from being farmed touch by touch;
 //! pair it with `aerial_distance`, which pays the distance covered.
+//!
+//! FR7c anti-farming gates (defaults keep the old behaviour): `wall_margin`
+//! drops touches with the car or ball within that many uu of a side/back
+//! wall or the ceiling (wall-pop and wall-tap farming), and `episode_cap`
+//! caps the total paid per car per episode.
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
 use super::StepReward;
-use crate::consts::{BACK_NET_Y, BALL_MAX_SPEED, CEILING_Z};
+use crate::consts::{BACK_NET_Y, BACK_WALL_Y, BALL_MAX_SPEED, CEILING_Z, SIDE_WALL_X};
 use crate::state::{CarView, StateView};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -22,6 +27,8 @@ pub struct AirTouchHeightParams {
     pub min_ball_height: f64,
     pub decay: f64,
     pub goal_bonus: f64,
+    pub wall_margin: f64,
+    pub episode_cap: f64,
 }
 
 impl Default for AirTouchHeightParams {
@@ -30,6 +37,8 @@ impl Default for AirTouchHeightParams {
             min_ball_height: 250.0,
             decay: 0.8,
             goal_bonus: 1.0,
+            wall_margin: 0.0,
+            episode_cap: f64::INFINITY,
         }
     }
 }
@@ -38,6 +47,7 @@ pub struct AirTouchHeight {
     p: AirTouchHeightParams,
     /// Paid touches since each car last stood on the ground.
     touches: Vec<i32>,
+    paid: Vec<f64>,
 }
 
 impl AirTouchHeight {
@@ -46,6 +56,7 @@ impl AirTouchHeight {
         Self {
             p,
             touches: Vec::new(),
+            paid: Vec::new(),
         }
     }
 }
@@ -60,6 +71,7 @@ pub(crate) fn goalward_speed(car: &CarView, state: &StateView) -> f64 {
 impl StepReward for AirTouchHeight {
     fn reset(&mut self, initial: &StateView) {
         self.touches = vec![0; initial.cars.len()];
+        self.paid = vec![0.0; initial.cars.len()];
     }
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
@@ -74,9 +86,19 @@ impl StepReward for AirTouchHeight {
             {
                 continue;
             }
+            let m = self.p.wall_margin;
+            let near_wall = |v: DVec3| {
+                v.x.abs() > SIDE_WALL_X - m || v.y.abs() > BACK_WALL_Y - m || v.z > CEILING_Z - m
+            };
+            if m > 0.0 && (near_wall(car.pos) || near_wall(state.ball.pos)) {
+                continue;
+            }
             let height = (state.ball.pos.z / CEILING_Z).min(1.0);
             let bonus = 1.0 + self.p.goal_bonus * goalward_speed(car, state);
-            rewards[a] = height * self.p.decay.powi(self.touches[a]) * bonus;
+            let r = height * self.p.decay.powi(self.touches[a]) * bonus;
+            let r = r.min((self.p.episode_cap - self.paid[a]).max(0.0));
+            rewards[a] = r;
+            self.paid[a] += r;
             self.touches[a] += 1;
         }
         rewards
@@ -105,6 +127,26 @@ mod tests {
             cars: vec![car],
             ..StateView::default()
         }
+    }
+
+    #[test]
+    fn wall_touches_and_episode_cap_are_gated() {
+        let p = AirTouchHeightParams {
+            goal_bonus: 0.0,
+            wall_margin: 400.0,
+            episode_cap: 0.7,
+            ..Default::default()
+        };
+        let mut r = AirTouchHeight::new(p);
+        r.reset(&state(17.0, 93.0, 0));
+        let mut wall = state(900.0, 1022.0, 1);
+        wall.cars[0].pos.x = SIDE_WALL_X - 200.0;
+        wall.ball.pos.x = SIDE_WALL_X - 150.0;
+        assert_eq!(r.get_rewards(&wall)[0], 0.0, "wall touch");
+        let a = r.get_rewards(&state(900.0, 1022.0, 1))[0];
+        let b = r.get_rewards(&state(900.0, 1022.0, 1))[0];
+        let c = r.get_rewards(&state(900.0, 1022.0, 1))[0];
+        assert!((a - 0.5).abs() < 1e-9 && (b - 0.2).abs() < 1e-9 && c == 0.0, "{a} {b} {c}");
     }
 
     #[test]

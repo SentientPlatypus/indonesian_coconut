@@ -138,6 +138,16 @@ impl FlipResetUse {
         p.obtain * p.obtain_decay.powi(n as i32)
     }
 
+    /// Use payout of a dodge touch: nothing unless the ball heads goalward.
+    fn use_pay(p: &FlipResetUseParams, car: &CarView, state: &StateView) -> f64 {
+        let v = goalward(car, state);
+        if v > 0.0 {
+            p.use_weight * (0.25 + 0.75 * (v / p.use_full_speed).min(1.0))
+        } else {
+            0.0
+        }
+    }
+
     /// Dodge, use, shot and goal payouts of a held reset.
     fn follow_up(
         &self,
@@ -153,19 +163,23 @@ impl FlipResetUse {
             let since_reset = now - held.reset_tick;
             match held.dodge_tick {
                 None if car.has_flipped && !before.has_flipped => {
-                    if since_reset <= ticks(p.dodge_window_s) {
-                        held.dodge_tick = Some(now);
-                    } else {
+                    if since_reset > ticks(p.dodge_window_s) {
                         held.usable = false;
+                    } else if car.ball_touches > 0 {
+                        // Dodged into the ball within one step (the usual
+                        // reset use at contact range): the touch is in this
+                        // step, so pay it now instead of waiting for another.
+                        pay += Self::use_pay(p, car, state);
+                        held.dodge_tick = Some(now);
+                        held.usable = false;
+                    } else {
+                        held.dodge_tick = Some(now);
                     }
                 }
                 None if since_reset > ticks(p.dodge_window_s) => held.usable = false,
                 Some(t) if now - t > ticks(p.touch_window_s) => held.usable = false,
                 Some(_) if car.ball_touches > 0 => {
-                    let v = goalward(car, state);
-                    if v > 0.0 {
-                        pay += p.use_weight * (0.25 + 0.75 * (v / p.use_full_speed).min(1.0));
-                    }
+                    pay += Self::use_pay(p, car, state);
                     held.usable = false;
                 }
                 _ => {}
@@ -206,7 +220,13 @@ impl StepReward for FlipResetUse {
             }
             if resets::is_flip_reset(&before, car, &state.ball) {
                 rewards[a] += self.obtain_pay(a, car, state);
-                let keep = self.held[a].filter(|h| !h.usable);
+                // Audit fix (Nov 2026): carry the shot/goal flags of any
+                // reset still inside its follow window, used or not. Before,
+                // a re-reset while the first was still usable cleared them,
+                // so wheel-taps on one ball re-paid the same shot and goal.
+                let follow = ticks(self.p.follow_s);
+                let keep = self.held[a]
+                    .filter(|h| state.tick_count.saturating_sub(h.reset_tick) <= follow);
                 self.held[a] = Some(Held {
                     reset_tick: state.tick_count,
                     // The reset clears `has_flipped`; set again means the car
@@ -361,6 +381,42 @@ mod tests {
         d.cars[0].wheels_with_contact = [false; 4];
         r.get_rewards(&d);
         assert_eq!(r.get_rewards(&goalward_touch(&d, 152))[0], 0.0, "landed");
+    }
+
+    #[test]
+    fn dodge_and_touch_in_the_same_step_counts_as_a_use() {
+        let mut r = reward(0);
+        let s1 = reset_step(120);
+        r.get_rewards(&s1);
+        let mut d = goalward_touch(&s1, 136);
+        d.cars[0].has_jumped = true;
+        d.cars[0].has_flipped = true;
+        let used = r.get_rewards(&d)[0];
+        assert!((used - 1.0).abs() < 1e-9, "same-step dodge touch: {used}");
+        assert_eq!(r.get_rewards(&goalward_touch(&d, 144))[0], 0.0, "paid once");
+    }
+
+    #[test]
+    fn a_second_reset_does_not_repay_the_same_shot() {
+        let mut r = reward(0);
+        let s1 = reset_step(120);
+        r.get_rewards(&s1);
+        let mut shot = at(&s1, 136);
+        shot.ball.pos = DVec3::new(0.0, 3000.0, 400.0);
+        shot.ball.vel = DVec3::new(0.0, 2000.0, 0.0);
+        assert!((r.get_rewards(&shot)[0] - 0.5).abs() < 1e-9);
+        // Car re-flips its flags and taps the ball again: a second reset
+        // while the first is still usable.
+        let mut again = shot.clone();
+        again.tick_count = 152;
+        again.cars[0].has_flipped = true;
+        r.get_rewards(&again);
+        let mut re = again.clone();
+        re.tick_count = 160;
+        re.cars[0].has_flipped = false;
+        re.cars[0].tick_flip_reset = Some(true);
+        r.get_rewards(&re);
+        assert_eq!(r.get_rewards(&at(&re, 168))[0], 0.0, "shot paid once per follow window");
     }
 
     #[test]

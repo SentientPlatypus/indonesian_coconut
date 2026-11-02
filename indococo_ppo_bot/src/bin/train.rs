@@ -22,7 +22,7 @@ use indococo_bot::LAYERS;
 use indococo_bot::action::N_ACTIONS;
 use indococo_bot::env::{BotEnv, create_env};
 use indococo_bot::events::StepEvents;
-use indococo_bot::obs::OBS_SIZE;
+use indococo_bot::obs::obs_size;
 use indococo_bot::resets;
 use indococo_bot::rewards::RewardConfig;
 use indococo_bot::rewards::StepReward;
@@ -338,14 +338,14 @@ fn train(config: &Path) {
 
 /// Fixed probe input used to compare logits across PyTorch and Burn.
 fn probe_input() -> Vec<f32> {
-    (0..OBS_SIZE)
+    (0..obs_size())
         .map(|i| ((i as f32) * 0.37).sin() * 0.8)
         .collect()
 }
 
 fn new_model(dev: &Device) -> Actic {
     Actic::new(
-        OBS_SIZE,
+        obs_size(),
         N_ACTIONS,
         LAYERS.to_vec(),
         LAYERS.to_vec(),
@@ -365,7 +365,7 @@ const KEY_MAP: [(&str, &str); 5] = [
 ];
 
 fn print_probe_logits(actor: &rlgymppo::Net, dev: &Device) {
-    let x = Tensor::<2>::from_data(TensorData::new(probe_input(), [1, OBS_SIZE]), dev);
+    let x = Tensor::<2>::from_data(TensorData::new(probe_input(), [1, obs_size()]), dev);
     let logits = actor
         .forward(x)
         .into_data()
@@ -457,7 +457,7 @@ fn record(reward_toml: &Path, out: &Path, steps: usize, ckpt: Option<&Path>) {
             .iter()
             .map(|o| match &actor {
                 Some(a) if rng.random_range(0.0..1.0) > 0.2 => {
-                    let x = Tensor::<2>::from_data(TensorData::new(o.clone(), [1, OBS_SIZE]), &dev);
+                    let x = Tensor::<2>::from_data(TensorData::new(o.clone(), [1, obs_size()]), &dev);
                     let logits = a
                         .forward(x)
                         .into_data()
@@ -692,7 +692,7 @@ const RATES_RANDOM_ACTION: f64 = 0.03;
 /// Greedy actions of `actor` for a batch of observations.
 fn argmax_actions(actor: &Net, obs: &[&Vec<f32>], dev: &Device) -> Vec<usize> {
     let flat: Vec<f32> = obs.iter().flat_map(|o| o.iter().copied()).collect();
-    let x = Tensor::<2>::from_data(TensorData::new(flat, [obs.len(), OBS_SIZE]), dev);
+    let x = Tensor::<2>::from_data(TensorData::new(flat, [obs.len(), obs_size()]), dev);
     let logits = actor
         .forward(x)
         .into_data()
@@ -820,6 +820,12 @@ fn main() {
             arg(3),
             arg(4).parse().expect("steps"),
             args.get(5).map_or(8, |t| t.parse().expect("threads")),
+        ),
+        "h2h" => h2h(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3).parse().expect("games"),
+            args.get(4).map_or(8, |t| t.parse().expect("threads")),
         ),
         other => panic!("unknown mode {other:?}"),
     }
@@ -1023,4 +1029,120 @@ fn snapshots(setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize, out
         all.len() / indococo_bot::setters::SNAPSHOT_LEN,
         out.display()
     );
+}
+
+/// Kickoff games of `a` against `b` in this process's team mode
+/// (`INDOCOCO_TEAM_SIZE`), greedy with 3% random actions; `a` plays blue in
+/// even envs and orange in odd ones. A game ends on a goal or after 300 s
+/// (draw). Also counts flip resets and their goalward uses per side (all cars).
+/// Prints one JSON line: wins, losses, draws, win_rate_decisive, resets.
+fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
+    init_from_default(true).expect("load collision meshes");
+    let mix = vec![WeightedSetter {
+        weight: 1.0,
+        kind: indococo_bot::setters::SetterKind::Kickoff,
+    }];
+    let per = games.div_ceil(threads);
+    let res: Vec<[u64; 7]> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..threads)
+            .map(|t| {
+                let mix = &mix;
+                s.spawn(move || h2h_worker(mix, a, b, per, 7000 + t as u64))
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().expect("worker")).collect()
+    });
+    let mut tot = [0u64; 7];
+    for r in &res {
+        for i in 0..7 {
+            tot[i] += r[i];
+        }
+    }
+    let [w, l, d, ra, rb, ua, ub] = tot;
+    let out = serde_json::json!({
+        "a": a, "b": b, "team_size": indococo_bot::obs::team_size(),
+        "games": w + l + d, "wins": w, "losses": l, "draws": d,
+        "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
+        "resets_a": ra, "resets_b": rb, "uses_a": ua, "uses_b": ub,
+    });
+    println!("{out}");
+}
+
+fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u64) -> [u64; 7] {
+    const ENVS: usize = 8;
+    let dev = Device::flex();
+    let (na, nb) = (load_actor(a, &dev), load_actor(b, &dev));
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut out = [0u64; 7];
+    let mut started = 0usize;
+    struct G {
+        env: BotEnv,
+        state: GameState,
+        obs: Vec<Vec<f32>>,
+        prev: StateView,
+        a_team: u8,
+        uses: FlipResetUse,
+        live: bool,
+    }
+    let mut new_game = |k: usize, started: &mut usize| -> G {
+        let mut env = create_env(&RewardConfig::default(), mix);
+        let (state, obs, _) = env.reset();
+        let prev = StateView::from_game_state(&state);
+        let mut uses = FlipResetUse::new(FlipResetUseParams {
+            obtain: 0.0,
+            shot_bonus: 0.0,
+            goal_bonus: 0.0,
+            ..FlipResetUseParams::default()
+        });
+        uses.reset(&prev);
+        let live = *started < games;
+        *started += 1;
+        G { env, state, obs, prev, a_team: (k % 2) as u8, uses, live }
+    };
+    let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
+    while gs.iter().any(|g| g.live) {
+        let mut oa = Vec::new();
+        let mut ob = Vec::new();
+        for g in gs.iter().filter(|g| g.live) {
+            for (i, c) in g.prev.cars.iter().enumerate() {
+                if c.team == g.a_team { oa.push(&g.obs[i]); } else { ob.push(&g.obs[i]); }
+            }
+        }
+        let (aa, ab) = (argmax_actions(&na, &oa, &dev), argmax_actions(&nb, &ob, &dev));
+        let (mut ia, mut ib) = (0, 0);
+        for k in 0..ENVS {
+            if !gs[k].live {
+                continue;
+            }
+            let g = &mut gs[k];
+            let acts: Vec<usize> = g.prev.cars.iter().map(|c| {
+                let x = if c.team == g.a_team { ia += 1; aa[ia - 1] } else { ib += 1; ab[ib - 1] };
+                if rng.random_bool(RATES_RANDOM_ACTION) { rng.random_range(0..N_ACTIONS) } else { x }
+            }).collect();
+            let res = g.env.step(&g.state, &acts);
+            let view = g.env.get_shared_info().view(&res.state);
+            let used = g.uses.get_rewards(&view);
+            for (i, c) in view.cars.iter().enumerate() {
+                let side = usize::from(c.team != g.a_team);
+                if resets::is_flip_reset(&g.prev.cars[i], c, &view.ball) {
+                    out[3 + side] += 1;
+                }
+                if used[i] > 0.0 {
+                    out[5 + side] += 1;
+                }
+            }
+            let done = res.is_terminal || res.truncated;
+            if done {
+                match view.scoring_team() {
+                    Some(t) if t == g.a_team => out[0] += 1,
+                    Some(_) => out[1] += 1,
+                    None => out[2] += 1,
+                }
+                *g = new_game(k, &mut started);
+            } else {
+                (g.state, g.obs, g.prev) = (res.state, res.obs, view);
+            }
+        }
+    }
+    out
 }

@@ -1,0 +1,40 @@
+# FR7c: FR7 + the Nov 1 Discord recipe (EXPERIMENTS.md FR7c). Rendered per
+# chunk by fr7c_launch.sh into fr7c_live.toml (@DRILL@, @NORMAL@ filled in).
+# * Reward audit fixes in code (flip_reset_use.rs): a dodge that touches the
+#   ball in the same 8-tick step now counts as a use (was silently dropped:
+#   the usual contact-range reset use paid nothing and was not counted in
+#   rates), and a second reset inside the follow window no longer re-pays the
+#   same shot/goal bonus.
+# * Air dribble: air_touch_height back on, small (weight 8, ~0.06/step vs
+#   ~0.7/step for the AUD air terms), decay 0.7 per touch, no pay within 300 uu
+#   of a wall or the ceiling, capped at 2.0 per car per episode. aerial_distance
+#   (38, goalward ball progress only) stays as the distance-with-ball term.
+# * Reset reward: x@NORMAL@ in kickoff/random/replay, x@DRILL@ in the reset
+#   drills (high at the start, ramped down by the launcher once resets show
+#   up in normal play; see fr7c_launch.sh).
+extends = "fr7.toml"
+
+[weights]
+air_touch_height = 8.0
+
+[air_touch_height]
+min_ball_height = 300.0
+decay = 0.7
+goal_bonus = 1.0
+wall_margin = 300.0
+episode_cap = 2.0
+
+[setter_scale.kickoff]
+flip_reset_use = @NORMAL@
+[setter_scale.random]
+flip_reset_use = @NORMAL@
+[setter_scale.replay]
+flip_reset_use = @NORMAL@
+airdribble_seq = 0.5
+[setter_scale.reset_curriculum]
+flip_reset_use = @DRILL@
+air_touch_height = 0.0
+[setter_scale.air_reset]
+flip_reset_use = @DRILL@
+[setter_scale.air_near_ball]
+flip_reset_use = @DRILL@
