@@ -702,6 +702,38 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 
 **Follow-up (running):** the driver continued automatically as FR7b from the chunk with the most normal-play uses (2891.6M, 1 kickoff use, 52.5% vs FR4 in 200 games), same config, 1.0B steps (4:51 PM ET Nov 1, about 7 h), then FR7c and FR7d. **Next ideas:** spawn `replay` states later in the sequence (car already under the ball with the reset available) so practice is closer to the reset; a reset-specialist policy distilled into the main one; GalactusV2 as an opponent or benchmark target.
 
+### 11.5 FR7b: same config from the 2891.6M chunk (2891.6M → 3891.6M)
+
+**Why.** 2891.6M was the FR7 chunk with the only normal-play use (one kickoff-episode use). FR7b continued from it with the unchanged FR7 config for 1.0B more steps to see whether normal-play uses would grow. It trained 4:51 PM → 10:29 PM ET Nov 1 (about 64.8k steps/s alone, about 43k while the 2v2 run TV2 shared the L4 from 8:43 to 9:10 PM ET); final evals finished 10:51 PM ET, the botpack5 pool (`fr7b_final/bp5/`, 400 games per bot) at 11:23 PM ET.
+
+**Mid-run checks** (`data/fr7b_mid.csv`, 20 checks of 150k steps):
+
+![FR7b mid-run](figures/fr7b_mid.png)
+
+43 resets, 11 uses, **0 goals after a reset**. Ten uses came from `reset_curriculum` spawns; the only normal-play use was one `random`-episode use at 3401.6M (h2h 46.5%). `replay` episodes made 8 resets and 0 uses. The 200-game h2h vs FR4-final ranged 42.0–55.5% (mean 49.7%) and ended at 48.5%.
+
+**Final evaluation** (`~/ippo_runs/fr7b_final/`, seed 424242). Final checkpoint `exp_FR7b/checkpoints/1793590116` (`cumulative_timesteps = 3891600000`, post-BC actor), fresh export `final_policy.safetensors` (sha256 `315a2586…0d691`, written 10:31 PM ET).
+
+| measure | FR7b-final (3891.6M) | FR7 3491.6M | FR7-final | FR6-final |
+|---|---|---|---|---|
+| h2h vs FR4-final, 1000 games | 49.7% (497-503, ±1.6) | **52.5%** | 47.2% | 48.0% |
+| h2h vs FR6-final, 1000 games | 50.8% (508-492, ±1.6) | **51.3%** | 48.6% | — |
+| pool score (400 games/opponent) | **86.5** | 85.9 | 84.9 | 85.0 |
+| vs 1v1.pt / 430M / Nexto | 70.0 / 70.3 / 87.8 | 64.5 / 75.3 / 85.3 | 66.0 / 67.5 / 85.3 | 65.8 / 69.3 / 85.8 |
+| vs Necto / Element / Immortal | 97.3 / 98.0 / 95.8 | 97.0 / 98.0 / 95.3 | 98.0 / 97.8 / 94.8 | 96.5 / 98.3 / 94.5 |
+| botpack5: Ripple / Kira / Dice / Chronos / GalactusV2 | 51.5 / 52.5 / 48.2 / 68.2 / 14.5 | — | — | 55.8 / 53.0 / 53.0 / 67.2 / 15.5 |
+
+**Real play** (`rates_fr7.toml`, 300k steps, self-play; resets / uses / goals after a reset): FR7b-final 3 / 1 / 0 (the use from a `reset_curriculum` spawn; `replay` 2 resets, 0 uses; kickoff, random and air_reset 0 / 0 / 0). FR6-final on the same mix: 5 / 0 / 0. On the FR6-comparable `rates_fr3.toml` (300k steps): 5 / 2 / 0, both uses from `reset_curriculum` (kickoff 2 resets, 0 uses), against FR6-final's 9 / 4 / 0.
+
+**Curriculum skill** (960 episodes per row, greedy / sampled success): L0 31.6% / 19.5%, L1 26.8% / 15.8%, L2 10.1% / 5.6%. Slightly above FR7-final (29.0 / 22.6 / 10.2% greedy).
+
+**Verdict.**
+- **Not pushed.** The strength half of the push rule holds (49.7% vs FR4 ≥ 48%), but the reset half does not in the reading §11.4 used: no kickoff/random use and no goal after a reset, and the only uses are from curriculum spawns. It has one more use than FR6 on `rates_fr7` (1 vs 0) but half as many on `rates_fr3` (2 vs 4). It has the best pool score of the FR line (86.5, Nexto 87.8%); the weights are kept on the box at `~/ippo_runs/fr7_keep/fr7b_3892M/1793590116/actor.bpk` (md5 `80b808bc…5c9405`).
+- **Botpack5:** level with FR6 (within about 2 se on each bot; GalactusV2 still wins about 6:1).
+- **Not a new best:** 49.7% vs FR4 is below FR7 3491.6M (52.5%), so FR7c started from 3491.6M, as its launcher decides.
+- Resets from normal play stayed at about one use per 3M steps of checks, and no goal after a reset. FR7c (Round 9 in `indococo_ppo_bot/EXPERIMENTS.md`) changes the recipe: 20% drills paid x3 then ramped down, `air_touch_height` 8, entropy 0.012, and the reset-reward audit fixes. It started at 10:51 PM ET Nov 1 from FR7 3491.6M.
+
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
@@ -721,6 +753,7 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 | **FR6-2632M** | 2631.6M | R7 | first checkpoint with real-play reset uses (4 per 300k steps, 0 goals after); 48.0% vs FR4, 47.6% vs AUD (1000 g); pool 85.0 | `checkpoints_to_test/fr6_2632M.bpk` |
 | FR7-3492M | 3491.6M | R8 (mid chunk) | 52.5% vs FR4, 51.3% vs FR6 (1000 g); pool 85.9; first goal after a reset (mid-run, curriculum spawn); 300k checks: 1 use, 0 goals | box: `fr7_keep/3492M`; not shipped (fails reset half of push rule) |
 | FR7-final | 3631.6M | R8 | 47.2% vs FR4, 48.6% vs FR6 (1000 g); pool 84.9; 2 uses / 0 goals per 300k (rates_fr3) | box: `exp_FR7/checkpoints/1793568505`; not shipped |
+| FR7b-final | 3891.6M | R8 (FR7b, from 2891.6M) | 49.7% vs FR4, 50.8% vs FR6 (1000 g); pool 86.5 (best of the FR line, Nexto 87.8); 1 use / 0 goals per 300k (rates_fr7, curriculum spawn) | box: `fr7_keep/fr7b_3892M`; not shipped (fails reset half of push rule) |
 
 ## 13. Lessons learned and threats to validity
 

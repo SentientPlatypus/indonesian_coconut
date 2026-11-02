@@ -639,6 +639,17 @@ Trained 11:12 AM -> 4:30 PM ET, finals done 4:51 PM ET. Seed 424242, fresh expor
   config, 1.0B steps (~7 h), then FR7c/FR7d.
 
 
+### FR7b results (2891.6M -> 3891.6M, finals 10:51 PM ET Nov 1)
+Same FR7 config from the 2891.6M chunk. Final 3891.6M (`exp_FR7b/checkpoints/1793590116`,
+kept in `~/ippo_runs/fr7_keep/fr7b_3892M`): 49.7% vs FR4-final, 50.8% vs FR6-final
+(1000 g, seed 424242), pool 86.5 (Nexto 87.8), botpack5 Ripple 51.5 / Kira 52.5 /
+Dice 48.2 / Chronos 68.2 / GalactusV2 14.5. rates_fr7 300k: 3 resets / 1 use / 0 goals
+(use from reset_curriculum); rates_fr3 300k: 5 / 2 / 0 (FR6: 9 / 4 / 0). Curriculum
+greedy L0 31.6%, L1 26.8%, L2 10.1%. Mid checks: 43 resets, 11 uses (1 normal-play,
+random, at 3401.6M), 0 goals after a reset; h2h vs FR4 (200 g) 42-55.5%.
+Not pushed (no normal-play uses or goals at the finals). FR7c started from FR7 3491.6M
+(52.5% > 49.7%). REPORT.md §11.5, `docs/experiments/data/fr7b_mid.csv`.
+
 ## Benchmark: RLBot v5 botpack ML bots (2026-11-01)
 
 ### Why
