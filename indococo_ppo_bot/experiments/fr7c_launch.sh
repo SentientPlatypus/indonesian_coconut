@@ -10,8 +10,10 @@
 #   (52.5%) unless FR7b's final beat it. Never a collapsing chunk.
 # * Reset reward ramp (rendered into fr7c_live.toml before every chunk):
 #   drills (reset_curriculum, air_reset, air_near_ball) x3.0 at the start,
-#   x1.0 once normal play (kickoff+random+replay) shows >= 2 resets in a
-#   chunk's 150k-step rates or after 300M steps, x0.5 after 600M steps.
+#   x1.0 once normal play (kickoff+random+replay) shows >= 2 uses or >= 5
+#   resets in a chunk's 150k-step rates (checked from 100M steps on; the
+#   3491.6M start already shows 0-2 stray resets per chunk) or after 300M
+#   steps, x0.5 after 600M steps.
 #   Normal play stays x2.0.
 # * Farming alarm: if flip_reset_use pays on > 0.1% of car-steps over a chunk
 #   (metrics RewardNonzero/flip_reset_use), write FARM_ALARM, drop drills to
@@ -100,14 +102,14 @@ while :; do
   farm=$(tail -n +$((mlines + 1)) $X/logs/metrics.jsonl 2>/dev/null | $PYT -c 'import json,sys
 v=[json.loads(l).get("RewardNonzero/flip_reset_use",0) for l in sys.stdin if l.strip()]
 print(sum(v)/len(v) if v else 0)' 2>/dev/null || echo 0)
-  nres=$(echo "${r:-null}" | $PYT -c 'import json,sys;d=json.load(sys.stdin) or {};print(sum(d.get(k,{}).get("resets",0) for k in ("kickoff","random","replay")))' 2>/dev/null || echo 0)
+  read nres nuse < <(echo "${r:-null}" | $PYT -c 'import json,sys;d=json.load(sys.stdin) or {};N=("kickoff","random","replay");print(sum(d.get(k,{}).get("resets",0) for k in N),sum(d.get(k,{}).get("uses",0) for k in N))' 2>/dev/null || echo 0 0)
   echo "{\"steps\":$now,\"rates\":${r:-null},\"h2h_FR4_200\":$wr,\"reset_pay_share\":$farm,\"drill\":$DRILL,\"normal\":$NORMAL}" >> $X/logs/mid.jsonl
   log "$RUN chunk done at $now: $(tail -1 $X/logs/mid.jsonl)"
   source $X/ramp.env
   if $PYT -c "import sys;sys.exit(0 if $farm > 0.001 else 1)"; then
     touch $X/FARM_ALARM; DRILL=0.5; NORMAL=1.0; log "FARM ALARM: flip_reset_use paid on $farm of car-steps (> 0.1%); drills x0.5, normal x1.0"
-  elif (( RAMPED == 0 && nres >= 2 )); then
-    RAMPED=1; DRILL=$($PYT -c "print(min($DRILL,1.0))"); log "ramp: $nres normal-play resets this chunk; drills now x$DRILL"
+  elif (( RAMPED == 0 && now >= START0 + 100000000 && (nuse >= 2 || nres >= 5) )); then
+    RAMPED=1; DRILL=$($PYT -c "print(min($DRILL,1.0))"); log "ramp: $nres resets / $nuse uses in normal play this chunk; drills now x$DRILL"
   fi
   if [[ "$wr" != null ]] && $PYT -c "import sys;sys.exit(0 if $wr < 0.45 else 1)"; then LOW=$((LOW + 1)); else LOW=0; fi
   if (( LOW >= 2 )); then

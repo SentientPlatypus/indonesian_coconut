@@ -766,7 +766,7 @@ Checked against RocketSim 0.3.3 source (`car/base.rs`) and the tick tracker:
 | start | FR6-final / FR7 2891.6M | best 1000-g h2h vs FR4: FR7 3491.6M (52.5%) unless FR7b final is higher |
 | flip_reset_use | 600; use 0.4, shot 1.5, goal 3.0 | same weights, audit fixes in code |
 | reset scale, normal play (kickoff/random/replay) | x2 | x2 |
-| reset scale, drills (reset_curriculum, air_reset, air_near_ball) | x0.5 (air_near_ball x1) | x3.0 -> x1.0 (>= 2 normal resets in a chunk, or 300M) -> x0.5 (600M) |
+| reset scale, drills (reset_curriculum, air_reset, air_near_ball) | x0.5 (air_near_ball x1) | x3.0 -> x1.0 (from 100M: >= 2 normal-play uses or >= 5 resets in a chunk; else at 300M) -> x0.5 (600M) |
 | air_touch_height | 0 | 8 (min ball 300, decay 0.7, wall/ceiling margin 300 uu, cap 2.0 per car per episode; 0 in reset_curriculum) |
 | airdribble / airdribble_seq / aerial_distance | 50 / 50 / 38 (goalward) | unchanged |
 | setters | kickoff 38, random 13+13, replay 18, wall_air_dribble 6, air_near_ball 4, reset_curriculum L1 3 + L2 3, air_reset 2 (practice 8%) | kickoff 34, random 12+12, replay 18, wall_air_dribble 4, air_near_ball 4, reset_curriculum L1 6 + L2 6, air_reset 4 (practice 20%) |

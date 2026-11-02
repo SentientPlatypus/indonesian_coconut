@@ -264,7 +264,7 @@ final h2h vs the seed (`tv2_final/h2h_seed.json`).
 hands any RUN=FR7c.. over to it) seeds from the best 1000-game h2h vs FR4
 (FR7 3491.6M or FR7b final), then per 50M chunk: render `fr7c.toml` into
 `fr7c_live.toml` with the current reset scales (`ramp.env`: drills x3.0 ->
-x1.0 once a chunk shows >= 2 normal-play resets or after 300M steps -> x0.5
+x1.0 once a chunk (from 100M on) shows >= 2 normal-play uses or >= 5 resets, or after 300M steps -> x0.5
 after 600M; normal play x2.0), PPO (`train_fr7c.toml`), BC refresh with the
 KL anchor to FR4-final, 150k-step rates + 200-game h2h vs FR4, then the
 farming alarm (flip_reset_use paying on > 0.1% of car-steps: `FARM_ALARM`,
