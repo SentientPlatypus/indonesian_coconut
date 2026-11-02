@@ -797,3 +797,13 @@ FR7b alone: median 64.8k steps/s (24 threads). With a 2v2 run beside it on
 8 threads: FR7b 43.2k, 2v2 34.3k (critic warm-up phase), together 77.5k
 (+20% total), GPU 100%, 10.7 GB of 23 GB. Both run: FR7 runs ~1/3 slower,
 but the box does more total work and 2v2 starts now instead of in ~7 h.
+
+### TV2 stopped early (2026-11-01 9:10 PM ET)
+Paused on the user's request: no 2v2 until 1v1 shows good normal-play flip
+resets AND a 1v1 checkpoint beats the current best (FR7 3491.6M, 52.5% vs
+FR4-final over 1000 games). TV2 ran 8:43-9:10 PM ET and reached 70.6M steps of
+its first 50M PPO chunk (after 21.5M critic-only warm-up); it was stopped 0.9M
+steps before the first save at 71.5M, so the only kept checkpoint is the seed
+`tv2_init/1793583625` (21.5M, critic warmed). No 2v2 evals exist. The code,
+configs and run dir (`exp_TV2`) are kept; `~/ippo_runs/TV2_NO_FOLLOWUP` blocks
+the TV2b/TV2c chain. FR7b went back to ~64-68k steps/s alone (24 threads).
