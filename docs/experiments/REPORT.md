@@ -797,6 +797,39 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 - **Follow-up (running):** FR7e started 10:05 AM ET Nov 2 from the FR7d chunk with the best 200-game h2h (4211.6M, 58.0%), same config, 1.0B steps. It is the last run of the auto-chain.
 
 
+### 11.7b FR7e: FR7c config a third time from the 4211.6M chunk (4211.6M → 5211.6M)
+
+**Why.** FR7d ended at 49.7% vs FR4 with 0 normal-play uses, so the last run of the auto-chain restarted the FR7c config (drill ramp reset to x3) from FR7d's best chunk, 4211.6M (58.0% vs FR4-final in 200 games). It trained 10:05 AM ET → 3:22 PM ET Nov 2 alone on the L4; final evals finished 3:42 PM ET, and the extra 1000-game h2h vs FR7 3491.6M and the botpack5 pool (`fr7e_final/bp5/`) finished 4:40 PM ET while FR8 trained. Neither the farming alarm nor the 48% guard fired. Drills went x3 → x1 at 4521.6M and x0.5 at 4821.6M.
+
+**Mid-run checks** (`data/fr7e_mid.csv`, 20 checks of 150k steps):
+
+![FR7e mid-run](figures/fr7e_mid.png)
+
+42 resets, 14 uses, **0 goals after a reset**. All 14 uses came from `reset_curriculum` spawns; kickoff, random and replay episodes made 9 resets and **0 uses**. The 200-game h2h vs FR4-final ranged 42.5–54.5% (mean 49.1%), highest at 4321.6M, and ended at 49.0%.
+
+**Final evaluation** (`~/ippo_runs/fr7e_final/`, seed 424242). Final checkpoint `exp_FR7e/checkpoints/1793650831` (`cumulative_timesteps = 5211600000`), fresh export `final_policy.safetensors` (sha256 `fbe72b29…aa96466`, written 3:22 PM ET).
+
+| measure | FR7e-final (5211.6M) | FR7d-final | FR7c-final | FR7 3491.6M |
+|---|---|---|---|---|
+| h2h vs FR4-final, 1000 games | 49.8% (498-502, ±1.6) | 49.7% | 45.6% | **52.5%** |
+| h2h vs FR6-final, 1000 games | 49.4% (494-506, ±1.6) | **52.4%** | 49.2% | 51.3% |
+| h2h vs FR7 3491.6M, 1000 games | 49.3% (493-507, ±1.6) | — | — | — |
+| pool score (400 games/opponent) | 86.2 | **86.4** | 85.4 | 85.9 |
+| vs 1v1.pt / 430M / Nexto | 69.5 / 69.8 / 85.2 | 66.5 / 71.8 / 87.2 | 68.0 / 69.0 / 83.2 | 64.5 / 75.3 / 85.3 |
+| vs Necto / Element / Immortal | 98.0 / 99.0 / 95.5 | 98.2 / 98.5 / 96.0 | 97.8 / 98.8 / 95.5 | 97.0 / 98.0 / 95.3 |
+| botpack5: Ripple / Kira / Dice / Chronos / GalactusV2 | 57.0 / 53.2 / 48.5 / 66.0 / 15.8 | 52.2 / 58.8 / 46.8 / 66.2 / 16.2 | 49.2 / 53.0 / 46.2 / 63.2 / 16.2 | — |
+
+**Real play** (300k steps, self-play; resets / uses / goals after a reset): on `rates_fr7.toml` FR7e-final made 4 / 1 / 0, the one use from `reset_curriculum` (kickoff 1 / 0 / 0, random and replay 0 / 0 / 0). On the FR6-comparable `rates_fr3.toml`: 9 / 2 / 0, both uses from `reset_curriculum` (kickoff 2 / 0 / 0), against FR6-final's 9 / 4 / 0.
+
+**Curriculum skill** (960 episodes per row, greedy / sampled success): L0 33.3% / 18.8%, L1 26.7% / 14.6%, L2 10.5% / 5.0%.
+
+**Verdict.**
+- **Not pushed.** Strength passes the bar (49.8% vs FR4) but the reset half fails again: 0 uses in normal play, 0 goals after a reset, and fewer uses than FR6 on `rates_fr3`.
+- **Not a new best.** It loses to FR7 3491.6M head to head (49.3%) and stays below it vs FR4 (49.8% vs 52.5%). Best model unchanged.
+- **The FR7c config is exhausted.** Three runs (3.0B steps, 60 checks) produced 0 normal-play reset uses. The chain ends here.
+- **Follow-up (running):** FR8 (§11.8) started 3:43 PM ET Nov 2 from FR7 3491.6M widened to the 106-input obs, FR7c config, 1.0B steps, then FR8b.
+
+
 ### 11.8 Attention encoders: research note, and FR8 (previous action + car-frame obs)
 
 Question (2026-11-02): would an attention policy, as some Discord bots use, help
@@ -869,7 +902,7 @@ on the box workspace):
 
 ## 14. Future work
 
-- FR7 (§11) kept strength but did not move resets into normal play; see §11.4. FR7b, FR7c and FR7d (§11.5–§11.7) did not either; FR7e continues the FR7c config and ends the chain.
+- FR7 (§11) kept strength but did not move resets into normal play; see §11.4. FR7b, FR7c and FR7d (§11.5–§11.7) did not either; FR7e (§11.7b) ended the chain with the same result (49.8% vs FR4, 0 normal-play uses); FR8 (§11.8) changes the obs instead.
 - FR6 (§10) got the first real-play uses at FR4-level strength, but only from curriculum-style spawns and with no goals after a reset; see §10.4.
 - FR5 (§9) solved the curriculum-level skill with behaviour cloning but not transfer to real play; see §9.7 for the next ideas. Earlier notes on the curriculum (failed three times, FR3 runs 3–4, FR4):
   - behaviour cloning or a warm-up from the scripted aligner, which gets 54.7% at L0;

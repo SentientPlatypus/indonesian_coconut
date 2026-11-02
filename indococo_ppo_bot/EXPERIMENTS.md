@@ -843,6 +843,19 @@ normal-play), 0 goals; h2h vs FR4 (200 g) 45.5-58%. Not pushed (no normal-play u
 Best model still FR7 3491.6M. FR7e (last of the chain) started 10:05 AM ET from the
 4211.6M chunk (58% in 200 g). REPORT.md §11.7, `docs/experiments/data/fr7d_mid.csv`.
 
+### FR7e results (4211.6M -> 5211.6M, finals 3:42 PM ET Nov 2)
+Trained 10:05 AM -> 3:22 PM ET Nov 2 from FR7d 4211.6M, FR7c config (drill x3 -> x1 at
+4521.6M -> x0.5 at 4821.6M). No FARM ALARM, no 48% GUARD.
+Final 5211.6M (`exp_FR7e/checkpoints/1793650831`): 49.8% vs FR4-final, 49.4% vs
+FR6-final, 49.3% vs FR7 3491.6M (1000 g, seed 424242), pool 86.2 (Nexto 85.2),
+botpack5 Ripple 57.0 / Kira 53.2 / Dice 48.5 / Chronos 66.0 / GalactusV2 15.8.
+rates_fr7 300k: 4 / 1 / 0 (use from curriculum); rates_fr3 300k: 9 / 2 / 0 (curriculum;
+FR6: 9 / 4 / 0). Curriculum greedy L0 33.3%, L1 26.7%, L2 10.5%. Mid checks: 42 resets,
+14 uses (all reset_curriculum, 0 normal-play), 0 goals; h2h vs FR4 (200 g) 42.5-54.5%.
+Not pushed (no normal-play uses). Best model still FR7 3491.6M. End of the FR7c-config
+chain; FR8 (obs change) started 3:43 PM ET via the hand-off watcher.
+REPORT.md §11.7b, `docs/experiments/data/fr7e_mid.csv`.
+
 ## FR8: previous action + car-frame ball obs (planned 2026-11-02)
 
 ### Why
