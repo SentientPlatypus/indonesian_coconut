@@ -9,6 +9,7 @@ What carries over from the Python stack:
 
 - **Observations:** RLGym v2 `DefaultObs` with the 1v1 layout (92 floats) and
   the `air_time_since_jump` clamp at 1.25 s, matching `1v1.pt`.
+  FR8 adds an extended obs (106 in 1v1); see "Observation layout" below.
 - **Actions:** the 90-entry `LookupTableAction` (no masks).
 - **Rewards:** every term of the E8B2 experiment
   (`E8b_shell_contact_strong.json`), with the same weights, zero-sum wrapping
@@ -28,7 +29,7 @@ indococo_ppo_bot/
     lib.rs                LAYERS = [2048, 2048, 1024, 1024] (both nets)
     consts.rs             rlgym common_values, STEPS_PER_SECOND = 15, TICK_SKIP = 8
     state.rs              StateView: f64 mirror of rlgym GameState/Car (+ derived props)
-    obs.rs                V2DefaultObs (92 in 1v1; 52 + 40 x team size: 132 in 2v2, 172 in 3v3)
+    obs.rs                V2DefaultObs (92 in 1v1; 52 + 40 x team size: 132 in 2v2, 172 in 3v3; +14 with INDOCOCO_OBS_EXT=1)
                           team_size() from INDOCOCO_TEAM_SIZE (default 1), read once per process
     action.rs             90-action lookup table (action buffer sized for up to 6 cars)
     env.rs                arena, terminals, metrics (Events/*, Setters/*), per-tick hook -> BotEnv
@@ -48,7 +49,7 @@ indococo_ppo_bot/
       flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs,
       reset_align.rs      (reset_align: potential-based wheels-to-ball alignment shaping)
                           experiment terms (built only when weighted; see EXPERIMENTS.md)
-    bin/train.rs          indococo-train: train | import | export | record | rates | snapshots | curr | normal-obs | h2h
+    bin/train.rs          indococo-train: train | import | export | record | rates | snapshots | curr | normal-obs | h2h | widen
     bin/rlbot.rs          indococo-rlbot: RLBot v5 client, Burn CPU (flex) inference
   tests/
     reward_parity.rs      one test per reward term vs. Python on recorded states
@@ -272,6 +273,50 @@ drills x0.5, normal x1.0) and the 48% guard (two chunks < 45%: roll back to
 the best >= 48% chunk under a new timestamp dir name, halve the drill
 scale). `mid.jsonl` also logs `reset_pay_share`, `drill`, `normal`.
 
+### Observation layout
+
+| Slice (1v1) | Size | Content | Scale |
+|---|---|---|---|
+| 0..9 | 9 | ball position, velocity, angular velocity | pos / (4096, 6000, 2044), vel / 2300, ang vel / 5.5 |
+| 9..43 | 34 | boost pad timers (rlgym `BOOST_LOCATIONS` order, reversed for orange) | / 10 |
+| 43..52 | 9 | own flags: holding jump, handbrake, has_jumped, is_jumping, has_flipped, is_flipping, has_double_jumped, can_flip, air_time_since_jump (clamped 1.25 s) | raw |
+| 52..72 | 20 | own car: position, forward, up, velocity, angular velocity, boost, demo timer, on_ground, boosting, supersonic | as ball, boost / 100 |
+| 72..92 | 20 | opponent car (team mode: allies then opponents, 20 each) | as own car |
+| 92..100 | 8 | **FR8 only:** previous action = the held controls (throttle, steer, pitch, yaw, roll, jump, boost, handbrake) | raw (-1..1, 0/1) |
+| 100..103 | 3 | **FR8 only:** ball position minus own car position in the car frame (forward, forward x up, up) | / 4096 |
+| 103..106 | 3 | **FR8 only:** ball velocity minus own car velocity in the car frame | / 2300 |
+
+Orange sees the field mirrored in x and y. The FR8 block comes after every car
+block (2v2: 132 -> 146). It is on when `INDOCOCO_OBS_EXT=1` (trainer, evals);
+the RLBot bot picks it from the input width of `weights/actor.bpk`
+(106 = extended, 92 = base). The car-frame terms are computed from the base
+obs (`obs::ext_features`), so Rust, the Python pool eval
+(`tools/pool_eval/poolkit/obs_ext.py`) and `tools/bc/bc_pretrain.py` share one
+formula. The previous action is `CarState::controls`: in RocketSim the
+controls of the last action; in RLBot rlbot-rocketsim fills it from the
+packet's `last_input`, which is the bot's own held controls. Both are zero at
+the start of a training episode; in RLBot the first decision of a kickoff
+still sees the controls held before the goal (a small known difference).
+Pre-FR8 nets (fixed opponents, the FR4 KL teacher, pool bots) keep the base
+obs: the trainer loads them with zero weights for the new inputs (identical
+outputs), and poolkit picks the obs from each net's input width.
+
+`indococo-train widen <src_ck> <dst_ck>` (with `INDOCOCO_OBS_EXT=1`) widens a
+base checkpoint's actor and critic and prints the max |logit| / |value|
+differences on real env obs (FR7 3491.6M: 0.0 / 0.0). Parity:
+`cargo test --test obs_ext` (prev action = the taken action's controls,
+car-frame terms vs a direct RocketSim computation, base obs unchanged, the
+RLBot view of the state gives the same obs) and
+`tools/bpk_to_pt/obs_ext_parity.py` on an `INDOCOCO_OBS_EXT=1 indococo-train record`
+file (Python vs Rust extension floats).
+
+### FR8 pipeline
+`experiments/fr8_launch.sh` = the FR7c pipeline above with the extended obs,
+binary `code_fr8/bin/indococo-train-fr8`, start `fr8_init/1793565816` (FR7 3491.6M
+widened), finals 1000-game h2h vs FR4-final and vs FR7 3491.6M, pool400,
+pool_botpack5, rates. `experiments/fr8_handoff.sh` waits for FR7e's finals and
+launches it (fallback: an FR7c-config FR7f). Status: `experiments/fr8_status.sh`.
+
 ### Real-play snapshots (FR7)
 `indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>`
 self-plays a checkpoint (greedy, 5% random actions) over a setter mix and,
@@ -392,7 +437,10 @@ control); see EXPERIMENTS.md. `RATES_MIX` picks the rates setter file
 (`indococo-rlbot` for Linux, `indococo-rlbot.exe` for Windows), and
 `weights/actor.bpk`. To refresh the weights, copy `actor.bpk` from a
 checkpoint into `weights/`. To point at another checkpoint directory instead,
-set `INDOCOCO_WEIGHTS`.
+set `INDOCOCO_WEIGHTS`. The binaries (rebuilt for FR8) read the actor's
+input width at startup: 92-input weights (FR7 and older) run the base obs,
+106-input weights (FR8 checkpoints) the extended obs. It prints
+`indococo-rlbot: actor input N, extended obs B` on startup.
 
 ## Not ported or differences
 

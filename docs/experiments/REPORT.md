@@ -797,6 +797,39 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 - **Follow-up (running):** FR7e started 10:05 AM ET Nov 2 from the FR7d chunk with the best 200-game h2h (4211.6M, 58.0%), same config, 1.0B steps. It is the last run of the auto-chain.
 
 
+### 11.8 Attention encoders: research note, and FR8 (previous action + car-frame obs)
+
+Question (2026-11-02): would an attention policy, as some Discord bots use, help
+normal-play reset use? Findings (full note with benchmarks: `attention_research.md`
+on the box workspace):
+
+- Necto / Nexto use a Perceiver-style cross-attention: the own car is the single
+  query; ball, boost pads and other players are keys/values with a padding mask; 2
+  preprocessing MLP layers, 2 cross-attention blocks, separate actor and critic
+  copies ([Necto](https://github.com/Rolv-Arild/Necto); Lucy-SKG paper §4.2-4.3,
+  [arXiv 2305.15801](https://arxiv.org/pdf/2305.15801v1.pdf); RLBot's Necto bot.toml:
+  "attention ... to support any number of players",
+  [link](https://github.com/RLBot/python-interface/blob/master/tests/necto/bot.toml)).
+  The Seer thesis describes them the same way
+  ([Seer](https://nevillewalo.ch/assets/docs/MA_Neville_Walo_Seer_RLRL.pdf)).
+- GigaLearn has MLP policies only (configurable layer sizes, shared head, layer
+  norm; [GigaLearnCPP](https://github.com/ZealanL/GigaLearnCPP-Leak)), and
+  GigaLearn / RLGym-PPO 1v1 bots use large MLPs
+  ([PISTY](https://bugss05.github.io/PISTY_CL_DRL_in_Rocket_League/PISTY__Ground_and_Aerial_Striking_Bot_in_Rocket_League.pdf),
+  [RLGym-PPO guide](https://rlgym.org/Rocket%20League/training_an_agent)).
+  Our FR runs already beat Nexto 83-87%.
+- Verdict: attention mainly buys permutation invariance and variable player counts,
+  a 2v2/3v3 win. Our 1v1 entity set is fixed and small. Reset *use* looks like
+  a credit-assignment / memory problem: CPU cost per tick of a 256-wide, 2-layer, 4-head encoder
+  is 0.6-0.9 ms vs 1.2 ms for our MLP (1 thread, PyTorch proxy), so cost is not the
+  blocker, but the expected gain in 1v1 is small. Lucy-SKG adds the last 5 actions to
+  the query; our obs had no previous action and no car-relative ball terms.
+- So FR8 tries the cheap step first: the previous action (8 held controls) and the
+  ball position/velocity relative to the car in the car frame, appended to the obs
+  (92 -> 106), warm-started from FR7 3491.6M with zero weights for the new inputs
+  (identical start, max |logit diff| 0.0), FR7c config otherwise (EXPERIMENTS.md FR8).
+  An attention actor (distilled from FR7 3491.6M, then PPO) is deferred to team play.
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |

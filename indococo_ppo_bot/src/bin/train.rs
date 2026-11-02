@@ -22,7 +22,7 @@ use indococo_bot::LAYERS;
 use indococo_bot::action::N_ACTIONS;
 use indococo_bot::env::{BotEnv, create_env};
 use indococo_bot::events::StepEvents;
-use indococo_bot::obs::obs_size;
+use indococo_bot::obs::{base_obs_size, obs_size};
 use indococo_bot::resets;
 use indococo_bot::rewards::RewardConfig;
 use indococo_bot::rewards::StepReward;
@@ -166,10 +166,8 @@ fn load_fixed_opponents(cfg: &OpponentsConfig, dev: &Device) -> Vec<FixedOpponen
         .map(|o| {
             let mut model = new_model(dev);
             let path = o.checkpoint.join("actor.bpk");
-            model.actor = model
-                .actor
-                .try_load_file(&path)
-                .unwrap_or_else(|e| panic!("opponent {}: {}: {e:?}", o.name, path.display()));
+            model.actor = load_net_any(&path, NetKind::Actor, dev)
+                .unwrap_or_else(|e| panic!("opponent {}: {}: {e}", o.name, path.display()));
             FixedOpponent {
                 name: o.name.clone(),
                 model,
@@ -344,8 +342,12 @@ fn probe_input() -> Vec<f32> {
 }
 
 fn new_model(dev: &Device) -> Actic {
+    model_with_input(obs_size(), dev)
+}
+
+fn model_with_input(input: usize, dev: &Device) -> Actic {
     Actic::new(
-        obs_size(),
+        input,
         N_ACTIONS,
         LAYERS.to_vec(),
         LAYERS.to_vec(),
@@ -500,6 +502,7 @@ fn record_line(state: &rlgymppo::rlgym::GameState, obs: &[Vec<f32>], reset: bool
             serde_json::json!({
                 "handbrake": c.handbrake_val,
                 "jump": c.controls.jump,
+                "controls": indococo_bot::obs::prev_action(c),
                 "is_jumping": c.is_jumping,
                 "is_supersonic": c.is_supersonic,
             })
@@ -679,10 +682,144 @@ impl RateSlot {
 }
 
 fn load_actor(ckpt: &Path, dev: &Device) -> Net {
-    new_model(dev)
-        .actor
-        .try_load_file(ckpt.join("actor.bpk"))
-        .unwrap_or_else(|e| panic!("load actor {}: {e:?}", ckpt.display()))
+    load_net_any(&ckpt.join("actor.bpk"), NetKind::Actor, dev)
+        .unwrap_or_else(|e| panic!("load actor {}: {e}", ckpt.display()))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum NetKind {
+    Actor,
+    Critic,
+}
+
+/// Input width of a saved net (`linear_layers.0.weight` is `[in, out]`).
+fn bpk_input_width(path: &Path) -> Result<usize, String> {
+    use burn_store::{BurnpackStore, ModuleStore};
+    let mut store = BurnpackStore::from_file(path);
+    let t = store
+        .get_tensor("linear_layers.0.weight")
+        .map_err(|e| format!("{}: {e:?}", path.display()))?
+        .ok_or_else(|| format!("{}: no linear_layers.0.weight", path.display()))?;
+    Ok(t.shape[0])
+}
+
+/// Loads an actor or critic for this process's obs width. A pre-FR8 net
+/// (base width) loaded in extended mode gets zero weights for the 14 new
+/// inputs, so it computes exactly what it computed on the base obs.
+fn load_net_any(path: &Path, kind: NetKind, dev: &Device) -> Result<Net, String> {
+    let pick = |m: Actic| if kind == NetKind::Actor { m.actor } else { m.critic };
+    let width = bpk_input_width(path)?;
+    if width == obs_size() {
+        return pick(new_model(dev)).try_load_file(path).map_err(|e| format!("{e:?}"));
+    }
+    if width != base_obs_size() {
+        return Err(format!("{}: input width {width}, this process uses {}", path.display(), obs_size()));
+    }
+    let legacy = pick(model_with_input(base_obs_size(), dev))
+        .try_load_file(path)
+        .map_err(|e| format!("{e:?}"))?;
+    let mut st = SafetensorsStore::from_bytes(None);
+    legacy.save_into(&mut st).map_err(|e| format!("{e:?}"))?;
+    let bytes = widen_safetensors(&st.get_bytes().map_err(|e| format!("{e:?}"))?, base_obs_size(), obs_size());
+    let mut st = SafetensorsStore::from_bytes(Some(bytes));
+    let mut net = pick(new_model(dev));
+    net.load_from(&mut st).map_err(|e| format!("{e:?}"))?;
+    Ok(net)
+}
+
+/// Rewrites `linear_layers.0.weight` (`[from, out]`, f32 row-major) as
+/// `[to, out]` with zero rows for the new inputs.
+fn widen_safetensors(bytes: &[u8], from: usize, to: usize) -> Vec<u8> {
+    let n = u64::from_le_bytes(bytes[..8].try_into().expect("header len")) as usize;
+    let header: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&bytes[8..8 + n]).expect("safetensors header");
+    let data = &bytes[8 + n..];
+    let mut keys: Vec<(String, serde_json::Value)> = header.into_iter().collect();
+    keys.sort_by_key(|(k, v)| if k == "__metadata__" { 0 } else { v["data_offsets"][0].as_u64().unwrap_or(0) + 1 });
+    let mut out_header = serde_json::Map::new();
+    let mut out_data = Vec::with_capacity(data.len() + (to - from) * 4 * 2048);
+    for (k, mut v) in keys {
+        if k == "__metadata__" {
+            out_header.insert(k, v);
+            continue;
+        }
+        let (a, b) = (v["data_offsets"][0].as_u64().unwrap() as usize, v["data_offsets"][1].as_u64().unwrap() as usize);
+        let start = out_data.len();
+        out_data.extend_from_slice(&data[a..b]);
+        if k == "linear_layers.0.weight" {
+            let shape: Vec<usize> = v["shape"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect();
+            assert_eq!(shape[0], from, "{k} shape {shape:?}");
+            assert_eq!(v["dtype"], "F32");
+            out_data.resize(out_data.len() + (to - from) * shape[1] * 4, 0);
+            v["shape"] = serde_json::json!([to, shape[1]]);
+        }
+        v["data_offsets"] = serde_json::json!([start, out_data.len()]);
+        out_header.insert(k, v);
+    }
+    let mut h = serde_json::to_vec(&out_header).expect("header");
+    while h.len() % 8 != 0 {
+        h.push(b' ');
+    }
+    let mut out = (h.len() as u64).to_le_bytes().to_vec();
+    out.extend(h);
+    out.extend(out_data);
+    out
+}
+
+/// `widen <src_ck> <dst_ck>`: an FR8 (extended obs) checkpoint from a
+/// pre-FR8 one, actor and critic first layers padded with zero weights;
+/// stats.toml copied. Prints the max |logit diff| and |value diff| between
+/// the source on base obs and the widened nets on extended obs.
+fn widen(src: &Path, dst: &Path) {
+    assert!(indococo_bot::obs::obs_ext(), "widen needs INDOCOCO_OBS_EXT=1");
+    init_from_default(true).expect("load collision meshes");
+    let dev = Device::flex();
+    std::fs::create_dir_all(dst).expect("create dst");
+    let actor = load_net_any(&src.join("actor.bpk"), NetKind::Actor, &dev).expect("actor");
+    let critic = load_net_any(&src.join("critic.bpk"), NetKind::Critic, &dev).expect("critic");
+    actor.clone().save_file(dst.join("actor.bpk")).expect("save actor");
+    critic.clone().save_file(dst.join("critic.bpk")).expect("save critic");
+    std::fs::copy(src.join("stats.toml"), dst.join("stats.toml")).expect("copy stats");
+    // Verify on real env obs (random + kickoff states) against the source.
+    let base_actor = model_with_input(base_obs_size(), &dev).actor.try_load_file(src.join("actor.bpk")).expect("src actor");
+    let base_critic = model_with_input(base_obs_size(), &dev).critic.try_load_file(src.join("critic.bpk")).expect("src critic");
+    let re_actor = load_net_any(&dst.join("actor.bpk"), NetKind::Actor, &dev).expect("reload actor");
+    let mut env = create_env(&RewardConfig::default(), &default_mix());
+    let mut rng = SmallRng::seed_from_u64(11);
+    let (mut state, mut obs, _) = env.reset();
+    let (mut ext_rows, mut base_rows) = (Vec::new(), Vec::new());
+    for _ in 0..512 {
+        for o in &obs {
+            ext_rows.extend_from_slice(o);
+            base_rows.extend_from_slice(&o[..base_obs_size()]);
+        }
+        let actions: Vec<usize> = obs.iter().map(|_| rng.random_range(0..N_ACTIONS)).collect();
+        let res = env.step(&state, &actions);
+        (state, obs) = (res.state, res.obs);
+        if res.is_terminal || res.truncated {
+            let (s, o, _) = env.reset();
+            (state, obs) = (s, o);
+        }
+    }
+    let n = ext_rows.len() / obs_size();
+    let xe = Tensor::<2>::from_data(TensorData::new(ext_rows, [n, obs_size()]), &dev);
+    let xb = Tensor::<2>::from_data(TensorData::new(base_rows, [n, base_obs_size()]), &dev);
+    let maxdiff = |a: Tensor<2>, b: Tensor<2>| -> f32 {
+        (a - b).abs().max().into_data().try_to_vec::<f32>().expect("diff")[0]
+    };
+    let ext_nonzero = {
+        let e = xe.clone().slice([0..n, base_obs_size()..obs_size()]).abs().max();
+        e.into_data().try_to_vec::<f32>().expect("ext")[0]
+    };
+    let out = serde_json::json!({
+        "rows": n,
+        "ext_max_abs_input": ext_nonzero,
+        "actor_max_abs_logit_diff": maxdiff(actor.forward(xe.clone()), base_actor.forward(xb.clone())),
+        "reloaded_actor_max_abs_logit_diff": maxdiff(re_actor.forward(xe.clone()), base_actor.forward(xb.clone())),
+        "critic_max_abs_value_diff": maxdiff(critic.forward(xe), base_critic.forward(xb)),
+        "dst": dst,
+    });
+    println!("WIDEN {out}");
 }
 
 /// Share of `rates` decisions replaced by a random action. Greedy policies
@@ -800,6 +937,7 @@ fn main() {
         "curr" => bc_cli::curr(&args[1..]),
         "normal-obs" => bc_cli::normal_obs(&args[1..]),
         "import" => import(Path::new(arg(1)), Path::new(arg(2))),
+        "widen" => widen(Path::new(arg(1)), Path::new(arg(2))),
         "export" => export(Path::new(arg(1)), Path::new(arg(2))),
         "record" => record(
             Path::new(arg(1)),

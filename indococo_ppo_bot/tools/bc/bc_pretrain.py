@@ -13,9 +13,17 @@ game player) instead of the starting actor, so repeated refreshes pull
 normal play back toward it rather than letting it drift.
 Writes a plain state_dict (.pt) that `indococo-train import` reads, and
 bc_log.jsonl next to it.
+
+FR8: a student with the extended obs (input 106) is detected from its first
+layer. The recorded datasets hold 92-float base obs; they are extended with
+the car-frame ball terms (exact, computed from the base obs as in Rust) and a
+zero previous action (not recorded). The teacher sees its own width.
 """
 import argparse, json, os, struct, time
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pool_eval"))
+from poolkit.obs_ext import extend, is_ext_width
 
 OBS, ACT, LAYERS = 92, 90, [2048, 2048, 1024, 1024]
 
@@ -27,8 +35,8 @@ def load_st(path):
             for k, m in h.items() if k != "__metadata__"}
 
 
-def net():
-    mods, d = [], OBS
+def net(d_in=OBS):
+    mods, d = [], d_in
     for w in LAYERS:
         mods += [nn.Linear(d, w), nn.ReLU()]; d = w
     mods.append(nn.Linear(d, ACT))
@@ -57,18 +65,23 @@ def main():
     dev = "cuda"
     torch.backends.cuda.matmul.allow_tf32 = True
     sd = load_st(a.actor)
-    student, teacher = net(), net()
-    student.load_state_dict(sd); teacher.load_state_dict(load_st(a.teacher) if a.teacher else sd)
+    tsd = load_st(a.teacher) if a.teacher else sd
+    sw, tw = sd["model.0.weight"].shape[1], tsd["model.0.weight"].shape[1]
+    student, teacher = net(sw), net(tw)
+    student.load_state_dict(sd); teacher.load_state_dict(tsd)
+    ext = is_ext_width(sw)
+    fit = lambda x: extend(x, np.zeros(8, np.float32)) if ext else x
+    print(f"student input {sw}{' (FR8 extended obs, prev action = 0 in BC data)' if ext else ''}, teacher input {tw}", flush=True)
     student.to(dev); teacher.to(dev).eval()
     xs, ys, ws = [], [], []
     for p in a.curr:
         x = np.fromfile(p + ".obs.f32", np.float32).reshape(-1, OBS)
         y = np.fromfile(p + ".act.u8", np.uint8).astype(np.int64)
         ph = np.fromfile(p + ".phase.u8", np.uint8)
-        xs.append(x); ys.append(y); ws.append(np.where(ph == 1, a.use_weight, 1.0).astype(np.float32))
+        xs.append(fit(x)); ys.append(y); ws.append(np.where(ph == 1, a.use_weight, 1.0).astype(np.float32))
     cx = torch.from_numpy(np.concatenate(xs)).to(dev); cy = torch.from_numpy(np.concatenate(ys)).to(dev)
     cw = torch.from_numpy(np.concatenate(ws)).to(dev)
-    nx = torch.from_numpy(np.fromfile(a.normal, np.float32).reshape(-1, OBS)).to(dev)
+    nx = torch.from_numpy(fit(np.fromfile(a.normal, np.float32).reshape(-1, OBS))).to(dev)
     print(f"curriculum {len(cx)} labelled states, normal {len(nx)} states", flush=True)
     opt = torch.optim.Adam(student.parameters(), lr=a.lr)
     log = open(os.path.splitext(a.out)[0] + "_log.jsonl", "w")
@@ -79,7 +92,7 @@ def main():
         ce = (F.cross_entropy(lc, cy[i], reduction="none") * cw[i]).sum() / cw[i].sum()
         acc = (lc.argmax(1) == cy[i]).float().mean()
         with torch.no_grad():
-            tl = F.log_softmax(fwd(teacher, nx[j]), 1)
+            tl = F.log_softmax(fwd(teacher, nx[j][:, :tw]), 1)
         sl = F.log_softmax(fwd(student, nx[j]), 1)
         kl = (tl.exp() * (tl - sl)).sum(1).mean()
         loss = ce + a.kl * kl

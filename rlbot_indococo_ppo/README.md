@@ -20,3 +20,8 @@ To rebuild the binaries, run these from `indococo_ppo_bot/`:
     cargo build --profile dist --features rlbot --bin indococo-rlbot
     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
       cargo build --profile dist --features rlbot --bin indococo-rlbot --target x86_64-pc-windows-gnu
+
+FR8 and later checkpoints take a 106-float observation (base obs + previous
+action + car-frame ball terms). The binaries detect this from the input width of
+`weights/actor.bpk` at startup, so the same binaries run FR7-and-older (92) and
+FR8 (106) weights: just copy the checkpoint's `actor.bpk` into `weights/`.

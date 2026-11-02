@@ -6,7 +6,8 @@ deployed bot sees (rlgym_compat freezes the timer at 1.25 s) and what the Rust
 `V2DefaultObs` trains on. `h2h_1v1.py` on master builds its env with
 `clamp_air_time` off; pass `clamp_air_time = false` to reproduce it. Weights load from a `.pt` state dict
 (`model.{0,2,4,...}`), an exported `.safetensors`, or a Rust checkpoint
-directory (exported on the fly with `indococo-train export`).
+directory (exported on the fly with `indococo-train export`). An FR8 net
+(input 106 = 92 + 14) gets the extended obs from `obs_ext.py`.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ import torch
 from torch import nn
 
 from .agent import Agent
+from .obs_ext import extend, is_ext_width
 from .view import AgentView
 
 AIR_TIME_INDEX = 9 + 34 + 8
@@ -93,6 +95,8 @@ class IndococoPolicy(Agent):
         from rlgym.rocket_league.action_parsers import LookupTableAction
 
         self.model = build_mlp(load_state_dict(path))
+        # FR8 nets take the extended obs (src/obs.rs): base + previous action + car-frame ball terms.
+        self.ext = is_ext_width(self.model[0].in_features)
         self.table = LookupTableAction.make_lookup_table()
         self.obs_builder = default_obs_builder()
 
@@ -102,6 +106,9 @@ class IndococoPolicy(Agent):
         obs = np.array(obs, dtype=np.float32)
         if self.clamp_air_time:
             obs[AIR_TIME_INDEX] = min(obs[AIR_TIME_INDEX], AIR_TIME_CLAMP)
+        if self.ext:
+            # previous action = the controls held since the last decision (zeros at game start)
+            obs = extend(obs, self._held)
         return obs
 
     @torch.no_grad()

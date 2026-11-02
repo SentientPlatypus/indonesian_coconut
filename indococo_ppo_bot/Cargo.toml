@@ -47,7 +47,7 @@ train = ["dep:rlgymppo", "dep:burn", "dep:burn-store", "dep:serde_json", "burn/a
 cuda = ["train", "rlgymppo/cuda"]
 fusion = ["train", "rlgymppo/fusion"]
 torch = ["train", "rlgymppo/torch"]
-rlbot = ["dep:rlgymppo-model", "dep:rlgymppo-rlbot", "dep:rlbot-rocketsim", "dep:rustc-hash", "dep:burn", "burn/flex"]
+rlbot = ["dep:burn-store", "dep:rlgymppo-model", "dep:rlgymppo-rlbot", "dep:rlbot-rocketsim", "dep:rustc-hash", "dep:burn", "burn/flex"]
 
 [profile.release]
 debug = 1

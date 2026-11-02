@@ -4,6 +4,16 @@
 //! 1v1 layout (92): ball (9) + boost pad timers (34) + own flags (9) + own
 //! car (20) + opponent car (20). Orange sees the field mirrored in x and y.
 //!
+//! FR8 extension (`INDOCOCO_OBS_EXT=1`, or set by the RLBot bot from the
+//! weights' input width): [`EXT_LEN`] = 14 floats appended after the base
+//! obs (1v1 92 -> 106, 2v2 132 -> 146):
+//! previous action as its 8 controls (throttle, steer, pitch, yaw, roll,
+//! jump, boost, handbrake; the car's held `controls`), then the ball's
+//! position (/ 4096) and velocity (/ 2300) relative to the own car in the
+//! car's frame (forward, forward x up, up; see [`ext_features`]). The relative
+//! terms are computed from the base obs itself, so Rust training, the RLBot
+//! bot, the Python pool eval and the BC tools share one formula.
+//!
 //! `air_time_since_jump` is clamped to 1.25 s as in
 //! `v4_env._obs_builder(clamp_air_time=True)`: RLBot's compat layer freezes
 //! it there, RocketSim keeps counting, so the clamp keeps training and
@@ -187,6 +197,75 @@ pub fn build_one(state: &GameState, i: usize, order: &[usize]) -> Vec<f32> {
     o
 }
 
+/// Number of FR8 extension floats appended to the base obs.
+pub const EXT_LEN: usize = 14;
+
+static OBS_EXT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether this process builds the FR8 extended obs. Read once from
+/// `INDOCOCO_OBS_EXT` (`1` = on) unless [`set_obs_ext`] ran first.
+#[must_use]
+pub fn obs_ext() -> bool {
+    *OBS_EXT.get_or_init(|| std::env::var("INDOCOCO_OBS_EXT").is_ok_and(|v| v == "1"))
+}
+
+/// Fixes the obs mode before first use (the RLBot bot picks it from the
+/// weights). Returns false if the mode was already fixed to another value.
+pub fn set_obs_ext(on: bool) -> bool {
+    OBS_EXT.set(on).is_ok() || obs_ext() == on
+}
+
+/// The 14 extension floats from a base obs (`base`, own car at 52..72)
+/// and the car's held controls. Orange's base obs is mirrored (a rotation
+/// about z), which leaves the car-frame terms unchanged.
+#[must_use]
+pub fn ext_features(base: &[f32], prev: [f32; 8]) -> [f32; EXT_LEN] {
+    let v3 = |i: usize| Vec3A::new(base[i], base[i + 1], base[i + 2]);
+    let unpos = |v: Vec3A| Vec3A::new(v.x / POS_COEF[0], v.y / POS_COEF[1], v.z / POS_COEF[2]);
+    let dp = unpos(v3(0)) - unpos(v3(52));
+    let dv = (v3(3) - v3(61)) / LIN_VEL_COEF;
+    let (fwd, up) = (v3(55), v3(58));
+    let side = fwd.cross(up);
+    let mut out = [0.0; EXT_LEN];
+    out[..8].copy_from_slice(&prev);
+    for (k, (d, s)) in [(dp, REL_POS_COEF), (dv, LIN_VEL_COEF)].into_iter().enumerate() {
+        out[8 + 3 * k] = d.dot(fwd) * s;
+        out[9 + 3 * k] = d.dot(side) * s;
+        out[10 + 3 * k] = d.dot(up) * s;
+    }
+    out
+}
+
+/// Scale of the car-frame ball offset (SIDE_WALL_X).
+pub const REL_POS_COEF: f32 = 1.0 / 4096.0;
+
+/// The held controls as the 8 previous-action floats.
+#[must_use]
+pub fn prev_action(c: &CarState) -> [f32; 8] {
+    let k = &c.controls;
+    [
+        k.throttle,
+        k.steer,
+        k.pitch,
+        k.yaw,
+        k.roll,
+        f32::from(k.jump),
+        f32::from(k.boost),
+        f32::from(k.handbrake),
+    ]
+}
+
+/// Base obs plus, in extended mode, the [`ext_features`].
+#[must_use]
+pub fn build_full(state: &GameState, i: usize, order: &[usize]) -> Vec<f32> {
+    let mut o = build_one(state, i, order);
+    if obs_ext() {
+        let e = ext_features(&o, prev_action(&state.cars[i].1));
+        o.extend(e);
+    }
+    o
+}
+
 #[derive(Default)]
 pub struct V2DefaultObs;
 
@@ -214,9 +293,25 @@ pub const fn obs_size_for(n: usize) -> usize {
     52 + 40 * n
 }
 
+/// Extended (FR8) observation size for `n` cars per team (1v1 106, 2v2 146).
+#[must_use]
+pub const fn ext_obs_size_for(n: usize) -> usize {
+    obs_size_for(n) + EXT_LEN
+}
+
 /// Observation size for this process ([`team_size`]).
 #[must_use]
 pub fn obs_size() -> usize {
+    if obs_ext() {
+        ext_obs_size_for(team_size())
+    } else {
+        obs_size_for(team_size())
+    }
+}
+
+/// Base (pre-FR8) observation size for this process.
+#[must_use]
+pub fn base_obs_size() -> usize {
     obs_size_for(team_size())
 }
 
@@ -228,7 +323,7 @@ impl<SI> Obs<SI> for V2DefaultObs {
     fn build_obs(&mut self, state: &GameState, _si: &mut SI) -> FullObs {
         let order = pad_order(state);
         (0..state.cars.len())
-            .map(|i| build_one(state, i, &order))
+            .map(|i| build_full(state, i, &order))
             .collect()
     }
 }

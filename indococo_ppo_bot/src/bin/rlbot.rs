@@ -2,13 +2,16 @@
 //!
 //! Weights are read from `INDOCOCO_WEIGHTS` if set, otherwise from the
 //! `weights/` directory next to the executable (`actor.bpk`).
+//! The obs mode follows the weights: a 106-input actor (FR8 and later) gets
+//! the extended obs (previous action + car-frame ball terms), a 92-input one
+//! the base obs.
 
 use std::path::PathBuf;
 
 use indococo_bot::LAYERS;
 use indococo_bot::action::LookupNoMask;
 use indococo_bot::env::SharedInfo;
-use indococo_bot::obs::V2DefaultObs;
+use indococo_bot::obs::{self, V2DefaultObs};
 use rlbot_rocketsim::rlbot::RLBotConnection;
 use rlbot_rocketsim::rlbot::agents::run_bot_agents;
 use rlbot_rocketsim::rlbot::util::AgentEnvironment;
@@ -104,7 +107,31 @@ const SOCCAR_MESHES: [&[u8]; 16] = meshes!(
     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"
 );
 
+/// Input width of `actor.bpk` in the weights directory.
+fn actor_input_width() -> usize {
+    use burn_store::{BurnpackStore, ModuleStore};
+    let dir = IndococoConfig::checkpoint_path();
+    let path = if dir.is_dir() { dir.join("actor.bpk") } else { dir };
+    let mut store = BurnpackStore::from_file(&path);
+    store
+        .get_tensor("linear_layers.0.weight")
+        .unwrap_or_else(|e| panic!("read {}: {e:?}", path.display()))
+        .unwrap_or_else(|| panic!("{}: no linear_layers.0.weight", path.display()))
+        .shape[0]
+}
+
 fn main() {
+    let width = actor_input_width();
+    let n = obs::team_size();
+    let ext = if width == obs::ext_obs_size_for(n) {
+        true
+    } else if width == obs::obs_size_for(n) {
+        false
+    } else {
+        panic!("actor input width {width} fits neither obs ({} or {})", obs::obs_size_for(n), obs::ext_obs_size_for(n));
+    };
+    assert!(obs::set_obs_ext(ext), "obs mode already fixed");
+    eprintln!("indococo-rlbot: actor input {width}, extended obs {ext}");
     let meshes = FxHashMap::from_iter([(
         GameMode::Soccar,
         SOCCAR_MESHES.iter().map(|m| m.to_vec()).collect::<Vec<_>>(),

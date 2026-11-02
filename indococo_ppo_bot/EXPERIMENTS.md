@@ -842,3 +842,53 @@ L1 27.8%, L2 11.8%. Mid checks: 41 resets, 6 uses (all reset_curriculum, 0
 normal-play), 0 goals; h2h vs FR4 (200 g) 45.5-58%. Not pushed (no normal-play uses).
 Best model still FR7 3491.6M. FR7e (last of the chain) started 10:05 AM ET from the
 4211.6M chunk (58% in 200 g). REPORT.md §11.7, `docs/experiments/data/fr7d_mid.csv`.
+
+## FR8: previous action + car-frame ball obs (planned 2026-11-02)
+
+### Why
+FR7c and FR7d made 0 reset uses in normal play over 40 checks. The policy has no
+memory and its obs has no previous action: on a decision it cannot tell "I just
+regained the flip off the ball and am still holding jump" from other aerial states,
+and the ball-to-car geometry it needs for the follow-up dodge must be rebuilt from
+world coordinates by the MLP. Lucy-SKG (Necto's architecture) appends the last 5
+actions to the query for the same reason. Attention itself was not the
+bottleneck for a fixed 1v1 entity set (REPORT §11.8).
+
+### Change (obs only; everything else = FR7c config)
+- Obs 92 -> 106: 8 held controls (previous action) + ball position / velocity
+  relative to the own car in the car frame (/ 4096, / 2300). Compact controls
+  instead of a 90-way one-hot: the lookup table maps every action to its
+  controls, so the 8 floats carry the same information in 8 inputs instead of
+  90, they are what RLBot reports (`last_input`), and they match RLGym's own
+  previous-action encoding.
+- Warm start: FR7 3491.6M with actor and critic first layers widened by zero
+  columns (`indococo-train widen`), so the FR8 start plays exactly as FR7:
+  max |logit diff| 0.0 and max |value diff| 0.0 on 1,024 env obs (Rust), and
+  0.0 on 6,016 recorded obs through the Python poolkit path. Seeded dir
+  `fr8_init/1793565816` (FR7 3491.6M's own past timestamp name).
+- Rewards `fr7c.toml` (drill ramp x3 -> x1 -> x0.5, normal x2, touch-height),
+  `train_fr7c.toml` (entropy 0.012, 20% reset practice, critic warm-up 10M), farm
+  alarm, 45%/48% guard, BC refresh + KL 5 to FR4-final every 50M chunk. BC data
+  holds base obs: extended with the exact car-frame terms and a zero previous
+  action (not recorded); the FR4 teacher sees its own 92 floats.
+- 1.0B steps (3491.6M -> 4491.6M). Finals: 1000-g h2h vs FR4-final and vs FR7
+  3491.6M (seed 424242), pool400, pool_botpack5 (400), rates_fr3 / rates_fr7 300k, curr.
+  Then one follow-up FR8b from the best chunk.
+
+### Parity and smoke (2026-11-02, ~2:50 PM ET)
+- `cargo test --test obs_ext`: 8,000 car-steps, prev action == taken action's
+  controls on every step, car-frame terms vs direct RocketSim max rel err 2.4e-7,
+  base obs unchanged, RLBot view identical; episode starts have zero prev action.
+- `obs_ext_parity.py`: 6,016 recorded rows, Python vs Rust max rel err 0.0.
+- Smoke `exp_FR8smoke` (4 threads, 32 games, 2M steps, scaled-down evals; FR7e
+  untouched): two chunks with PPO, BC refresh (student 106 / teacher 92), rates,
+  h2h, then the full finals chain (h2h FR4 / FR7, pool, botpack5, rates, curr)
+  all ran; DONE in ~6 min.
+- RLBot: Linux and Windows (`x86_64-pc-windows-gnu`) binaries rebuilt; the bot
+  reports `actor input 92, extended obs false` for the shipped weights and
+  `actor input 106, extended obs true` for an FR8 actor.
+
+### Launch
+Auto: `fr8_handoff.sh` (tmux `ippo_handoff`) starts FR8 in tmux `ippo_FR8` when
+`fr7e_final/DONE` appears (or FR7e's driver is gone for 10 min); if FR8 is not
+ready or fails within 20 min it starts FR7f (FR7c config from FR7e's final).
