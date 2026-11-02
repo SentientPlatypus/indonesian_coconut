@@ -765,6 +765,38 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 - **Follow-up (running):** the driver started FR7d at 4:28 AM ET Nov 2 from the FR7c chunk with the best 200-game h2h among chunks ≥ 48% (3901.6M, 58.0%; no chunk had normal-play uses), same FR7c config with the drill ramp restarting at x3, 1.0B steps, then FR7e.
 
 
+### 11.7 FR7d: FR7c config again from the 3901.6M chunk (3901.6M → 4901.6M)
+
+**Why.** FR7c ended below the 48% bar, so the driver restarted the same FR7c config (drill ramp reset to x3, `air_touch_height` 8, entropy 0.012, farming alarm and 48% guard) from its best chunk, 3901.6M (58.0% vs FR4-final in 200 games). It trained 4:28 AM ET → 9:46 AM ET Nov 2 alone on the L4; final evals finished 10:05 AM ET and the botpack5 pool (`fr7d_final/bp5/`) at 10:32 AM ET. Neither the farming alarm nor the 48% guard fired. Drills went x3 → x1 at 4261.6M and x0.5 at 4561.6M on the step schedule.
+
+**Mid-run checks** (`data/fr7d_mid.csv`, 20 checks of 150k steps):
+
+![FR7d mid-run](figures/fr7d_mid.png)
+
+41 resets, 6 uses, **0 goals after a reset**. All 6 uses came from `reset_curriculum` spawns; kickoff, random and replay episodes made 20 resets and **0 uses**. The 200-game h2h vs FR4-final ranged 45.5–58.0% (mean 51.5%), highest at 4211.6M, and ended at 53.5%.
+
+**Final evaluation** (`~/ippo_runs/fr7d_final/`, seed 424242). Final checkpoint `exp_FR7d/checkpoints/1793630629` (`cumulative_timesteps = 4901600000`), fresh export `final_policy.safetensors` (sha256 `017b3b2c…77e02d0`, written 9:46 AM ET).
+
+| measure | FR7d-final (4901.6M) | FR7c-final | FR7b-final | FR7 3491.6M |
+|---|---|---|---|---|
+| h2h vs FR4-final, 1000 games | 49.7% (497-503, ±1.6) | 45.6% | 49.7% | **52.5%** |
+| h2h vs FR6-final, 1000 games | **52.4%** (524-476, ±1.6) | 49.2% | 50.8% | 51.3% |
+| pool score (400 games/opponent) | 86.4 | 85.4 | **86.5** | 85.9 |
+| vs 1v1.pt / 430M / Nexto | 66.5 / 71.8 / 87.2 | 68.0 / 69.0 / 83.2 | 70.0 / 70.3 / 87.8 | 64.5 / 75.3 / 85.3 |
+| vs Necto / Element / Immortal | 98.2 / 98.5 / 96.0 | 97.8 / 98.8 / 95.5 | 97.3 / 98.0 / 95.8 | 97.0 / 98.0 / 95.3 |
+| botpack5: Ripple / Kira / Dice / Chronos / GalactusV2 | 52.2 / 58.8 / 46.8 / 66.2 / 16.2 | 49.2 / 53.0 / 46.2 / 63.2 / 16.2 | 51.5 / 52.5 / 48.2 / 68.2 / 14.5 | — |
+
+**Real play** (300k steps, self-play; resets / uses / goals after a reset): on `rates_fr7.toml` FR7d-final made 0 / 0 / 0 in every setter. On the FR6-comparable `rates_fr3.toml`: 5 / 1 / 0, all from `reset_curriculum`, against FR6-final's 9 / 4 / 0.
+
+**Curriculum skill** (960 episodes per row, greedy / sampled success): L0 27.0% / 20.6%, L1 27.8% / 15.8%, L2 11.8% / 5.4%.
+
+**Verdict.**
+- **Not pushed.** Strength passes the bar (49.7% vs FR4) but the reset half fails: 0 uses in normal play, 0 goals after a reset, and fewer uses than FR6 on `rates_fr3`.
+- **Strongest all-round FR7c-config checkpoint so far** (best h2h vs FR6, best botpack5 numbers against Ripple and Kira, pool 86.4), but it does not beat FR7 3491.6M vs FR4 (49.7% vs 52.5%), so the best model is unchanged.
+- **Normal-play resets are still absent.** Two full FR7c-config runs (2.0B steps, 40 checks) produced 0 normal-play uses. More of the same config is unlikely to change that.
+- **Follow-up (running):** FR7e started 10:05 AM ET Nov 2 from the FR7d chunk with the best 200-game h2h (4211.6M, 58.0%), same config, 1.0B steps. It is the last run of the auto-chain.
+
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
@@ -786,6 +818,7 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 | FR7-final | 3631.6M | R8 | 47.2% vs FR4, 48.6% vs FR6 (1000 g); pool 84.9; 2 uses / 0 goals per 300k (rates_fr3) | box: `exp_FR7/checkpoints/1793568505`; not shipped |
 | FR7b-final | 3891.6M | R8 (FR7b, from 2891.6M) | 49.7% vs FR4, 50.8% vs FR6 (1000 g); pool 86.5 (best of the FR line, Nexto 87.8); 1 use / 0 goals per 300k (rates_fr7, curriculum spawn) | box: `fr7_keep/fr7b_3892M`; not shipped (fails reset half of push rule) |
 | FR7c-final | 4491.6M | R9 (FR7c, from FR7 3491.6M) | 45.6% vs FR4, 49.2% vs FR6 (1000 g); pool 85.4; rates_fr7 3 resets / 0 uses / 1 goal after a reset (replay, no use) | box: `exp_FR7c/checkpoints/1793610395`; not shipped (below 48% vs FR4) |
+| FR7d-final | 4901.6M | R9 (FR7d, from FR7c 3901.6M) | 49.7% vs FR4, 52.4% vs FR6 (1000 g); pool 86.4 (Nexto 87.2); rates_fr7 0 resets / 0 uses / 0 goals; rates_fr3 5 / 1 / 0 (curriculum) | box: `exp_FR7d/checkpoints/1793630629`; not shipped (fails reset half of push rule) |
 
 ## 13. Lessons learned and threats to validity
 
@@ -803,7 +836,7 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 
 ## 14. Future work
 
-- FR7 (§11) kept strength but did not move resets into normal play; see §11.4. FR7b and FR7c (§11.5, §11.6) did not either; FR7d-e continue the FR7c config.
+- FR7 (§11) kept strength but did not move resets into normal play; see §11.4. FR7b, FR7c and FR7d (§11.5–§11.7) did not either; FR7e continues the FR7c config and ends the chain.
 - FR6 (§10) got the first real-play uses at FR4-level strength, but only from curriculum-style spawns and with no goals after a reset; see §10.4.
 - FR5 (§9) solved the curriculum-level skill with behaviour cloning but not transfer to real play; see §9.7 for the next ideas. Earlier notes on the curriculum (failed three times, FR3 runs 3–4, FR4):
   - behaviour cloning or a warm-up from the scripted aligner, which gets 54.7% at L0;
@@ -834,7 +867,7 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 | `metrics_exp_FR6.csv` | FR6 training metrics, 10-iteration means |
 | `fr6_mid.csv` | FR6 mid-run checks: rates counts and 200-game h2h vs FR4-final per chunk |
 | `fr7_mid.csv` | FR7 mid-run checks: rates_fr7 counts (all and per setter) and 200-game h2h vs FR4-final per chunk |
-| `fr7b_mid.csv`, `fr7c_mid.csv` | the same for FR7b and FR7c |
+| `fr7b_mid.csv`, `fr7c_mid.csv`, `fr7d_mid.csv` | the same for FR7b and FR7c |
 | `metric_keys_used.txt` | the metric keys used |
 
 **Metric keys used:**
@@ -862,4 +895,4 @@ FR5 figures (`fr5_*.png`, `reward_share_exp_FR5.png`) and the three FR5 CSVs are
 
 FR6 figures (`fr6_*.png`) and the two FR6 CSVs are made by [`make_figures_fr6.py`](make_figures_fr6.py) from `exp_FR6/logs/{metrics,mid}.jsonl` and `fr6_final/curr.jsonl`.
 The FR7 figure (`fr7_mid.png`) and `fr7_mid.csv` are made by [`make_figures_fr7.py`](make_figures_fr7.py) from `exp_FR7/logs/mid.jsonl`.
-FR7b and FR7c figures and CSVs are made the same way by [`make_figures_fr7b.py`](make_figures_fr7b.py) and [`make_figures_fr7c.py`](make_figures_fr7c.py).
+FR7b and FR7c figures and CSVs are made the same way by [`make_figures_fr7b.py`](make_figures_fr7b.py) and [`make_figures_fr7c.py`](make_figures_fr7c.py); FR7d by [`make_figures_fr7d.py`](make_figures_fr7d.py).

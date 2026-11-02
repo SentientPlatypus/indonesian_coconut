@@ -830,3 +830,15 @@ Kira 53.0 / Dice 46.2 / Chronos 63.2 / GalactusV2 16.2. rates_fr7 300k: 3 resets
 resets, 19 uses (all drill setters, 0 normal-play), 0 goals; h2h vs FR4 (200 g)
 42-58%. Not pushed (below 48% vs FR4; no qualifying mid chunk). FR7d started 4:28 AM
 ET from the 3901.6M chunk (58% in 200 g). REPORT.md §11.6, `docs/experiments/data/fr7c_mid.csv`.
+
+### FR7d results (3901.6M -> 4901.6M, finals 10:05 AM ET Nov 2)
+Trained 4:28 AM -> 9:46 AM ET Nov 2 from FR7c 3901.6M, FR7c config (drill x3 -> x1 at
+4261.6M -> x0.5 at 4561.6M). No FARM ALARM, no 48% GUARD.
+Final 4901.6M (`exp_FR7d/checkpoints/1793630629`): 49.7% vs FR4-final, 52.4% vs
+FR6-final (1000 g, seed 424242), pool 86.4 (Nexto 87.2), botpack5 Ripple 52.2 /
+Kira 58.8 / Dice 46.8 / Chronos 66.2 / GalactusV2 16.2. rates_fr7 300k: 0 / 0 / 0;
+rates_fr3 300k: 5 / 1 / 0 (curriculum; FR6: 9 / 4 / 0). Curriculum greedy L0 27.0%,
+L1 27.8%, L2 11.8%. Mid checks: 41 resets, 6 uses (all reset_curriculum, 0
+normal-play), 0 goals; h2h vs FR4 (200 g) 45.5-58%. Not pushed (no normal-play uses).
+Best model still FR7 3491.6M. FR7e (last of the chain) started 10:05 AM ET from the
+4211.6M chunk (58% in 200 g). REPORT.md §11.7, `docs/experiments/data/fr7d_mid.csv`.
