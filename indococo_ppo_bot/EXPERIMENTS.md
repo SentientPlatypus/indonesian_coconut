@@ -818,3 +818,15 @@ steps before the first save at 71.5M, so the only kept checkpoint is the seed
 `tv2_init/1793583625` (21.5M, critic warmed). No 2v2 evals exist. The code,
 configs and run dir (`exp_TV2`) are kept; `~/ippo_runs/TV2_NO_FOLLOWUP` blocks
 the TV2b/TV2c chain. FR7b went back to ~64-68k steps/s alone (24 threads).
+
+### FR7c results (3491.6M -> 4491.6M, finals 4:28 AM ET Nov 2)
+Trained 10:51 PM ET Nov 1 -> 4:08 AM ET Nov 2 from FR7 3491.6M. No FARM ALARM, no
+48% GUARD; drill ramp on the step schedule (x1 at 3851.6M, x0.5 at 4151.6M).
+Final 4491.6M (`exp_FR7c/checkpoints/1793610395`): 45.6% vs FR4-final, 49.2% vs
+FR6-final (1000 g, seed 424242), pool 85.4 (Nexto 83.2), botpack5 Ripple 49.2 /
+Kira 53.0 / Dice 46.2 / Chronos 63.2 / GalactusV2 16.2. rates_fr7 300k: 3 resets /
+0 uses / 1 goal after a reset (replay episode, no use); rates_fr3 300k: 6 / 1 / 0
+(FR6: 9 / 4 / 0). Curriculum greedy L0 30.3%, L1 22.4%, L2 11.0%. Mid checks: 48
+resets, 19 uses (all drill setters, 0 normal-play), 0 goals; h2h vs FR4 (200 g)
+42-58%. Not pushed (below 48% vs FR4; no qualifying mid chunk). FR7d started 4:28 AM
+ET from the 3901.6M chunk (58% in 200 g). REPORT.md §11.6, `docs/experiments/data/fr7c_mid.csv`.

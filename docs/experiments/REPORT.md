@@ -733,6 +733,37 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 - **Not a new best:** 49.7% vs FR4 is below FR7 3491.6M (52.5%), so FR7c started from 3491.6M, as its launcher decides.
 - Resets from normal play stayed at about one use per 3M steps of checks, and no goal after a reset. FR7c (Round 9 in `indococo_ppo_bot/EXPERIMENTS.md`) changes the recipe: 20% drills paid x3 then ramped down, `air_touch_height` 8, entropy 0.012, and the reset-reward audit fixes. It started at 10:51 PM ET Nov 1 from FR7 3491.6M.
 
+### 11.6 FR7c: drill ramp, touch-height reward and reward audit (3491.6M → 4491.6M)
+
+**Why.** FR7 and FR7b used resets almost only in curriculum spawns. FR7c (Round 9 in `indococo_ppo_bot/EXPERIMENTS.md`) followed the Discord recipe: 20% reset drills paid x3 at first and ramped down (x1 at 300M, x0.5 at 600M), `air_touch_height` 8, entropy 0.012, a farming alarm and a 48% rollback guard, plus the reset-reward audit fixes (commits `cc3e890`, `a59ee8b`). It started from FR7 3491.6M (best 1000-game h2h vs FR4-final), trained 10:51 PM ET Nov 1 → 4:08 AM ET Nov 2 alone on the L4; final evals finished 4:28 AM ET and the botpack5 pool (`fr7c_final/bp5/`) at 5:30 AM ET. Neither the farming alarm nor the 48% guard fired. The ramp never triggered early (no chunk had ≥ 2 normal-play uses or ≥ 5 normal-play resets), so drills went x3 → x1 at 3851.6M and x0.5 at 4151.6M on the step schedule.
+
+**Mid-run checks** (`data/fr7c_mid.csv`, 20 checks of 150k steps):
+
+![FR7c mid-run](figures/fr7c_mid.png)
+
+48 resets, 19 uses, **0 goals after a reset**. All 19 uses came from drill setters (`reset_curriculum`, `air_reset`); kickoff, random and replay episodes made 18 resets and **0 uses**. The 200-game h2h vs FR4-final ranged 42.0–58.0% (mean 49.3%), highest at 3901.6M, and ended at 46.5%.
+
+**Final evaluation** (`~/ippo_runs/fr7c_final/`, seed 424242). Final checkpoint `exp_FR7c/checkpoints/1793610395` (`cumulative_timesteps = 4491600000`, post-BC actor), fresh export `final_policy.safetensors` (sha256 `db77d897…d3b30`, written 4:08 AM ET).
+
+| measure | FR7c-final (4491.6M) | FR7b-final | FR7 3491.6M | FR6-final |
+|---|---|---|---|---|
+| h2h vs FR4-final, 1000 games | 45.6% (456-544, ±1.6) | 49.7% | **52.5%** | 48.0% |
+| h2h vs FR6-final, 1000 games | 49.2% (492-508, ±1.6) | 50.8% | **51.3%** | — |
+| pool score (400 games/opponent) | 85.4 | **86.5** | 85.9 | 85.0 |
+| vs 1v1.pt / 430M / Nexto | 68.0 / 69.0 / 83.2 | 70.0 / 70.3 / 87.8 | 64.5 / 75.3 / 85.3 | 65.8 / 69.3 / 85.8 |
+| vs Necto / Element / Immortal | 97.8 / 98.8 / 95.5 | 97.3 / 98.0 / 95.8 | 97.0 / 98.0 / 95.3 | 96.5 / 98.3 / 94.5 |
+| botpack5: Ripple / Kira / Dice / Chronos / GalactusV2 | 49.2 / 53.0 / 46.2 / 63.2 / 16.2 | 51.5 / 52.5 / 48.2 / 68.2 / 14.5 | — | 55.8 / 53.0 / 53.0 / 67.2 / 15.5 |
+
+**Real play** (300k steps, self-play; resets / uses / goals after a reset): on `rates_fr7.toml` FR7c-final made 3 / 0 / 1, one reset each in kickoff, random and `replay` episodes, and **the `replay` reset was followed by a goal** (the first goal after a reset outside curriculum spawns in a final eval), but without a dodge use. FR6-final on the same mix: 5 / 0 / 0. On the FR6-comparable `rates_fr3.toml`: 6 / 1 / 0, the use from `reset_curriculum` (kickoff 1 reset), against FR6-final's 9 / 4 / 0.
+
+**Curriculum skill** (960 episodes per row, greedy / sampled success): L0 30.3% / 18.8%, L1 22.4% / 13.6%, L2 11.0% / 4.6%. Level with FR7b (31.6 / 26.8 / 10.1% greedy).
+
+**Verdict.**
+- **Not pushed.** The final misses the strength bar (45.6% vs FR4 < 48%). No mid chunk qualifies either: chunks at ≥ 48% (200 games) had 0 normal-play uses and 0 goals after a reset.
+- **The recipe did not move uses into normal play.** Drills x3 raised curriculum-spawn uses (19 vs 11 in FR7b) but normal-play uses stayed at 0 across all 20 checks. The single goal after a `replay` reset at the finals is one event with no use, so it is not evidence of the skill yet.
+- **Strength drifted down** at the end (45.6% vs FR4, pool 85.4, Nexto 83.2), within the noise of the FR line but below FR7b and FR7 3491.6M. Best model is still FR7 3491.6M.
+- **Follow-up (running):** the driver started FR7d at 4:28 AM ET Nov 2 from the FR7c chunk with the best 200-game h2h among chunks ≥ 48% (3901.6M, 58.0%; no chunk had normal-play uses), same FR7c config with the drill ramp restarting at x3, 1.0B steps, then FR7e.
+
 
 ## 12. Summary of checkpoints
 
@@ -754,6 +785,7 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 | FR7-3492M | 3491.6M | R8 (mid chunk) | 52.5% vs FR4, 51.3% vs FR6 (1000 g); pool 85.9; first goal after a reset (mid-run, curriculum spawn); 300k checks: 1 use, 0 goals | box: `fr7_keep/3492M`; not shipped (fails reset half of push rule) |
 | FR7-final | 3631.6M | R8 | 47.2% vs FR4, 48.6% vs FR6 (1000 g); pool 84.9; 2 uses / 0 goals per 300k (rates_fr3) | box: `exp_FR7/checkpoints/1793568505`; not shipped |
 | FR7b-final | 3891.6M | R8 (FR7b, from 2891.6M) | 49.7% vs FR4, 50.8% vs FR6 (1000 g); pool 86.5 (best of the FR line, Nexto 87.8); 1 use / 0 goals per 300k (rates_fr7, curriculum spawn) | box: `fr7_keep/fr7b_3892M`; not shipped (fails reset half of push rule) |
+| FR7c-final | 4491.6M | R9 (FR7c, from FR7 3491.6M) | 45.6% vs FR4, 49.2% vs FR6 (1000 g); pool 85.4; rates_fr7 3 resets / 0 uses / 1 goal after a reset (replay, no use) | box: `exp_FR7c/checkpoints/1793610395`; not shipped (below 48% vs FR4) |
 
 ## 13. Lessons learned and threats to validity
 
@@ -771,7 +803,7 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 
 ## 14. Future work
 
-- FR7 (§11) kept strength but did not move resets into normal play; see §11.4. FR7b-d continue it.
+- FR7 (§11) kept strength but did not move resets into normal play; see §11.4. FR7b and FR7c (§11.5, §11.6) did not either; FR7d-e continue the FR7c config.
 - FR6 (§10) got the first real-play uses at FR4-level strength, but only from curriculum-style spawns and with no goals after a reset; see §10.4.
 - FR5 (§9) solved the curriculum-level skill with behaviour cloning but not transfer to real play; see §9.7 for the next ideas. Earlier notes on the curriculum (failed three times, FR3 runs 3–4, FR4):
   - behaviour cloning or a warm-up from the scripted aligner, which gets 54.7% at L0;
@@ -802,6 +834,7 @@ Final checkpoint `exp_FR7/checkpoints/1793568505` (`cumulative_timesteps = 36316
 | `metrics_exp_FR6.csv` | FR6 training metrics, 10-iteration means |
 | `fr6_mid.csv` | FR6 mid-run checks: rates counts and 200-game h2h vs FR4-final per chunk |
 | `fr7_mid.csv` | FR7 mid-run checks: rates_fr7 counts (all and per setter) and 200-game h2h vs FR4-final per chunk |
+| `fr7b_mid.csv`, `fr7c_mid.csv` | the same for FR7b and FR7c |
 | `metric_keys_used.txt` | the metric keys used |
 
 **Metric keys used:**
@@ -829,3 +862,4 @@ FR5 figures (`fr5_*.png`, `reward_share_exp_FR5.png`) and the three FR5 CSVs are
 
 FR6 figures (`fr6_*.png`) and the two FR6 CSVs are made by [`make_figures_fr6.py`](make_figures_fr6.py) from `exp_FR6/logs/{metrics,mid}.jsonl` and `fr6_final/curr.jsonl`.
 The FR7 figure (`fr7_mid.png`) and `fr7_mid.csv` are made by [`make_figures_fr7.py`](make_figures_fr7.py) from `exp_FR7/logs/mid.jsonl`.
+FR7b and FR7c figures and CSVs are made the same way by [`make_figures_fr7b.py`](make_figures_fr7b.py) and [`make_figures_fr7c.py`](make_figures_fr7c.py).
