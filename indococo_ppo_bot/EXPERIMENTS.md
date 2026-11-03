@@ -931,3 +931,77 @@ Curriculum greedy L0 29.5%, L1 25.3%, L2 8.3%. Mid checks: 33 resets, 6 uses (al
 reset_curriculum, 0 normal-play), 0 goals after a reset; h2h vs FR4 (200 g) 39-56.5%.
 Not pushed; FR8-final stays best. FR8c started 4:17 AM ET Nov 3 from FR8-final
 (4491.6M -> 5491.6M), then FR8d. REPORT.md §11.8c, `docs/experiments/data/fr8b_mid.csv`.
+
+## FR9: a changed recipe for normal-play flip resets (designed 2026-11-03)
+
+### Diagnosis
+Five runs on the FR7c recipe (FR7c, FR7d, FR7e, FR8, FR8b; 5.0B steps, the
+per-chunk 150k-step rates in `exp_<run>/logs/mid.jsonl`):
+
+| setters | episodes | resets | uses | goals after a reset |
+|---|---|---|---|---|
+| normal play (kickoff + random + replay) | 52,752 | 63 | **0** | 0 |
+| reset_curriculum drills | 6,704 | 117 | 51 | 1 |
+| air_reset drills | 6,805 | 13 | 0 | 0 |
+
+* **Reaching the states is not the bottleneck.** FR6-final self-play
+  (`fr7_snap/train.f32`, 11,786 aerial triggers per 1M steps) has a car within
+  400 uu below the ball with its wheels toward it (cos > 0.5) in ~21% of the
+  triggers, i.e. ~2,400 reset-able approaches per 1M steps, against ~6 resets
+  (63 resets in ~11M normal-play rates steps).
+* **The policy does not go for the reset from its own states.** FR8-final
+  rates (300k steps, `fr9_snap/rates_fr9.toml`) starting from those exact
+  states (`reset_replay`, filtered below): 1 reset / 0 uses in 628 episodes,
+  vs 2 / 0 in 623 plain `replay` episodes.
+* **The drills teach a different situation.** Drill episodes start with the
+  flip used and the ball parked on the wheels; 44% of their resets become a
+  use. The normal-play resets (wheel taps, jump still unused) never do. The
+  drills earned all 51 paid uses, and with the x3 drill ramp nearly all of the
+  reset reward, so the value of "use a reset" was learned only in drill states.
+* **The use reward is the sparsest part.** FR7 cut use_weight 1.0 -> 0.4 to
+  pay outcomes (shot 1.5, goal 3.0). With 0 normal uses that outcome term has
+  never been seen in normal play; flip_reset_use is nonzero on ~2e-5 of
+  car-steps.
+
+### Changes (`fr9.toml`, `train_fr9.toml`, `fr9_launch.sh`)
+1. **`reset_replay` setter (16%)**, new `SetterKind::ResetReplay` (the replay
+   setter, own label, so it never counts as normal play in rates/mid.jsonl).
+   States: `indococo-train snapshots` from FR8-final self-play (4M steps,
+   48,371 aerial triggers) plus the FR6 set, filtered by
+   `tools/snap/filter_reset_spots.py` (car airborne above 300 uu, ball above
+   it within 450 uu, wheels toward the ball cos > 0.4): 14,208 + 3,492 =
+   17,700 states in `~/ippo_runs/fr9_snap/near.f32`. These are the bot's own
+   approaches (0-15 steps before the trigger), the bridge between drills and
+   real games, and they start mid air-dribble as often as not.
+2. **Pay the use again:** use_weight 0.4 -> 1.0 (shot 1.5, goal 3.0 kept).
+   New `dodge_aim` 0.1 (`flip_reset_use.rs`, default 0 so older configs are
+   unchanged): paid once when the car dodges after a reset with its nose at a
+   ball within 500 uu (cos > 0.5), the first half of a use.
+3. **Normal play x4** (was x2), reset_replay x3 (`min(3, 0.75 x normal)`),
+   **synthetic drills x0.5 flat** (no x3 -> x1 ramp).
+4. **Mix:** kickoff .30, random .10 + .10, replay .14, reset_replay .16,
+   wall_air_dribble .06 (was .04), drills .14 (was .20: air_near_ball .03,
+   L1 .04, L2 .04, air_reset .03).
+5. Kept: 106 obs, entropy 0.012, BC refresh + KL 5 to FR4-final per chunk,
+   FARM_ALARM (> 0.1% of car-steps paid -> drills x0.5, normal x1, near x0.75),
+   48% guard (2 chunks < 45% vs FR4 -> roll back to the best >= 48% chunk).
+   Considered and not taken: a dense under-ball reward in normal play
+   (reset_align 400, potential-based, already does this and hovering is
+   farmable); scaling the drills to 0 (they still hold the only use skill).
+6. Start: FR8-final 4491.6M (`exp_FR8/checkpoints/1793674697`), 1.0B steps,
+   then FR9b from the best chunk (FOLLOWUPS=1). Notify/push rule as FR7c, name
+   `fr9_<N>M.bpk`.
+
+### Smoke (2026-11-03, 5:23-5:28 AM ET, beside FR8c)
+`RUN=FR9smoke`, 4 threads, 64 games, 2 chunks of 1M: trains, BC refresh,
+rates, h2h and finals all run (EXIT 0). Live config rendered as intended
+(normal x4, reset_replay x3, drills x0.5, use_weight 1.0, dodge_aim 0.1);
+measured setter share reset_replay 15.4%, replay 13.0%; h2h vs FR4 0.55 (20 g)
+after 2M steps. Lib tests 51/51 (new `dodge_aim` test). Smoke dir deleted.
+
+### Hand-off
+`experiments/fr9_handoff.sh` (tmux `ippo_handoff3`, log
+`~/ippo_runs/fr9_handoff.log`). `~/ippo_runs/FR8_NO_FOLLOWUP` stops FR8c from
+exec-ing FR8d; the watcher waits for `fr8c_final/DONE` (or the FR8c driver
+gone 10 min) and starts FR9 in tmux `ippo_FR9`. Fallback: FR9 not ready, or
+dead within 20 min -> FR8d from FR8c's final checkpoint (old behaviour).

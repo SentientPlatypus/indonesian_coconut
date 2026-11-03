@@ -76,6 +76,10 @@ pub enum SetterKind {
     /// A state recorded from real self-play (`indococo-train snapshots`):
     /// aerial situations near the ball from kickoff and random episodes.
     Replay(Replay),
+    /// FR9: the same replay setter over a snapshot file filtered to
+    /// reset-able geometry (`tools/snap/filter_reset_spots.py`). Its own
+    /// label so its resets/uses never count as normal play.
+    ResetReplay(Replay),
 }
 
 impl SetterKind {
@@ -90,6 +94,7 @@ impl SetterKind {
             Self::AirReset(_) => "air_reset",
             Self::ResetCurriculum(_) => "reset_curriculum",
             Self::Replay(_) => "replay",
+            Self::ResetReplay(_) => "reset_replay",
         }
     }
 }
@@ -208,7 +213,7 @@ impl SetterKind {
             Self::AirNearBall(ref s) => Box::new(s.clone()),
             Self::WallAirDribble(ref s) => Box::new(s.clone()),
             Self::AirReset(ref s) => Box::new(s.clone()),
-            Self::Replay(ref s) => Box::new(s.clone()),
+            Self::Replay(ref s) | Self::ResetReplay(ref s) => Box::new(s.clone()),
             Self::ResetCurriculum(ref s) => {
                 crate::curriculum::configure(s.adapt());
                 Box::new(s.clone())

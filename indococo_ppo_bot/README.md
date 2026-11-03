@@ -317,6 +317,19 @@ widened), finals 1000-game h2h vs FR4-final and vs FR7 3491.6M, pool400,
 pool_botpack5, rates. `experiments/fr8_handoff.sh` waits for FR7e's finals and
 launches it (fallback: an FR7c-config FR7f). Status: `experiments/fr8_status.sh`.
 
+### FR9 pipeline
+`experiments/fr9_launch.sh` = the FR8 pipeline with `fr9.toml` (use_weight
+1.0, `dodge_aim` 0.1, normal play x4, reset_replay x3, drills x0.5 flat) and
+`train_fr9.toml` (16% `reset_replay`), binary `code_fr9/bin/indococo-train-fr9`,
+start FR8-final 4491.6M, follow-ups FR9b.. (stop: `FR9_NO_FOLLOWUP`).
+`experiments/fr9_handoff.sh` waits for FR8c's finals (with `FR8_NO_FOLLOWUP`
+set) and launches FR9 (fallback: FR8d). Status: `RUN=FR9 bash fr8_status.sh`.
+Reset-able replay states: `indococo-train snapshots` then
+`tools/snap/filter_reset_spots.py raw.f32 near.f32` (car airborne, ball above
+within 450 uu, wheels toward it cos > 0.4) -> `~/ippo_runs/fr9_snap/near.f32`,
+used by the `reset_replay` setter (same code as `replay`, own label
+`reset_replay`, so rates and mid.jsonl never count it as normal play).
+
 ### Real-play snapshots (FR7)
 `indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>`
 self-plays a checkpoint (greedy, 5% random actions) over a setter mix and,

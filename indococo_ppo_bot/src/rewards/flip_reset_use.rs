@@ -43,6 +43,11 @@ pub struct FlipResetUseParams {
     pub shot_bonus: f64,
     pub min_shot_speed: f64,
     pub goal_bonus: f64,
+    /// FR9: paid once when the car dodges after a reset (not into the ball in
+    /// the same step, which pays the use) with its nose toward the ball:
+    /// `dodge_aim * cos` for cos > 0.5 within `dodge_aim_dist`. 0 = off.
+    pub dodge_aim: f64,
+    pub dodge_aim_dist: f64,
 }
 
 impl Default for FlipResetUseParams {
@@ -62,6 +67,8 @@ impl Default for FlipResetUseParams {
             shot_bonus: 0.5,
             min_shot_speed: 500.0,
             goal_bonus: 1.0,
+            dodge_aim: 0.0,
+            dodge_aim_dist: 500.0,
         }
     }
 }
@@ -148,6 +155,17 @@ impl FlipResetUse {
         }
     }
 
+    /// FR9 dodge-aim payout: the car dodges with its nose toward a ball in
+    /// reach (the first half of a use).
+    fn aim_pay(p: &FlipResetUseParams, car: &CarView, state: &StateView) -> f64 {
+        if p.dodge_aim <= 0.0 {
+            return 0.0;
+        }
+        let d = state.ball.pos - car.pos;
+        let cos = car.forward.dot(d.normalize_or_zero());
+        if d.length() <= p.dodge_aim_dist && cos > 0.5 { p.dodge_aim * cos } else { 0.0 }
+    }
+
     /// Dodge, use, shot and goal payouts of a held reset.
     fn follow_up(
         &self,
@@ -174,6 +192,7 @@ impl FlipResetUse {
                         held.usable = false;
                     } else {
                         held.dodge_tick = Some(now);
+                        pay += Self::aim_pay(p, car, state);
                     }
                 }
                 None if since_reset > ticks(p.dodge_window_s) => held.usable = false,
@@ -337,6 +356,29 @@ mod tests {
             "full-speed goalward use pays 1: {used}"
         );
         assert_eq!(r.get_rewards(&at(&s3, 152))[0], 0.0, "paid once");
+    }
+
+    #[test]
+    fn dodge_aim_pays_once_only_when_the_nose_points_at_the_ball() {
+        let p = FlipResetUseParams { dodge_aim: 0.2, ..FlipResetUseParams::default() };
+        let mut r = FlipResetUse::new(p.clone());
+        r.reset(&state(0));
+        let s1 = reset_step(120);
+        r.get_rewards(&s1);
+        // Nose along +x, ball straight below: no aim pay.
+        assert_eq!(r.get_rewards(&dodge(&s1, 136))[0], 0.0);
+        let mut r = FlipResetUse::new(p);
+        r.reset(&state(0));
+        r.get_rewards(&s1);
+        let mut d = dodge(&s1, 136);
+        d.cars[0].forward = -DVec3::Z;
+        let paid = r.get_rewards(&d)[0];
+        assert!((paid - 0.2).abs() < 1e-9, "{paid}");
+        assert_eq!(r.get_rewards(&at(&d, 144))[0], 0.0, "paid once");
+        // Default (FR4-FR8 configs): off.
+        let mut r = reward(0);
+        r.get_rewards(&s1);
+        assert_eq!(r.get_rewards(&d)[0], 0.0);
     }
 
     #[test]

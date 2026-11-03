@@ -1,0 +1,53 @@
+# FR9: a changed recipe for flip resets in NORMAL play (EXPERIMENTS.md FR9).
+# Diagnosis (FR7c-FR8b, 5 runs, 5.0B steps): normal play got 63 resets and
+# 0 uses; the reset_curriculum drills got 117 resets and 51 uses. The bot
+# reaches resets in real games but never dodges into the ball after one, and
+# the drill states (flip used, ball parked on the wheels) are not the states
+# it reaches itself. Changes on top of the FR7c rewards (rendered by fr9_launch.sh,
+# @DRILL@ / @NORMAL@ filled in from exp_<run>/ramp.env):
+# * reset_replay setter (16% of episodes, train_fr9.toml): the bot's own
+#   normal-play states 0-15 steps before reset-able geometry (FR8-final
+#   self-play, tools/snap/filter_reset_spots.py). Own label: never counted as
+#   normal play in the rates.
+# * the use pays again: use_weight 0.4 -> 1.0 (shot 1.5, goal 3.0 stay), plus
+#   dodge_aim 0.1 once for dodging with the nose at the ball after a reset.
+# * reset reward x4 in kickoff/random/replay (was x2), x3 in reset_replay,
+#   x0.5 flat in the synthetic drills (no x3 ramp: drill skill does not
+#   transfer, and the drills earned all 51 paid uses).
+# * FARM_ALARM (drills x0.5, normal x1) and the 48% guard / KL 5 to FR4 stay.
+# (fr7c.toml itself is a template with @NORMAL@ / @DRILL@, so this extends
+# fr7.toml and repeats the FR7c air_touch_height block.)
+extends = "fr7.toml"
+
+[weights]
+air_touch_height = 8.0
+
+[air_touch_height]
+min_ball_height = 300.0
+decay = 0.7
+goal_bonus = 1.0
+wall_margin = 300.0
+episode_cap = 2.0
+
+[flip_reset_use]
+use_weight = 1.0
+dodge_aim = 0.1
+dodge_aim_dist = 500.0
+
+[setter_scale.kickoff]
+flip_reset_use = @NORMAL@
+[setter_scale.random]
+flip_reset_use = @NORMAL@
+[setter_scale.replay]
+flip_reset_use = @NORMAL@
+airdribble_seq = 0.5
+[setter_scale.reset_replay]
+flip_reset_use = @NEAR@
+airdribble_seq = 0.5
+[setter_scale.reset_curriculum]
+flip_reset_use = @DRILL@
+air_touch_height = 0.0
+[setter_scale.air_reset]
+flip_reset_use = @DRILL@
+[setter_scale.air_near_ball]
+flip_reset_use = @DRILL@

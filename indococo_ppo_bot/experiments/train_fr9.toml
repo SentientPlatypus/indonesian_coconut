@@ -1,0 +1,92 @@
+# FR9 learner settings (EXPERIMENTS.md FR9): train_fr7c.toml with a new
+# setter mix: 16% reset_replay (own normal-play states near reset-able
+# geometry, @NEARSNAP@), wall_air_dribble 4% -> 6% (episodes starting mid air
+# dribble), synthetic reset drills 20% -> 14%. Normal play (kickoff, random,
+# replay) 76% -> 64%. Filled in by fr9_launch.sh.
+reward_config = "@RUN@/cfg/experiments/fr9_live.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = 100_000
+mini_batch_size = 50_000
+epochs = 2
+policy_lr = 5e-5
+critic_lr = 5e-5
+entropy = 0.012
+gamma = 0.995
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+# New setter mix: 10M steps of critic-only warm-up from the start.
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = 400_000_000
+min_scale = 0.4
+
+[opponents]
+chance = 0.25
+past_versions_weight = 1.0
+[[opponents.fixed]]
+name = "1v1.pt"
+checkpoint = "@RUN@/opponents/1v1"
+weight = 1.0
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 1.5
+[[opponents.fixed]]
+name = "FR6_final"
+checkpoint = "@RUN@/opponents/FR6_final"
+weight = 1.0
+
+# Setter mix: 64% normal/real play, 16% reset_replay, 6% wall air dribble,
+# 14% synthetic reset drills.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.30
+[[state_setters]]
+kind = "random"
+weight = 0.10
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.10
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "replay"
+weight = 0.14
+path = "@SNAP@"
+[[state_setters]]
+kind = "reset_replay"
+weight = 0.16
+path = "@NEARSNAP@"
+[[state_setters]]
+kind = "wall_air_dribble"
+weight = 0.06
+# --- synthetic reset drills, 14% ---
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.03
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.04
+fixed_level = 1
+[[state_setters]]
+kind = "reset_curriculum"
+weight = 0.04
+fixed_level = 2
+[[state_setters]]
+kind = "air_reset"
+weight = 0.03
