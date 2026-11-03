@@ -1017,3 +1017,16 @@ Curriculum greedy L0 24.4%, L1 22.7%, L2 9.6%. Mid checks: 30 resets, 3 uses (al
 reset_curriculum, 0 normal-play), 0 goals after a reset; h2h vs FR4 (200 g) 43.5-57%.
 Not pushed; FR8-final stays best. FR8d skipped: FR9 launched 10:11 AM ET Nov 3 by
 the hand-off watcher. REPORT.md §11.8d, `docs/experiments/data/fr8c_mid.csv`.
+
+### FR9 results (4491.6M -> 5491.6M, finals 3:58 PM ET Nov 3)
+Trained 10:11 AM -> 3:30 PM ET Nov 3 from FR8-final 4491.6M, FR9 recipe (drills x0.5,
+normal x4, reset_replay x3). No FARM ALARM, no 48% GUARD.
+Final 5491.6M (`exp_FR9/checkpoints/1793737699`): 53.3% vs FR4-final, 54.1% vs FR7
+3491.6M, 48.3% vs FR8-final (1000 g, seed 424242), pool 87.5 (Nexto 87.2, 1v1.pt 73.2),
+botpack5 Ripple 49.5 / Kira 53.5 / Dice 53.0 / Chronos 64.5 / GalactusV2 16.2 / Seer 100.0.
+rates_fr7 300k: 0 / 0 / 0; rates_fr3 300k: 3 / 0 / 0 (reset_curriculum).
+Curriculum greedy L0 28.5%, L1 25.2%, L2 9.0%. Mid checks: 29 resets, 7 uses (all
+reset_curriculum, 0 normal-play), 0 goals after a reset; h2h vs FR4 (200 g) 44-58%.
+Not pushed; FR8-final stays best (FR9-final loses to it 48.3% head to head).
+FR9b running from the FR9 5101.6M chunk (auto follow-up). REPORT.md §11.8e,
+`docs/experiments/data/fr9_mid.csv`.
