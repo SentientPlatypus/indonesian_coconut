@@ -905,3 +905,17 @@ bottleneck for a fixed 1v1 entity set (REPORT §11.8).
 Auto: `fr8_handoff.sh` (tmux `ippo_handoff`) starts FR8 in tmux `ippo_FR8` when
 `fr7e_final/DONE` appears (or FR7e's driver is gone for 10 min); if FR8 is not
 ready or fails within 20 min it starts FR7f (FR7c config from FR7e's final).
+
+### FR8 results (3491.6M -> 4491.6M, finals 10:29 PM ET Nov 2)
+Trained 3:43 PM -> 10:00 PM ET Nov 2 (disk-full crash 5:38 PM ET, resumed 6:19 PM ET
+from 3801.6M). Drill x3 -> x1 at 3851.6M -> x0.5 at 4151.6M. No FARM ALARM, no 48% GUARD.
+Final 4491.6M (`exp_FR8/checkpoints/1793674697`): 51.85% vs FR4-final, 53.3% vs FR7
+3491.6M (1000 g, seed 424242), pool 87.0 (Nexto 88.5), botpack5 Ripple 56.0 / Kira 60.2 /
+Dice 51.0 / Chronos 67.0 / GalactusV2 14.8 / Seer 99.0.
+rates_fr7 300k: 3 / 0 / 0; rates_fr3 300k: 6 / 1 / 0 (curriculum; FR6: 9 / 4 / 0).
+Curriculum greedy L0 30.2%, L1 25.6%, L2 10.3%. Mid checks: 29 resets, 6 uses (all
+reset_curriculum, 0 normal-play), 1 goal after a reset (reset_curriculum, no use);
+h2h vs FR4 (200 g) 43.5-56%. New best by strength (beats FR7 3491.6M 53.3%, pool 87.0),
+but not pushed (no normal-play uses). 2v2 stays paused (reset gate not met).
+FR8b started 10:29 PM ET from the 4001.6M chunk (56% in 200 g).
+REPORT.md §11.8b, `docs/experiments/data/fr8_mid.csv`.
