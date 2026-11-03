@@ -919,3 +919,15 @@ h2h vs FR4 (200 g) 43.5-56%. New best by strength (beats FR7 3491.6M 53.3%, pool
 but not pushed (no normal-play uses). 2v2 stays paused (reset gate not met).
 FR8b started 10:29 PM ET from the 4001.6M chunk (56% in 200 g).
 REPORT.md §11.8b, `docs/experiments/data/fr8_mid.csv`.
+
+### FR8b results (4001.6M -> 5001.6M, finals 4:17 AM ET Nov 3)
+Trained 10:29 PM ET Nov 2 -> 3:49 AM ET Nov 3 from FR8 4001.6M, FR8 config. Drill x3 ->
+x1 at 4361.6M -> x0.5 at 4661.6M. No FARM ALARM, no 48% GUARD.
+Final 5001.6M (`exp_FR8b/checkpoints/1793695617`): 50.7% vs FR4-final, 51.7% vs FR7
+3491.6M, 49.7% vs FR8-final (1000 g, seed 424242), pool 85.7 (Nexto 85.5), botpack5
+Ripple 55.0 / Kira 56.2 / Dice 45.0 / Chronos 61.8 / GalactusV2 18.5 / Seer 99.2.
+rates_fr7 300k: 4 / 1 / 0; rates_fr3 300k: 7 / 2 / 0 (all uses reset_curriculum).
+Curriculum greedy L0 29.5%, L1 25.3%, L2 8.3%. Mid checks: 33 resets, 6 uses (all
+reset_curriculum, 0 normal-play), 0 goals after a reset; h2h vs FR4 (200 g) 39-56.5%.
+Not pushed; FR8-final stays best. FR8c started 4:17 AM ET Nov 3 from FR8-final
+(4491.6M -> 5491.6M), then FR8d. REPORT.md §11.8c, `docs/experiments/data/fr8b_mid.csv`.

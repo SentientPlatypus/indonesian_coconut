@@ -895,6 +895,38 @@ on the box workspace):
 - **2v2 stays paused.** One gate (a 1v1 checkpoint beats FR7 3491.6M) now holds; the other (normal-play flip resets) does not.
 - **Follow-up (running):** FR8b started 10:29 PM ET Nov 2 from FR8's 4001.6M chunk (56.0% vs FR4 in 200 games), same config, drill ramp restarted at x3.
 
+### 11.8c FR8b results: FR8 continued from its 4001.6M chunk (4001.6M → 5001.6M)
+
+**Run.** FR8b started 10:29 PM ET Nov 2 from `exp_FR8/checkpoints/1793665275` (FR8 4001.6M, 56.0% vs FR4 in 200 games), FR8 config (106-input obs, FR7c rewards), drill ramp restarted at x3. It trained without a crash and finished at 3:49 AM ET Nov 3; the finals were done at 4:17 AM ET. Drills went x3 → x1 at 4361.6M and x0.5 at 4661.6M. Neither the farming alarm nor the 48% guard fired.
+
+**Mid-run checks** (`data/fr8b_mid.csv`, 20 checks of 150k steps):
+
+![FR8b mid-run](figures/fr8b_mid.png)
+
+33 resets, 6 uses, 0 goals after a reset. All 6 uses came from `reset_curriculum` spawns; kickoff, random and replay episodes made **0 uses**. The 200-game h2h vs FR4-final ranged 39.0–56.5% (mean 51.1%); the one dip to 39.0% at 4511.6M recovered to 54.0% in the next chunk.
+
+**Final evaluation** (`~/ippo_runs/fr8b_final/`, seed 424242). Final checkpoint `exp_FR8b/checkpoints/1793695617` (`cumulative_timesteps = 5001600000`), fresh export `final_policy.safetensors` (sha256 `14ca55dd…be634cb5`, written 3:49 AM ET).
+
+| measure | FR8b-final (5001.6M) | FR8-final (4491.6M) | FR7 3491.6M |
+|---|---|---|---|
+| h2h vs FR4-final, 1000 games | 50.7% (507-493, ±1.6) | 51.85% | **52.5%** |
+| h2h vs FR7 3491.6M, 1000 games | 51.7% (517-483, ±1.6) | **53.3%** | — |
+| h2h vs FR8-final, 1000 games | 49.7% (497-503, ±1.6) | — | — |
+| pool score (400 games/opponent) | 85.7 | **87.0** | 85.9 |
+| vs 1v1.pt / 430M / Nexto | 66.5 / 71.8 / 85.5 | 68.0 / 71.5 / 88.5 | 64.5 / 75.3 / 85.3 |
+| vs Necto / Element / Immortal | 95.2 / 98.8 / 96.5 | 98.5 / 99.2 / 96.0 | 97.0 / 98.0 / 95.3 |
+| botpack5: Ripple / Kira / Dice / Chronos / GalactusV2 / Seer | 55.0 / 56.2 / 45.0 / 61.8 / 18.5 / 99.2 | 56.0 / 60.2 / 51.0 / 67.0 / 14.8 / 99.0 | — |
+
+**Real play** (300k steps, self-play; resets / uses / goals after a reset): on `rates_fr7.toml` FR8b-final made 4 / 1 / 0 (`reset_curriculum` 2 / 1 / 0, kickoff 1 / 0 / 0, `air_reset` 1 / 0 / 0, random and replay 0 / 0 / 0). On `rates_fr3.toml`: 7 / 2 / 0, both uses from `reset_curriculum` (kickoff 1 / 0 / 0, `air_reset` 1 / 0 / 0).
+
+**Curriculum skill** (960 episodes per row, greedy / sampled success): L0 29.5% / 17.9%, L1 25.3% / 15.1%, L2 8.3% / 6.3%.
+
+**Verdict.**
+- **Not better than FR8-final.** FR8b-final is level with FR8-final head to head (49.7%), slightly weaker against FR4 and FR7 3491.6M, and lower on the pool (85.7 vs 87.0). FR8-final stays the best model.
+- **Not pushed.** 0 normal-play uses again; every use came from a curriculum spawn. This is the fifth run in a row on the FR7c reward recipe without a normal-play use, so more steps on this recipe are not producing flip resets in real games.
+- **2v2 stays paused** (normal-play reset gate not met).
+- **Follow-up (running):** FR8c started 4:17 AM ET Nov 3 from FR8-final (4491.6M → 5491.6M), same config, then FR8d.
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
@@ -919,6 +951,7 @@ on the box workspace):
 | FR7d-final | 4901.6M | R9 (FR7d, from FR7c 3901.6M) | 49.7% vs FR4, 52.4% vs FR6 (1000 g); pool 86.4 (Nexto 87.2); rates_fr7 0 resets / 0 uses / 0 goals; rates_fr3 5 / 1 / 0 (curriculum) | box: `exp_FR7d/checkpoints/1793630629`; not shipped (fails reset half of push rule) |
 | FR7e-final | 5211.6M | R9 (FR7e, from FR7d 4211.6M) | 49.8% vs FR4, 49.3% vs FR7 3491.6M (1000 g); pool 86.2; rates_fr7 4 / 1 / 0 (curriculum) | box: `exp_FR7e/checkpoints/1793650831` (deleted in the Nov 2 cleanup); not shipped |
 | **FR8-final** | 4491.6M | R10 (FR8, 106-input obs, from FR7 3491.6M) | **53.3% vs FR7 3491.6M**, 51.85% vs FR4 (1000 g); **pool 87.0** (best, Nexto 88.5); rates_fr7 3 / 0 / 0, rates_fr3 6 / 1 / 0 (curriculum) | box: `exp_FR8/checkpoints/1793674697`, `fr8_final/final_policy.safetensors`; not shipped (fails reset half of push rule); needs the 106-input RLBot binaries |
+| FR8b-final | 5001.6M | R10 (FR8b, from FR8 4001.6M) | 50.7% vs FR4, 51.7% vs FR7 3491.6M, 49.7% vs FR8-final (1000 g); pool 85.7 (Nexto 85.5); rates_fr7 4 / 1 / 0, rates_fr3 7 / 2 / 0 (curriculum) | box: `exp_FR8b/checkpoints/1793695617`, `fr8b_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
 
 ## 13. Lessons learned and threats to validity
 
