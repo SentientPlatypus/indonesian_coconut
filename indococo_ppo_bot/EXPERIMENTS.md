@@ -1005,3 +1005,15 @@ after 2M steps. Lib tests 51/51 (new `dodge_aim` test). Smoke dir deleted.
 exec-ing FR8d; the watcher waits for `fr8c_final/DONE` (or the FR8c driver
 gone 10 min) and starts FR9 in tmux `ippo_FR9`. Fallback: FR9 not ready, or
 dead within 20 min -> FR8d from FR8c's final checkpoint (old behaviour).
+
+### FR8c results (4491.6M -> 5491.6M, finals 10:11 AM ET Nov 3)
+Trained 4:17 AM -> 9:43 AM ET Nov 3 from FR8-final 4491.6M, FR8 config. Drill x3 ->
+x1 from 4801.6M -> x0.5 from 5101.6M. No FARM ALARM, no 48% GUARD.
+Final 5491.6M (`exp_FR8c/checkpoints/1793716845`): 48.6% vs FR4-final, 51.3% vs FR7
+3491.6M, 50.5% vs FR8-final (1000 g, seed 424242), pool 87.9 (Nexto 88.5, 1v1.pt 74.0),
+botpack5 Ripple 47.5 / Kira 50.0 / Dice 52.5 / Chronos 64.5 / GalactusV2 19.0 / Seer 99.8.
+rates_fr7 300k: 3 / 1 / 0; rates_fr3 300k: 3 / 2 / 0 (all reset_curriculum).
+Curriculum greedy L0 24.4%, L1 22.7%, L2 9.6%. Mid checks: 30 resets, 3 uses (all
+reset_curriculum, 0 normal-play), 0 goals after a reset; h2h vs FR4 (200 g) 43.5-57%.
+Not pushed; FR8-final stays best. FR8d skipped: FR9 launched 10:11 AM ET Nov 3 by
+the hand-off watcher. REPORT.md §11.8d, `docs/experiments/data/fr8c_mid.csv`.
