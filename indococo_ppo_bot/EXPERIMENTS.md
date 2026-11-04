@@ -1030,3 +1030,17 @@ reset_curriculum, 0 normal-play), 0 goals after a reset; h2h vs FR4 (200 g) 44-5
 Not pushed; FR8-final stays best (FR9-final loses to it 48.3% head to head).
 FR9b running from the FR9 5101.6M chunk (auto follow-up). REPORT.md §11.8e,
 `docs/experiments/data/fr9_mid.csv`.
+
+### FR9b results (5101.6M -> 6101.6M, finals 9:45 PM ET Nov 3)
+Trained 3:58 -> 9:17 PM ET Nov 3 from the FR9 5101.6M chunk, FR9 recipe. No FARM ALARM,
+no 48% GUARD.
+Final 6101.6M (`exp_FR9b/checkpoints/1793758509`): 50.7% vs FR4-final, 53.7% vs FR7
+3491.6M, 50.4% vs FR8-final (1000 g, seed 424242), pool 86.8 (Nexto 86.5, 1v1.pt 72.0),
+botpack5 Ripple 51.8 / Kira 54.5 / Dice 48.0 / Chronos 64.5 / GalactusV2 15.5 / Seer 99.8.
+rates_fr7 300k: 5 / 1 / 0 (use in reset_curriculum; random 1 and replay 1 reset, no use);
+rates_fr3 300k: 5 / 1 / 0. Curriculum greedy L0 30.5%, L1 23.9%, L2 9.4%.
+Mid checks: 28 resets, 8 uses (all reset_curriculum, 0 normal-play), 1 goal after a reset
+(replay setter, last check at 6101.6M, no use counted); h2h vs FR4 (200 g) 45.5-58.5%.
+Not pushed; FR8-final stays best (FR9b-final ties it 50.4%). FR9c running from the FR9b
+final (6101.6M -> ~7101.6M, FOLLOWUPS=3 so FR9d follows). REPORT.md §11.8f,
+`docs/experiments/data/fr9b_mid.csv`.

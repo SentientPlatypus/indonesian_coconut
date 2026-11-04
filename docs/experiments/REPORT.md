@@ -991,6 +991,38 @@ on the box workspace):
 - **2v2 stays paused** (normal-play reset gate not met).
 - **Follow-up (running):** FR9b started 3:58 PM ET Nov 3 from the FR9 5101.6M chunk (58% vs FR4 in 200 games), same FR9 recipe, 500 iterations per chunk.
 
+### 11.8f FR9b results: FR9 continued from its 5101.6M chunk (5101.6M → 6101.6M)
+
+**Run.** FR9b started 3:58 PM ET Nov 3 as FR9's automatic follow-up, from the FR9 5101.6M chunk (`exp_FR9/checkpoints/1793730224`, 58% vs FR4 in 200 games), with the same FR9 recipe. It trained without a crash and finished at 9:17 PM ET; the finals were done at 9:45 PM ET and the extra h2h vs FR8-final at 10:21 PM ET. Neither the farming alarm nor the 48% guard fired. FR9b was the last run of the chain, so the GPU sat idle from 9:45 PM to 10:15 PM ET until the hourly check started FR9c.
+
+**Mid-run checks** (`data/fr9b_mid.csv`, 20 checks of 150k steps on `rates_fr7.toml`):
+
+![FR9b mid-run](figures/fr9b_mid.png)
+
+28 resets, 8 uses, 1 goal after a reset. All 8 uses came from `reset_curriculum` spawns (19 of the 28 resets too). Kickoff, random and replay episodes made 8 resets and **0 uses**, but the last check (6101.6M, the final checkpoint) logged the **first normal-play goal after a reset** of the FR9 line: a `replay` episode in which the bot got a reset and its side scored afterwards, with no flip-reset use counted. The 200-game h2h vs FR4-final ranged 45.5–58.5% (mean 51.9%).
+
+**Final evaluation** (`~/ippo_runs/fr9b_final/`, seed 424242). Final checkpoint `exp_FR9b/checkpoints/1793758509` (6101.6M), fresh export `final_policy.safetensors` (sha256 `d05f5acb…74efcc8728`, written 9:17 PM ET).
+
+| measure | FR9b-final (6101.6M) | FR9-final (5491.6M) | FR8-final (4491.6M) |
+|---|---|---|---|
+| h2h vs FR4-final, 1000 games | 50.7% (507-493, ±1.6) | **53.3%** | 51.85% |
+| h2h vs FR7 3491.6M, 1000 games | 53.7% (537-463, ±1.6) | **54.1%** | 53.3% |
+| h2h vs FR8-final, 1000 games | **50.4%** (504-496, ±1.6) | 48.3% | — |
+| pool score (400 games/opponent) | 86.8 | **87.5** | 87.0 |
+| vs 1v1.pt / 430M / Nexto | 72.0 / 66.5 / 86.5 | 73.2 / 71.5 / 87.2 | 68.0 / 71.5 / 88.5 |
+| vs Necto / Element / Immortal | 97.8 / 99.5 / 98.2 | 97.0 / 98.2 / 97.5 | 98.5 / 99.2 / 96.0 |
+| botpack5: Ripple / Kira / Dice / Chronos / GalactusV2 / Seer | 51.8 / 54.5 / 48.0 / 64.5 / 15.5 / 99.8 | 49.5 / 53.5 / 53.0 / 64.5 / 16.2 / 100.0 | 56.0 / 60.2 / 51.0 / 67.0 / 14.8 / 99.0 |
+
+**Real play** (300k steps, self-play; resets / uses / goals after a reset): on `rates_fr7.toml` FR9b-final made 5 / 1 / 0 in total: random 1 / 0 / 0, replay 1 / 0 / 0, `reset_curriculum` 3 / 1 / 0, kickoff and `air_reset` 0 / 0 / 0. On `rates_fr3.toml`: 5 / 1 / 0 (kickoff 1 / 0 / 0, `reset_curriculum` 4 / 1 / 0). The mid-run replay goal did not recur.
+
+**Curriculum skill** (960 episodes per row, greedy / sampled success): L0 30.5% / 18.4%, L1 23.9% / 12.5%, L2 9.4% / 5.2%.
+
+**Verdict.**
+- **Level with FR8-final; FR8-final stays the best model.** FR9b-final ties FR8-final head to head (50.4%, well inside one standard error) and is slightly behind it vs FR4-final (50.7% vs 51.85%) and in the pool (86.8 vs 87.0), so it is not a clear improvement.
+- **Not pushed.** The push rule needs normal-play uses on the 1000-game/300k checks; the final made 0 normal-play uses, and the one mid-run replay goal after a reset (without a use) did not show up again in 300k steps.
+- **2v2 stays paused** (normal-play reset gate not met, no checkpoint beats FR8-final).
+- **Follow-up (running):** FR9c started 10:15 PM ET Nov 3 from the FR9b final checkpoint (6101.6M, the chunk with the replay goal after a reset), same FR9 recipe, 1.0B steps to about 7101.6M, then FR9d automatically.
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
@@ -1018,6 +1050,7 @@ on the box workspace):
 | FR8b-final | 5001.6M | R10 (FR8b, from FR8 4001.6M) | 50.7% vs FR4, 51.7% vs FR7 3491.6M, 49.7% vs FR8-final (1000 g); pool 85.7 (Nexto 85.5); rates_fr7 4 / 1 / 0, rates_fr3 7 / 2 / 0 (curriculum) | box: `exp_FR8b/checkpoints/1793695617`, `fr8b_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
 | FR8c-final | 5491.6M | R10 (FR8c, from FR8-final 4491.6M) | 48.6% vs FR4, 51.3% vs FR7 3491.6M, 50.5% vs FR8-final (1000 g); pool 87.9 (Nexto 88.5); rates_fr7 3 / 1 / 0, rates_fr3 3 / 2 / 0 (curriculum) | box: `exp_FR8c/checkpoints/1793716845`, `fr8c_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
 | FR9-final | 5491.6M | R11 (FR9, changed recipe, from FR8-final 4491.6M) | **53.3% vs FR4**, **54.1% vs FR7 3491.6M**, 48.3% vs FR8-final (1000 g); pool 87.5 (Nexto 87.2); rates_fr7 0 / 0 / 0, rates_fr3 3 / 0 / 0 (curriculum) | box: `exp_FR9/checkpoints/1793737699`, `fr9_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
+| FR9b-final | 6101.6M | R11 (FR9b, from FR9 5101.6M) | 50.7% vs FR4, 53.7% vs FR7 3491.6M, 50.4% vs FR8-final (1000 g); pool 86.8 (Nexto 86.5); rates_fr7 5 / 1 / 0 (use in curriculum), rates_fr3 5 / 1 / 0; mid-run: first normal-play (replay) goal after a reset, no use | box: `exp_FR9b/checkpoints/1793758509`, `fr9b_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
 
 ## 13. Lessons learned and threats to validity
 
