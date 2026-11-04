@@ -40,6 +40,9 @@ if ! ls $X/checkpoints 2>/dev/null | grep -qE '^[0-9]+$'; then
            FR9_final:$R/exp_FR9/checkpoints/1793737699 FR9b_final:$R/exp_FR9b/checkpoints/1793758509 \
            ST1_final:$R/exp_ST1/checkpoints/1793773641 ST2_final:$R/exp_ST2/checkpoints/1793792743; do
     mkdir -p $X/opponents/${p%%:*}; cp ${p#*:}/actor.bpk $X/opponents/${p%%:*}/ || die "opp $p"; done
+  # Variant-specific extra league opponents: EXTRA_OPPS="name:ckpt_dir:weight ..." (st_<VARIANT>.env).
+  for e in ${EXTRA_OPPS:-}; do n=${e%%:*}; r=${e#*:}; d=${r%:*}
+    mkdir -p $X/opponents/$n; cp $d/actor.bpk $X/opponents/$n/ || die "extra opp $e"; done
   echo "$START_CK $START $VARIANT" > $X/START; echo LOW=0 > $X/guard.env
 fi
 B=$X/indococo-train
@@ -62,6 +65,8 @@ while :; do
   if [[ -n "${GAL_WEIGHT:-}" ]]; then
     printf "\n[[opponents.external]]\nname = \"galactus\"\nkind = \"galactus\"\npath = \"%s\"\nweight = %s\n" "${GAL_DIR:-/home/ubuntu/eval_bots/galactus/rust}" "$GAL_WEIGHT" >> $X/train_st.toml
   fi
+  for e in ${EXTRA_OPPS:-}; do n=${e%%:*}
+    printf '\n[[opponents.fixed]]\nname = "%s"\ncheckpoint = "%s"\nweight = %s\n' "$n" "$X/opponents/$n" "${e##*:}" >> $X/train_st.toml; done
   log "$RUN train: $left iterations from $now"
   $B train $X/train_st.toml 2>&1 | tee -a $X/logs/train.log
   [[ ${PIPESTATUS[0]} -eq 0 ]] || die "train failed"

@@ -1238,3 +1238,14 @@ Queued ST5 (`experiments/st_ST5.env`): ST4 with one change, Galactus league weig
 6.0 (about 35% of opponent iterations, 12% of all, vs 19% / 7% in ST4). Starts from
 ST4's best chunk. If ST4's Galactus trend is flat this tests whether more exposure
 helps; if ST4 already climbs, it tests whether the trend scales.
+
+## 2026-11-04 5:15 PM ET: ST5 redesigned for generalization (replaces "Galactus weight 6")
+Goal clarified by the user: a policy that holds up against many opponent styles. Galactus is one benchmark, not the target, so ST5 no longer raises his league weight (6.0 would make him ~35% of opponent iterations and risk overfitting to one bot).
+
+ST3 finals, weakest matchups (decisive win rate): Galactus 20.4% (1000 g), dice 56.3%, ripple 56.8%, kira 60.8%, chronos 74.3%, 1v1.pt 77.8%, ppo_430M 84.5%. Strong: Nexto 91.5%, Immortal 97%, Necto 98%, Element 98%, Seer 99.8%.
+The botpack bots (dice/ripple/kira/chronos) are Python and can't join the Rust league cheaply, so ST5 widens style coverage with our own frozen checkpoints.
+
+ST5 (`experiments/st_ST5.env`): ST4 recipe with one change, a broader league. It adds 7 frozen checkpoints from different eras and styles at weight 1.0 each: X0 and ADB (early, ~880M), AUD, FR6, FR8c, FR9c, and ST3-final. That gives 15 fixed opponents plus past versions. Galactus stays at weight 2.5, which drops him from ~19% to ~12% of opponent iterations. The league fraction stays 0.35, and flip_reset stays 70.
+Mechanism: `st_launch.sh` reads `EXTRA_OPPS="name:ckpt:weight ..."` from the variant env. It copies the checkpoints at run start and appends `[[opponents.fixed]]` entries. Same trainer binary (indococo-train-gal); old-obs (pre-ext) actors load like FR4 does.
+Generalization panel: `st_promote.py` now adds `gen_panel` / `best_gen_panel` to PROMOTE.json (min, weakest, and mean over pool400 + bp5 + Galactus, 12 matchups). It's reported only; the gate is unchanged. ST3: min 20.4% (Galactus), mean 76.3%; ST2: min 20.8%, mean 75.2%.
+Read-out: ST5 succeeds on generalization if the panel mean rises and the botpack minimums (dice/ripple/kira) go up without losing vs BEST/FR4/Nexto.

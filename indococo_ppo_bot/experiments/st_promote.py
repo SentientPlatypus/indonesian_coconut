@@ -26,4 +26,17 @@ ok = ok and (pc is None or pb is None or pc >= pb - 1.0)
 ok = ok and (bc is None or bb is None or bc >= bb - 1.0)
 gc, gb = wr(f"{F}/galactus1000.jsonl"), wr(f"{BF}/galactus1000.jsonl")
 ok = ok and (gc is None or gb is None or gc >= gb - 0.04)
-print(json.dumps({"promote": bool(ok), "vs_best": vb, "vs_fr4": f4, "best_vs_fr4": bf4, "pool": pc, "best_pool": pb, "bp5": bc, "best_bp5": bb, "galactus": gc, "best_galactus": gb}))
+# Generalization panel (report only, not part of the gate): per-opponent win rates
+# across pool400 + bp5 + Galactus 1000 g; min / mean / weakest matchup.
+def per_opp(p):
+    try: return {d["opponent"]: d["win_rate_decisive"] for d in (json.loads(l) for l in open(p) if l.strip())}
+    except Exception: return {}
+def panel(D):
+    m = {**per_opp(f"{D}/pool400.jsonl"), **per_opp(f"{D}/bp5.jsonl")}
+    g = wr(f"{D}/galactus1000.jsonl")
+    if g is not None: m["galactus"] = g
+    if not m: return None
+    w = min(m, key=m.get)
+    return {"n": len(m), "min": round(m[w], 4), "weakest": w, "mean": round(sum(m.values()) / len(m), 4)}
+gen, gen_best = panel(F), panel(BF)
+print(json.dumps({"promote": bool(ok), "vs_best": vb, "vs_fr4": f4, "best_vs_fr4": bf4, "pool": pc, "best_pool": pb, "bp5": bc, "best_bp5": bb, "galactus": gc, "best_galactus": gb, "gen_panel": gen, "best_gen_panel": gen_best}))
