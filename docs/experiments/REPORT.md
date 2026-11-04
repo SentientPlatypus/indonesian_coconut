@@ -1043,6 +1043,26 @@ Mid-run checks (200 games, ±3.5): vs FR8-final rose from 48-52.5% in the first 
 `st_promote.py`: **not promoted**. It clears the h2h bar by a wide margin (+12 pt vs FR8-final, +10 pt vs FR4) and pool400 is within tolerance (-0.3), but botpack5 is 1.75 below FR8-final (tolerance 1.0), driven by Ripple (-7.2) and Kira (-9.2, both ±2.5) plus Nexto -2.7 in pool400. Reading: removing the anchor and the reset budget made the policy much stronger against its own lineage, with a small loss against some outside bots, which looks like league overfitting. FR8-final stays best; no bpk pushed.
 
 ST2 (gamma 0.997, 200k/iter, mb 100k) started 4:20 AM ET from ST1 5051.6M (→ 6051.6M); ST3 queued. Data: `data/st1_mid.csv`, script `make_figures_st1.py`.
+### 11.8h ST2 results: gamma 0.997 + 2x batch, from ST1 5051.6M (→ 6051.6M). NEW BEST
+
+ST2 is ST1 with a longer horizon (gamma 0.997, about 5.5 s) and twice the batch (200k steps per iteration, 100k minibatch). Same rewards, setters and league as ST1. Started 4:20 AM ET Nov 4 from ST1 5051.6M; trained to 9:42 AM ET; finals done 10:07 AM ET.
+
+![ST2 mid-run h2h and final pool](figures/st2_mid.png)
+
+Mid-run checks (200 games, ±3.5): vs FR8-final 58-74.5% in every chunk (61.5-64.5% for the first 400M, then mostly 66-74.5%); vs FR4 61-73.5%. The finals used the best chunk by vs-BEST, **5511.6M** (`exp_ST2/checkpoints/1793792743`, 74.5% in 200 g).
+
+| finals (seed 424242) | ST2 5511.6M | FR8-final |
+|---|---|---|
+| h2h vs FR8-final, 1000 g | **68.2%** (682-318, ±1.5) | 50% |
+| h2h vs FR4-final, 1000 g | **64.4%** (644-356) | 51.85% |
+| pool400 mean | **89.12** | 86.95 |
+| pool400: 1v1.pt / ppo_430M / Nexto / Necto / Element / Immortal | 75.5 / 75.5 / 91.25 / 96.75 / 99.0 / 96.75 | 68.0 / 71.5 / 88.5 / 98.5 / 99.25 / 96.0 |
+| botpack5 mean | **61.58** | 58.0 |
+| botpack5: Ripple / Kira / Dice / Chronos / Galactus / Seer | 58.75 / 61.5 / 54.75 / 72.25 / 22.25 / 100 | 56.0 / 60.25 / 51.0 / 67.0 / 14.75 / 99.0 |
+
+`st_promote.py`: **promoted**. It beats FR8-final 68.2% over 1000 games and improves every aggregate: +12.6 pt vs FR4, +2.2 pool400, +3.6 botpack5. Nexto rose to 91.25% (best so far). The only per-opponent drops are Necto (-1.75) and Element (-0.25), both within noise. ST1's outside-bot loss (Ripple, Kira) is gone, so the longer horizon and bigger batch, not more league play, fixed it. **ST2 5511.6M is the new best** and is shipped as `checkpoints_to_test/st2_5512M.bpk` (sha256 `1fc134ee…37bc3`; needs the 106-input RLBot binaries).
+
+ST3 (entropy 0.008, lr 4e-5 cosine to 0.25x) started 10:07 AM ET from ST2 5511.6M and is now measured against ST2. ST4 is queued: the ST2 recipe pushed further (gamma 0.998, 300k/iter, mb 100k). Data: `data/st2_mid.csv`, script `make_figures_st2.py`.
 
 ## 12. Summary of checkpoints
 
@@ -1072,6 +1092,8 @@ ST2 (gamma 0.997, 200k/iter, mb 100k) started 4:20 AM ET from ST1 5051.6M (→ 6
 | FR8c-final | 5491.6M | R10 (FR8c, from FR8-final 4491.6M) | 48.6% vs FR4, 51.3% vs FR7 3491.6M, 50.5% vs FR8-final (1000 g); pool 87.9 (Nexto 88.5); rates_fr7 3 / 1 / 0, rates_fr3 3 / 2 / 0 (curriculum) | box: `exp_FR8c/checkpoints/1793716845`, `fr8c_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
 | FR9-final | 5491.6M | R11 (FR9, changed recipe, from FR8-final 4491.6M) | **53.3% vs FR4**, **54.1% vs FR7 3491.6M**, 48.3% vs FR8-final (1000 g); pool 87.5 (Nexto 87.2); rates_fr7 0 / 0 / 0, rates_fr3 3 / 0 / 0 (curriculum) | box: `exp_FR9/checkpoints/1793737699`, `fr9_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
 | FR9b-final | 6101.6M | R11 (FR9b, from FR9 5101.6M) | 50.7% vs FR4, 53.7% vs FR7 3491.6M, 50.4% vs FR8-final (1000 g); pool 86.8 (Nexto 86.5); rates_fr7 5 / 1 / 0 (use in curriculum), rates_fr3 5 / 1 / 0; mid-run: first normal-play (replay) goal after a reset, no use | box: `exp_FR9b/checkpoints/1793758509`, `fr9b_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
+| ST1 5051.6M | 5051.6M | ST1 (strength-only, from FR8-final) | 62.2% vs FR8-final, 61.6% vs FR4 (1000 g); pool 86.6; botpack5 56.25 (FR8 58.0) | `checkpoints_to_test/st1_5052M.bpk` (not promoted) |
+| **ST2 5511.6M** | 5511.6M | ST2 (gamma 0.997, 2x batch, from ST1 5051.6M) | **68.2% vs FR8-final**, 64.4% vs FR4 (1000 g); **pool 89.1** (best, Nexto 91.25); **botpack5 61.6** (best) | `checkpoints_to_test/st2_5512M.bpk`; box `exp_ST2/checkpoints/1793792743`, `st2_final/`; needs the 106-input RLBot binaries |
 
 ## 13. Lessons learned and threats to validity
 

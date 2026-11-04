@@ -1092,3 +1092,12 @@ Best chunk 5051.6M (exp_ST1/checkpoints/1793773641): 62.2% vs FR8-final and 61.6
 no bpk pushed. Big h2h gain with a small outside-bot loss suggests league overfitting; a
 later variant should add outside bots (Nexto etc.) or more past-version play to the league.
 ST2 running from ST1 5051.6M (-> 6051.6M), ST3 queued. REPORT.md 11.8g, data/st1_mid.csv.
+
+### ST2 results (finals 2026-11-04 10:07 AM ET) -- PROMOTED, NEW BEST
+Best chunk 5511.6M (exp_ST2/checkpoints/1793792743): 68.2% vs FR8-final and 64.4% vs FR4
+(1000 g, seed 424242), pool400 89.12 (FR8 86.95; Nexto 91.25 vs 88.5), botpack5 61.58
+(FR8 58.0; Ripple 58.75, Kira 61.5, Galactus 22.25). Mid checks vs FR8-final 58-74.5% (200 g).
+Promoted: shipped as checkpoints_to_test/st2_5512M.bpk; later runs are measured vs ST2.
+Longer horizon + bigger batch fixed ST1's outside-bot loss. REPORT.md 11.8h, data/st2_mid.csv.
+ST3 running from ST2 5511.6M (-> 6511.6M). Queued: ST4 = ST2 recipe with gamma 0.998,
+300k/iter, mb 100k (experiments/st_ST4.env), from ST3's best chunk.
