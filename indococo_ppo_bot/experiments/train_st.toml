@@ -1,0 +1,77 @@
+# ST learner settings (EXPERIMENTS.md ST). Filled in by st_launch.sh from
+# st_<VARIANT>.env. Setter mix is 100% normal play: kickoff / random / replay.
+reward_config = "@RUN@/cfg/experiments/st.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 2
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+# League: past bests as fixed opponents (FR8-final = current best weighted up).
+[opponents]
+chance = @OPPCH@
+past_versions_weight = 1.0
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 1.0
+[[opponents.fixed]]
+name = "FR7_3492M"
+checkpoint = "@RUN@/opponents/FR7_3492M"
+weight = 1.0
+[[opponents.fixed]]
+name = "FR8_final"
+checkpoint = "@RUN@/opponents/FR8_final"
+weight = 2.0
+[[opponents.fixed]]
+name = "FR9_final"
+checkpoint = "@RUN@/opponents/FR9_final"
+weight = 1.0
+[[opponents.fixed]]
+name = "FR9b_final"
+checkpoint = "@RUN@/opponents/FR9b_final"
+weight = 1.0
+[[opponents.fixed]]
+name = "1v1.pt"
+checkpoint = "@RUN@/opponents/1v1"
+weight = 0.5
+
+[[state_setters]]
+kind = "kickoff"
+weight = 0.45
+[[state_setters]]
+kind = "random"
+weight = 0.15
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.15
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "replay"
+weight = 0.25
+path = "@SNAP@"

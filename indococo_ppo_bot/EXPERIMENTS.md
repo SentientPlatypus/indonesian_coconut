@@ -1044,3 +1044,42 @@ Mid checks: 28 resets, 8 uses (all reset_curriculum, 0 normal-play), 1 goal afte
 Not pushed; FR8-final stays best (FR9b-final ties it 50.4%). FR9c running from the FR9b
 final (6101.6M -> ~7101.6M, FOLLOWUPS=3 so FR9d follows). REPORT.md §11.8f,
 `docs/experiments/data/fr9b_mid.csv`.
+
+## ST: strength-only 1v1 chain (started 2026-11-03 10:26 PM ET)
+
+Goal change (user, Nov 3 10:23 PM ET): drop flip resets, make the 1v1 bot
+measurably stronger than FR8-final 4491.6M (51.85% vs FR4, 53.3% vs FR7
+3491.6M, pool 87.0). FR9c (reset recipe, 6101.6M -> ) was stopped at
+10:26 PM ET after one checkpoint (exp_FR9c/checkpoints/1793762362, kept);
+FR9_NO_FOLLOWUP set so FR9d never starts.
+
+Evidence from FR7c-FR9b (7 runs, ~7B steps): every run ended within noise of
+the previous best (FR8c 50.5%, FR9 48.3%, FR9b 50.4% vs FR8-final), all with
+the same constraints: reset terms + drills taking 20-36% of episodes, and a
+BC refresh + KL 5 to FR4-final after every 50M chunk that pulls the policy
+back toward FR4. FR9 beat the older models (53.3% vs FR4, 54.1% vs FR7) but
+not FR8, i.e. the anchor and the reset budget cap progress, not the steps.
+
+Changes for every ST run (experiments/st.toml, train_st.toml, st_launch.sh):
+* rewards = aud.toml: no flip_reset_use, reset_align, air_touch_height, dodge_aim.
+* setters 100% normal play: kickoff 45%, random 15% + 15%, replay 25%
+  (no reset_replay, reset_curriculum, air_reset, air_near_ball, wall_air_dribble).
+* no BC refresh / KL anchor to FR4.
+* league: fixed opponents FR4-final, FR7 3491.6M, FR8-final (x2), FR9-final,
+  FR9b-final, 1v1.pt (x0.5) + past versions; opponent chance 0.25 -> 0.35.
+* mid eval per 50M chunk: 200 g vs BEST (FR8-final) and vs FR4 (seed 424242);
+  guard: 2 chunks < 45% vs FR4 -> roll back to the best chunk.
+* finals use the best chunk (by vs BEST, >= 48% vs FR4): 1000 g vs BEST and FR4,
+  pool400, pool_botpack5, then st_promote.py -> PROMOTE.json.
+
+Promotion: >= 52% decisive in 1000 g vs the current best (seed 424242) AND
+vs FR4 >= best's - 1 pt AND pool400 mean >= best's - 1 AND bp5 mean >= best's - 1.
+Promoted -> export checkpoints_to_test/<run>_<N>M.bpk on indococo-ppo.
+
+Queue (~/ippo_runs/ST_QUEUE, each from the previous run's best chunk, 1.0B steps):
+1. ST1: the changes above, FR9 PPO settings (gamma 0.995, 100k/iter, mb 50k,
+   lr 5e-5 cosine after 600M, entropy 0.012). Tests the anchor/reset-budget hypothesis.
+2. ST2: gamma 0.997 + 2x batch (200k/iter, mb 100k): longer horizon, less gradient noise.
+3. ST3: entropy 0.008, lr 4e-5 cosine from the start to 0.25x over 800M (sharpen).
+Empty queue -> the last variant repeats as <RUN>r. Bigger nets / attention left for
+later (3-4x SPS cost, no 1v1 evidence).

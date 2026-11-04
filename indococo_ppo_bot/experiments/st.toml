@@ -1,0 +1,5 @@
+# ST (strength) runs: no flip reset rewards at all (EXPERIMENTS.md ST).
+# Rewards = aud.toml (audited E8B2 + goalward-gated air terms), i.e. the
+# FR4/FR7/FR9 stack minus flip_reset_use, reset_align, air_touch_height and
+# dodge_aim. No reset setters or drills in train_st.toml.
+extends = "aud.toml"
