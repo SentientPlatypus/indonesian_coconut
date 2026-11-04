@@ -14,6 +14,8 @@ pub mod curriculum;
 pub mod env;
 pub mod events;
 pub mod expert;
+#[cfg(feature = "train")]
+pub mod galactus;
 pub mod math;
 pub mod obs;
 pub mod resets;

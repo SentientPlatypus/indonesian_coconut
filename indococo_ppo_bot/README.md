@@ -38,6 +38,7 @@ indococo_ppo_bot/
     curriculum.rs         reset_curriculum setter: adaptive levels shared by all envs, earned-reset tracking
     events.rs             flip reset / bump / demo / has_flip counters
     expert.rs             FR5 scripted flip reset expert in the 90-action space (lookahead reset + dodge use)
+    galactus.rs           Galactus (GigaLearn) port: GalactusOBS + ball prediction, DefaultAction, frozen net; league opponent
     bc_cli.rs             FR5 `curr` / `normal-obs` subcommands (included by bin/train.rs)
     rewards/
       mod.rs              StepReward trait (reset / get_rewards on StateView)
@@ -60,6 +61,7 @@ indococo_ppo_bot/
                           rates_mix.toml (setter mix for `indococo-train rates`)
   tools/parity.py         regenerates the fixture with the Python classes (needs master)
   tools/eval_loop.sh      pool evals + keep-best during training
+  tools/galactus/         export_weights.py (.lt -> json+bin for the Rust port), parity.py (port vs the Python adapter)
   tools/team/widen_1v1.py  1v1 actor -> 2v2/3v3 actor: widen the input layer, 1v1 opponent block -> first opponent
   tools/bc/bc_pretrain.py FR5/FR6 behavior cloning: CE to expert labels + KL to the frozen (or --teacher) actor on normal play
   tools/pool_eval/        headless evals vs 1v1.pt, PPO checkpoints, Nexto, Necto, Element, Immortal;
@@ -339,6 +341,23 @@ the current best and FR4, plus 200 g vs Galactus (`experiments/pool_galactus.tom
 (empty -> repeat as `<RUN>r`). Status: `bash ~/ippo_runs/st_status.sh`. Stop chain: `touch ~/ippo_runs/ST_NO_FOLLOWUP`.
 ST3 started before the Galactus evals, so `experiments/galactus_sidecar.sh` adds them for it
 (`exp_ST3/logs/mid_galactus.jsonl`, `st3_final/galactus1000.jsonl`, `st2_final/galactus1000.jsonl` baseline).
+
+### Galactus as a league opponent (Rust port)
+`src/galactus.rs` ports Galactus (SoldierDoge/GalactusV2, GigaLearn, 201.35B steps; upstream has no license
+file, so its weights stay out of this repo, private training use only) to the trainer:
+`GalactusOBS(3)` (258 floats: ball, previous controls, 34 pad values, nearest active big pad, self, 2 + 3
+zero-padded player slots shuffled per step, 5 ball-prediction samples at +30/60/120/180/240 ticks from a
+ball-only RocketSim arena), GigaLearn `DefaultAction` (90 actions + ground/air/jump/boost masks, greedy
+masked argmax) and the network (2x1024 shared + 4x1024 policy, Linear -> LayerNorm -> LeakyReLU 0.01).
+It implements the framework's `ExternalPolicy` (indococo-ppo `rlgymppo/src/agent/external.rs`), so the
+collector builds its obs per game on the rayon workers, runs one batched inference on the training GPU per
+decision, and holds Galactus's previous controls for 7 ticks before applying the new action on the 8th
+(tick skip 8, action delay 7, as in GigaLearn). Config: `[[opponents.external]]` with `kind = "galactus"`,
+`path` = a dir with `galactus_weights.{json,bin}` from `tools/galactus/export_weights.py`
+(box: `~/eval_bots/galactus/rust`), `weight`. `st_launch.sh` appends that block when the variant's env sets
+`GAL_WEIGHT` (ST4: 2.5). Parity: `indococo-train galactus-h2h <ckpt> <galactus_dir> <games> [threads]
+[dump.jsonl]` plays a checkpoint against the port and dumps states, then `tools/galactus/parity.py dump.jsonl`
+re-runs the Python eval adapter on them (see EXPERIMENTS.md "Galactus in the league").
 
 ### Real-play snapshots (FR7)
 `indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>`

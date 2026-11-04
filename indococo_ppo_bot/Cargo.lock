@@ -5897,7 +5897,7 @@ dependencies = [
 [[package]]
 name = "rlgymppo"
 version = "0.1.0"
-source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=416a0978663949bc348a4d3358488de76c9ab874#416a0978663949bc348a4d3358488de76c9ab874"
+source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=22c3575aac18517089044a68a0fb8787c49b57b6#22c3575aac18517089044a68a0fb8787c49b57b6"
 dependencies = [
  "arrayvec",
  "burn",
@@ -5918,7 +5918,7 @@ dependencies = [
 [[package]]
 name = "rlgymppo-model"
 version = "0.1.0"
-source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=416a0978663949bc348a4d3358488de76c9ab874#416a0978663949bc348a4d3358488de76c9ab874"
+source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=22c3575aac18517089044a68a0fb8787c49b57b6#22c3575aac18517089044a68a0fb8787c49b57b6"
 dependencies = [
  "burn",
  "thiserror 2.0.21",
@@ -5927,7 +5927,7 @@ dependencies = [
 [[package]]
 name = "rlgymppo-nexto"
 version = "0.1.0"
-source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=416a0978663949bc348a4d3358488de76c9ab874#416a0978663949bc348a4d3358488de76c9ab874"
+source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=22c3575aac18517089044a68a0fb8787c49b57b6#22c3575aac18517089044a68a0fb8787c49b57b6"
 dependencies = [
  "burn",
  "burn-store",
@@ -5938,7 +5938,7 @@ dependencies = [
 [[package]]
 name = "rlgymppo-rlbot"
 version = "0.1.0"
-source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=416a0978663949bc348a4d3358488de76c9ab874#416a0978663949bc348a4d3358488de76c9ab874"
+source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=22c3575aac18517089044a68a0fb8787c49b57b6#22c3575aac18517089044a68a0fb8787c49b57b6"
 dependencies = [
  "burn",
  "rand 0.10.3",
@@ -5952,7 +5952,7 @@ dependencies = [
 [[package]]
 name = "rlgymppo-utils"
 version = "0.1.0"
-source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=416a0978663949bc348a4d3358488de76c9ab874#416a0978663949bc348a4d3358488de76c9ab874"
+source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=22c3575aac18517089044a68a0fb8787c49b57b6#22c3575aac18517089044a68a0fb8787c49b57b6"
 dependencies = [
  "arrayvec",
  "rand 0.10.3",

@@ -54,6 +54,14 @@ name = "FR9b_final"
 checkpoint = "@RUN@/opponents/FR9b_final"
 weight = 1.0
 [[opponents.fixed]]
+name = "ST1_final"
+checkpoint = "@RUN@/opponents/ST1_final"
+weight = 1.0
+[[opponents.fixed]]
+name = "ST2_final"
+checkpoint = "@RUN@/opponents/ST2_final"
+weight = 2.0
+[[opponents.fixed]]
 name = "1v1.pt"
 checkpoint = "@RUN@/opponents/1v1"
 weight = 0.5

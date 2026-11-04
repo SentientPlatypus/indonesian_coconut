@@ -1115,3 +1115,68 @@ Galactus in the training league is not feasible as-is: league opponents are
 indococo .bpk policies run inside the Rust trainer, while Galactus is a
 GigaLearn-style net with its own obs (GalactusOBS, ball prediction) run by the
 Python poolkit adapter; it would need a Rust port of its obs + net.
+
+### Galactus in the league (Rust port, 2026-11-04 2:30 PM ET, user request)
+
+User: "Port over galactuses betwork to rust for training." Galactus is now a
+frozen training opponent inside the Rust trainer (`src/galactus.rs`, framework
+`ExternalPolicy` in indococo-ppo `22c3575`; README "Galactus as a league
+opponent"). Source checked: `~/eval_bots/src/GalactusV2` (SoldierDoge, GGLBot
+`bob` branch, checkpoint 201.35B); its README matches the port (258 obs, 90
+actions, tick skip 8, action delay 7, 2 shared + 4 policy layers of 1024,
+LayerNorm + LeakyReLU). No license file upstream: weights are not committed,
+private training use only. The C++ `GalactusOBS` refreshes its ball prediction
+every 32 ticks in training; the port (like the Python adapter and RLBot
+deployment) predicts fresh at every decision.
+
+**Parity** (2433 Galactus decisions from 40 Rust games vs ST2-final, each
+state replayed through `poolkit.botpack5.Galactus`, `tools/galactus/parity.py`):
+
+| Check | Result |
+|---|---|
+| obs without ball prediction (228 floats) | max abs diff 4.8e-7 (float rounding) |
+| network, same obs (Burn vs torch) | logits max diff 1.5e-4; argmax identical on 100% |
+| action masks | identical on 100% |
+| end to end (own obs incl. own ball prediction) | argmax identical on 99.3% |
+| ball prediction (Rust RocketSim vs Python RocketSim) | median 4e-4, p99 0.09 (normalized; grows with horizon: diverging bounces) |
+
+The 0.7% end-to-end disagreement is entirely the ball prediction: the Rust
+RocketSim port and the C++ RocketSim behind the Python adapter drift apart
+after bounces on the 1.5-2 s samples.
+
+**Win-rate check** (`indococo-train galactus-h2h`, first goal wins, kickoff
+starts, both sides, no spawn jitter; Python eval has a 60 uu / 4 deg jitter):
+
+| Candidate | vs Rust Galactus (400 g) | vs Python Galactus |
+|---|---|---|
+| ST2-final 5511.6M | 16.25% (65-335) | 20.8% (1000 g) |
+| FR8-final 4491.6M | 15.5% (62-338) | n/a |
+
+Close to the eval adapter (difference ~1.2 combined SE); the port plays
+Galactus at full strength.
+
+**Throughput** (smoke, 8 threads, 1 pool, 128 games, 100k steps/iter, 4 iters
+each, run beside ST3 on the same GPU; learner steps collected per second):
+
+| Iteration type | collected steps/s |
+|---|---|
+| pure self-play | ~102k |
+| fixed .bpk opponent (ST2) | ~14.5k |
+| Galactus | ~13.2k |
+
+A Galactus iteration costs ~9% more than a fixed-opponent iteration (ball
+prediction: 240 ball-only ticks per Galactus decision, plus the 5.5M-param net).
+In ST4 Galactus gets weight 2.5 of 13.0 (~19% of opponent iterations, ~7% of
+all at chance 0.35), so the expected overall cost is under 1%. (Side note:
+opponent iterations in general collect far fewer learner steps per second
+than self-play here; that was already the case for the fixed league.)
+
+**ST4 (queued) now:** ST2 recipe pushed further (gamma 0.998, 300k batch, 100k
+minibatch, LR 5e-5, entropy 0.012) plus Galactus at weight 2.5 and, new in the
+pool, ST1-final (`exp_ST1/checkpoints/1793773641`, weight 1.0) and ST2-final
+(`exp_ST2/checkpoints/1793792743`, weight 2.0); the pool had been frozen at
+ST1's start. Rewards unchanged (`st.toml`; the base E8B2 flip_reset term stays
+at 70, per the user). Trainer binary `code_fr9/bin/indococo-train-gal` (same
+code plus external opponents); `st_ST4.env` sets `B0` and `GAL_WEIGHT`.
+Dry run of the generated ST4 config: all 8 .bpk opponents and Galactus load,
+iterations run.

@@ -10,6 +10,7 @@
 //! indococo-train curr <level> <episodes> <policy> [threads] [data_prefix] [noise]   # FR5 BC tools
 //! indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>  # FR7 replay states
 //! indococo-train normal-obs <ckpt> <setters.toml> <steps> <threads> <out.f32>
+//! indococo-train galactus-h2h <ckpt> <galactus_dir> <games> [threads] [dump.jsonl]  # Rust Galactus parity
 //! ```
 
 use std::collections::BTreeMap;
@@ -34,7 +35,7 @@ use rand::{Rng, RngExt, SeedableRng};
 use rlgymppo::rlgym::GameState;
 use rlgymppo::rlgym::rocketsim::init_from_default;
 use rlgymppo::{
-    Actic, ComputePrecision, DecayShape, FixedOpponent, LearnerConfig, LrSchedule, Net,
+    Actic, ComputePrecision, DecayShape, ExternalOpponent, FixedOpponent, LearnerConfig, LrSchedule, Net,
     PpoLearnerConfig, SelfPlayConfig, SkillTrackerConfig, TrainPrecision, default_adamw_optimizer,
 };
 use serde::{Deserialize, Serialize};
@@ -138,6 +139,35 @@ struct OpponentsConfig {
     chance: f32,
     past_versions_weight: f32,
     fixed: Vec<FixedOpponentConfig>,
+    /// `[[opponents.external]]`: frozen foreign bots ported to Rust
+    /// (`kind = "galactus"`, `path` = dir with galactus_weights.{json,bin}).
+    external: Vec<ExternalOpponentConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalOpponentConfig {
+    name: String,
+    kind: String,
+    path: PathBuf,
+    weight: f32,
+}
+
+/// Loads the external opponents (inference on `dev`).
+fn load_external_opponents(cfg: &OpponentsConfig, dev: &Device) -> Vec<ExternalOpponent> {
+    cfg.external
+        .iter()
+        .map(|o| {
+            let policy: std::sync::Arc<dyn rlgymppo::ExternalPolicy> = match o.kind.as_str() {
+                "galactus" => std::sync::Arc::new(
+                    indococo_bot::galactus::GalactusPolicy::load(&o.path, dev)
+                        .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
+                ),
+                other => panic!("opponent {}: unknown external kind {other:?}", o.name),
+            };
+            ExternalOpponent { name: o.name.clone(), policy, weight: o.weight }
+        })
+        .collect()
 }
 
 impl Default for OpponentsConfig {
@@ -146,6 +176,7 @@ impl Default for OpponentsConfig {
             chance: 0.15,
             past_versions_weight: 1.0,
             fixed: Vec::new(),
+            external: Vec::new(),
         }
     }
 }
@@ -250,6 +281,7 @@ fn learner_config(
     phase: Phase,
     device: Device,
     fixed_opponents: Vec<FixedOpponent>,
+    external_opponents: Vec<ExternalOpponent>,
 ) -> LearnerConfig {
     let ts = cfg.timesteps_per_iteration;
     LearnerConfig {
@@ -292,6 +324,7 @@ fn learner_config(
             train_against_old_chance: cfg.opponents.chance,
             past_versions_weight: cfg.opponents.past_versions_weight,
             fixed_opponents,
+            external_opponents,
         },
         skill_tracker: SkillTrackerConfig {
             enabled: cfg.skill_tracker,
@@ -319,13 +352,14 @@ fn train(config: &Path) {
     init_from_default(true).expect("load collision meshes");
     let dev = device(&cfg.backend);
     let fixed = load_fixed_opponents(&cfg.opponents, &dev);
+    let external = load_external_opponents(&cfg.opponents, &dev);
     for phase in plan_phases(&cfg, checkpoint_steps(&cfg.checkpoints)) {
         println!(
             "PHASE policy_lr={} iterations={:?}",
             phase.policy_lr, phase.iterations
         );
         let (rewards, setters) = (rewards.clone(), cfg.state_setters.clone());
-        let mut learner = learner_config(&cfg, phase, dev.clone(), fixed.clone()).init(
+        let mut learner = learner_config(&cfg, phase, dev.clone(), fixed.clone(), external.clone()).init(
             move |_| create_env(&rewards, &setters),
             default_adamw_optimizer(),
         );
@@ -965,8 +999,176 @@ fn main() {
             arg(3).parse().expect("games"),
             args.get(4).map_or(8, |t| t.parse().expect("threads")),
         ),
+        "galactus-h2h" => galactus_h2h(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3).parse().expect("games"),
+            args.get(4).map_or(8, |t| t.parse().expect("threads")),
+            args.get(5).map(Path::new),
+        ),
         other => panic!("unknown mode {other:?}"),
     }
+}
+
+/// `galactus-h2h`: the candidate checkpoint (greedy) against the Rust
+/// Galactus port, first goal wins, kickoff starts, both sides. Galactus holds
+/// its previous controls for 7 ticks and applies the new action on the 8th,
+/// as in the collector. With `dump`, worker 0 writes its first 4000 Galactus
+/// decisions (raw state + Rust obs without slot shuffle + logits + action)
+/// for `tools/galactus/parity.py`.
+fn galactus_h2h(ckpt: &Path, gdir: &Path, games: usize, threads: usize, dump: Option<&Path>) {
+    init_from_default(true).expect("load collision meshes");
+    let mix = vec![WeightedSetter {
+        weight: 1.0,
+        kind: indococo_bot::setters::SetterKind::Kickoff,
+    }];
+    let per = games.div_ceil(threads);
+    let t0 = std::time::Instant::now();
+    let res: Vec<[u64; 4]> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..threads)
+            .map(|t| {
+                let mix = &mix;
+                let dump = if t == 0 { dump } else { None };
+                s.spawn(move || galactus_worker(mix, ckpt, gdir, per, dump))
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().expect("worker")).collect()
+    });
+    let mut tot = [0u64; 4];
+    for r in &res {
+        for i in 0..4 {
+            tot[i] += r[i];
+        }
+    }
+    let [w, l, d, steps] = tot;
+    let out = serde_json::json!({
+        "a": ckpt, "b": "galactus(rust)", "games": w + l + d, "wins": w, "losses": l, "draws": d,
+        "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
+        "steps": steps, "seconds": t0.elapsed().as_secs_f64(),
+    });
+    println!("{out}");
+}
+
+fn v3(v: rlgymppo::rlgym::rocketsim::Vec3A) -> [f32; 3] {
+    [v.x, v.y, v.z]
+}
+
+fn galactus_worker(
+    mix: &[WeightedSetter],
+    ckpt: &Path,
+    gdir: &Path,
+    games: usize,
+    dump: Option<&Path>,
+) -> [u64; 4] {
+    use indococo_bot::galactus as gx;
+    use rlgymppo::ExternalPolicy;
+    use std::io::Write;
+    const ENVS: usize = 8;
+    let dev = Device::flex();
+    let na = load_actor(ckpt, &dev);
+    let gal = gx::GalactusPolicy::load(gdir, &dev).expect("galactus weights");
+    let mut dump = dump.map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("dump")));
+    let mut dumped = 0usize;
+    let mut out = [0u64; 4];
+    let mut started = 0usize;
+    struct G {
+        env: BotEnv,
+        state: GameState,
+        obs: Vec<Vec<f32>>,
+        a_team: u8,
+        live: bool,
+    }
+    let mut new_game = |k: usize, started: &mut usize| -> G {
+        let mut env = create_env(&RewardConfig::default(), mix);
+        let (state, obs, _) = env.reset();
+        let live = *started < games;
+        *started += 1;
+        G { env, state, obs, a_team: (k % 2) as u8, live }
+    };
+    let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
+    let mut gobs = vec![0.0f32; gx::OBS_SIZE];
+    let mut gmask = vec![false; gx::N_ACTIONS];
+    while gs.iter().any(|g| g.live) {
+        let mut oa = Vec::new();
+        for g in gs.iter().filter(|g| g.live) {
+            for (i, (info, _)) in g.state.cars.iter().enumerate() {
+                if info.team as u8 == g.a_team {
+                    oa.push(&g.obs[i]);
+                }
+            }
+        }
+        let aa = argmax_actions(&na, &oa, &dev);
+        let mut ia = 0;
+        for k in 0..ENVS {
+            if !gs[k].live {
+                continue;
+            }
+            let g = &mut gs[k];
+            let mut acts = Vec::new();
+            let mut ext = Vec::new();
+            for (i, (info, car)) in g.state.cars.iter().enumerate() {
+                if info.team as u8 == g.a_team {
+                    acts.push(aa[ia]);
+                    ia += 1;
+                } else {
+                    acts.push(0);
+                    gal.build(&g.state, i, &mut gobs, &mut gmask);
+                    let logits = gal.logits(&gobs, 1);
+                    let a = gx::masked_argmax(&logits, &gmask, 1)[0];
+                    if let Some(f) = dump.as_mut().filter(|_| dumped < 4000) {
+                        let pred = gx::ball_prediction(&g.state.ball);
+                        let plain = gx::build_obs_with_pred(&g.state, i, &pred, false);
+                        let order = indococo_bot::obs::pad_order(&g.state);
+                        let cars: Vec<_> = g.state.cars.iter().map(|(ci, c)| serde_json::json!({
+                            "team": ci.team as u8, "pos": v3(c.phys.pos), "vel": v3(c.phys.vel),
+                            "ang_vel": v3(c.phys.ang_vel),
+                            "rot": [v3(c.phys.rot_mat.x_axis), v3(c.phys.rot_mat.y_axis), v3(c.phys.rot_mat.z_axis)],
+                            "boost": c.boost, "on_ground": indococo_bot::obs::flags(c).on_ground,
+                            "has_flipped": c.has_flipped, "has_double_jumped": c.has_double_jumped,
+                            "air_time_since_jump": c.air_time_since_jump, "is_demoed": c.is_demoed,
+                            "has_jumped": c.has_jumped,
+                            "controls": [c.controls.throttle, c.controls.steer, c.controls.pitch, c.controls.yaw,
+                                c.controls.roll, f32::from(c.controls.jump), f32::from(c.controls.boost), f32::from(c.controls.handbrake)],
+                        })).collect();
+                        let lp = gal.logits(&plain, 1);
+                        let ap = gx::masked_argmax(&lp, &gmask, 1)[0];
+                        let pads: Vec<f32> = order.iter().map(|&p| g.state.boost_pads[p].1.cooldown).collect();
+                        let line = serde_json::json!({
+                            "car": i, "cars": cars, "pads": pads,
+                            "ball": {"pos": v3(g.state.ball.phys.pos), "vel": v3(g.state.ball.phys.vel), "ang_vel": v3(g.state.ball.phys.ang_vel)},
+                            "obs": plain, "mask": gmask, "logits": lp, "action": ap, "action_played": a,
+                        });
+                        writeln!(f, "{line}").expect("dump write");
+                        dumped += 1;
+                    }
+                    ext.push((i, car.controls, gx::controls_of(a)));
+                }
+            }
+            g.env.pre_step(&g.state, &acts);
+            for &(i, held, _) in &ext {
+                g.env.arena.set_car_controls(i, held);
+            }
+            g.env.step_physics(gx::ACTION_DELAY);
+            for &(i, _, new) in &ext {
+                g.env.arena.set_car_controls(i, new);
+            }
+            g.env.step_physics(gx::TICK_SKIP - gx::ACTION_DELAY);
+            let res = g.env.post_step();
+            out[3] += 1;
+            if res.is_terminal || res.truncated {
+                let view = g.env.get_shared_info().view(&res.state);
+                match view.scoring_team() {
+                    Some(t) if t == g.a_team => out[0] += 1,
+                    Some(_) => out[1] += 1,
+                    None => out[2] += 1,
+                }
+                *g = new_game(k, &mut started);
+            } else {
+                (g.state, g.obs) = (res.state, res.obs);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

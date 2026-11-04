@@ -37,7 +37,8 @@ if ! ls $X/checkpoints 2>/dev/null | grep -qE '^[0-9]+$'; then
   sed -E "s/^cumulative_timesteps = .*/cumulative_timesteps = $START/" $START_CK/stats.toml > $X/checkpoints/$INIT/stats.toml
   cp -r $R/exp_FR4/opponents/1v1 $X/opponents/1v1
   for p in FR4_final:$R/exp_FR4/checkpoints/1793481832 FR7_3492M:$R/fr7_keep/3492M/1793565816 FR8_final:$R/exp_FR8/checkpoints/1793674697 \
-           FR9_final:$R/exp_FR9/checkpoints/1793737699 FR9b_final:$R/exp_FR9b/checkpoints/1793758509; do
+           FR9_final:$R/exp_FR9/checkpoints/1793737699 FR9b_final:$R/exp_FR9b/checkpoints/1793758509 \
+           ST1_final:$R/exp_ST1/checkpoints/1793773641 ST2_final:$R/exp_ST2/checkpoints/1793792743; do
     mkdir -p $X/opponents/${p%%:*}; cp ${p#*:}/actor.bpk $X/opponents/${p%%:*}/ || die "opp $p"; done
   echo "$START_CK $START $VARIANT" > $X/START; echo LOW=0 > $X/guard.env
 fi
@@ -57,6 +58,10 @@ while :; do
       -e "s|@SNAP@|$SNAP/train.f32|" -e "s|@TPI@|$TPI|" -e "s|@MB@|$MB|" -e "s|@LR@|$LR|g" -e "s|@ENT@|$ENT|" -e "s|@GAMMA@|$GAMMA|" \
       -e "s|@OPPCH@|$OPPCH|" -e "s|@DECAY@|$DECAY|" -e "s|@MINLR@|$MINLR|" -e "s|^threads = .*|threads = $THREADS|" -e "s|^games = .*|games = $GAMES|" \
       $X/cfg/experiments/train_st.toml > $X/train_st.toml
+  # Galactus (Rust port, src/galactus.rs) as a league opponent when the variant sets GAL_WEIGHT.
+  if [[ -n "${GAL_WEIGHT:-}" ]]; then
+    printf "\n[[opponents.external]]\nname = \"galactus\"\nkind = \"galactus\"\npath = \"%s\"\nweight = %s\n" "${GAL_DIR:-/home/ubuntu/eval_bots/galactus/rust}" "$GAL_WEIGHT" >> $X/train_st.toml
+  fi
   log "$RUN train: $left iterations from $now"
   $B train $X/train_st.toml 2>&1 | tee -a $X/logs/train.log
   [[ ${PIPESTATUS[0]} -eq 0 ]] || die "train failed"
