@@ -1249,3 +1249,6 @@ ST5 (`experiments/st_ST5.env`): ST4 recipe with one change, a broader league. It
 Mechanism: `st_launch.sh` reads `EXTRA_OPPS="name:ckpt:weight ..."` from the variant env. It copies the checkpoints at run start and appends `[[opponents.fixed]]` entries. Same trainer binary (indococo-train-gal); old-obs (pre-ext) actors load like FR4 does.
 Generalization panel: `st_promote.py` now adds `gen_panel` / `best_gen_panel` to PROMOTE.json (min, weakest, and mean over pool400 + bp5 + Galactus, 12 matchups). It's reported only; the gate is unchanged. ST3: min 20.4% (Galactus), mean 76.3%; ST2: min 20.8%, mean 75.2%.
 Read-out: ST5 succeeds on generalization if the panel mean rises and the botpack minimums (dice/ripple/kira) go up without losing vs BEST/FR4/Nexto.
+
+## ST6 (generalization): larger league fraction (OPPCH 0.50)
+One change on top of ST5's broader league: raise `OPPCH` from 0.35 to 0.50 so half of iterations face the diverse fixed/external pool (Galactus 2.5 + ST5 EXTRA_OPPS + base FR/ST finals) instead of self-play. Same gamma/batch/LR/entropy and flip_reset 70. From ST5 best chunk. Targets robustness across styles without overweighting any single opponent.
