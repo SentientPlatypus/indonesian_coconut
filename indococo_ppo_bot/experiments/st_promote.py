@@ -1,7 +1,9 @@
 """ST promotion rule: candidate dir F vs best dir BF. Prints JSON.
 promote = >= 52% decisive vs BEST over 1000 g (seed 424242) AND pool400 mean
 >= BEST's pool400 - 1.0 AND vs FR4 >= BEST's vs FR4 - 0.01 AND bp5 mean >= BEST's - 1.0
-(tolerances = noise allowance; bp5 skipped if either side is missing)."""
+(tolerances = noise allowance; bp5 skipped if either side is missing).
+Galactus (galactus1000.jsonl, 1000 g seed 424242) is reported, and only blocks on a
+regression beyond noise: >= BEST's - 0.04 (~2 SE of the difference); skipped if missing."""
 import json, sys, os
 F, BF = sys.argv[1], sys.argv[2]
 def last(p):
@@ -22,4 +24,6 @@ ok = vb is not None and vb >= 0.52
 ok = ok and (f4 is not None and (bf4 is None or f4 >= bf4 - 0.01))
 ok = ok and (pc is None or pb is None or pc >= pb - 1.0)
 ok = ok and (bc is None or bb is None or bc >= bb - 1.0)
-print(json.dumps({"promote": bool(ok), "vs_best": vb, "vs_fr4": f4, "best_vs_fr4": bf4, "pool": pc, "best_pool": pb, "bp5": bc, "best_bp5": bb}))
+gc, gb = wr(f"{F}/galactus1000.jsonl"), wr(f"{BF}/galactus1000.jsonl")
+ok = ok and (gc is None or gb is None or gc >= gb - 0.04)
+print(json.dumps({"promote": bool(ok), "vs_best": vb, "vs_fr4": f4, "best_vs_fr4": bf4, "pool": pc, "best_pool": pb, "bp5": bc, "best_bp5": bb, "galactus": gc, "best_galactus": gb}))

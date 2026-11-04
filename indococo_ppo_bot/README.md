@@ -333,9 +333,12 @@ used by the `reset_replay` setter (same code as `replay`, own label
 ### ST pipeline (strength only, no flip resets)
 `experiments/st_launch.sh` (RUN, VARIANT=ST1|ST2|ST3 from `st_<V>.env`): rewards `st.toml` (= aud.toml),
 100% normal-play setters, league of past bests (`train_st.toml`), no BC/KL refresh. Per 50M chunk: 200 g vs
-the current best and FR4 -> `exp_<run>/logs/mid.jsonl`. Finals on the best chunk: 1000 g vs best + FR4, pool400,
-bp5, `st_promote.py` -> `<run>_final/PROMOTE.json`. Then the next `RUN VARIANT` line of `~/ippo_runs/ST_QUEUE`
+the current best and FR4, plus 200 g vs Galactus (`experiments/pool_galactus.toml`, field `galactus_200`, ~45 s)
+-> `exp_<run>/logs/mid.jsonl`. Finals on the best chunk: 1000 g vs best + FR4, pool400, bp5, 1000 g vs Galactus
+(`galactus1000.jsonl`, seed 424242; blocks promotion only if > 4 pts below the best's), `st_promote.py` -> `<run>_final/PROMOTE.json`. Then the next `RUN VARIANT` line of `~/ippo_runs/ST_QUEUE`
 (empty -> repeat as `<RUN>r`). Status: `bash ~/ippo_runs/st_status.sh`. Stop chain: `touch ~/ippo_runs/ST_NO_FOLLOWUP`.
+ST3 started before the Galactus evals, so `experiments/galactus_sidecar.sh` adds them for it
+(`exp_ST3/logs/mid_galactus.jsonl`, `st3_final/galactus1000.jsonl`, `st2_final/galactus1000.jsonl` baseline).
 
 ### Real-play snapshots (FR7)
 `indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>`

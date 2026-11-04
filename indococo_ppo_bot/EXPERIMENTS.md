@@ -1101,3 +1101,17 @@ Promoted: shipped as checkpoints_to_test/st2_5512M.bpk; later runs are measured 
 Longer horizon + bigger batch fixed ST1's outside-bot loss. REPORT.md 11.8h, data/st2_mid.csv.
 ST3 running from ST2 5511.6M (-> 6511.6M). Queued: ST4 = ST2 recipe with gamma 0.998,
 300k/iter, mb 100k (experiments/st_ST4.env), from ST3's best chunk.
+
+### Galactus tracking (added 2026-11-04 12:20 PM ET, user request)
+
+Galactus (SoldierDoge/GalactusV2, botpack5) is the one outside bot we have not
+beaten (ST2: 22.25% over 400 g). It is now its own eval: 200 g per 50M chunk
+(`galactus_200` in mid.jsonl; 100 g take ~23 s on 16 procs) and 1000 g in finals
+(`galactus1000.jsonl`, seed 424242), shown in PROMOTE.json as `galactus` /
+`best_galactus`. It only blocks promotion on a drop of more than 4 pts vs the
+best (~2 SE of the difference at 1000 g). Applies from ST4 via st_launch.sh; ST3
+(already running the old script) gets the same evals from galactus_sidecar.sh.
+Galactus in the training league is not feasible as-is: league opponents are
+indococo .bpk policies run inside the Rust trainer, while Galactus is a
+GigaLearn-style net with its own obs (GalactusOBS, ball prediction) run by the
+Python poolkit adapter; it would need a Rust port of its obs + net.

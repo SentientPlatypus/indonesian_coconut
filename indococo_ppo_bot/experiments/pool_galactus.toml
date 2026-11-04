@@ -1,0 +1,5 @@
+# Galactus alone (same entry as tools/pool_eval/pool_botpack5.toml): SoldierDoge/GalactusV2, the strongest outside bot.
+[[opponent]]
+name = "galactus"
+kind = "galactus"
+path = "~/eval_bots/galactus"
