@@ -1180,3 +1180,44 @@ at 70, per the user). Trainer binary `code_fr9/bin/indococo-train-gal` (same
 code plus external opponents); `st_ST4.env` sets `B0` and `GAL_WEIGHT`.
 Dry run of the generated ST4 config: all 8 .bpk opponents and Galactus load,
 iterations run.
+
+### Opponent-iteration slowdown: diagnosis (2026-11-04 3:00 PM ET)
+
+The "~7x" gap between pure self-play and frozen-opponent iterations in the
+Galactus smoke (8 threads, 128 games, run beside ST3) is mostly a test artifact.
+It is not a cost of real training.
+
+**Production numbers (ST3, last 1500 iterations, 200k steps per iteration, opponent chance 0.35):**
+
+| | slow iterations (opponent) | fast iterations (self-play) |
+|---|---|---|
+| collection (s) | 2.51 | 1.15 |
+| env step (s) | 1.48 | 0.71 |
+| inference (s) | 0.94 | 0.38 |
+| PPO update (s) | 2.12 | 2.07 |
+
+Opponent iterations take about 2.2x as long to collect. Almost all of that is
+inherent. Only the learner's team is recorded, so reaching the same 200k
+learner steps takes twice as many game steps. Env time per game step is
+unchanged (2.08x for 2x steps). Inference per game step is only 1.24x higher
+(two half-size forward passes instead of one full one). Net effect on the whole
+run: ST3 averages 58.8k steps/s overall vs 62.3k on the clearly self-play
+iterations. Modeling it as 35% of iterations at +1.2 s on a ~3.2 s iteration
+puts the cost at about 12% overall. About 10 points of that are the unavoidable
+2x data cost; the inference overhead that could be fixed is about 2%.
+
+**Why the smoke showed 7x:** per decision, an opponent step has about 4 GPU
+sync points (two pageable H2D uploads that wait on each other's forward pass,
+plus two readbacks) vs about 2 in self-play. Beside the running ST3 the GPU is
+time-sliced between the two processes, so every extra sync costs about 1 ms
+(submit time 4.3 ms per step vs 1.0 ms). `indococo-train bench-infer <ckpt>
+<rows> <iters>` (new) shows the same pattern under contention: one full-batch
+submit 0.49 ms vs two indexed submits 1.15 ms at 256 rows. On an unshared GPU
+(the real run) the overhead is the 1.24x above.
+
+**Decision:** no framework change deployed. The fixable part is ~2% of
+throughput (one upload instead of two, plus resident index tensors), and it
+would mean a new trainer binary mid-chain. If wanted later: upload the full
+obs buffer once per decision and `select` rows on the GPU for both models.
+Cutting the inherent 2x would require training on the opponent's half of the
+data, which is off-policy and not done.

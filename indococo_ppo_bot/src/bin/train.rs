@@ -999,6 +999,11 @@ fn main() {
             arg(3).parse().expect("games"),
             args.get(4).map_or(8, |t| t.parse().expect("threads")),
         ),
+        "bench-infer" => bench_infer(
+            Path::new(arg(1)),
+            arg(2).parse().expect("rows"),
+            arg(3).parse().expect("iters"),
+        ),
         "galactus-h2h" => galactus_h2h(
             Path::new(arg(1)),
             Path::new(arg(2)),
@@ -1169,6 +1174,41 @@ fn galactus_worker(
         }
     }
     out
+}
+
+/// `bench-infer <ckpt> <rows> <iters>`: per-decision inference cost of the
+/// collector paths (one full-batch submit vs the two indexed submits of an
+/// opponent iteration), on the training device.
+fn bench_infer(ckpt: &Path, rows: usize, iters: usize) {
+    let dev = device("torch");
+    let mut a = new_model(&dev);
+    a.actor = load_actor(ckpt, &dev);
+    let b = a.clone();
+    let mut fixed = new_model(&dev);
+    fixed.actor = load_actor(ckpt, &dev);
+    let w = obs_size();
+    let obs: Vec<f32> = (0..rows * w).map(|i| ((i * 7919) % 1000) as f32 / 1000.0 - 0.5).collect();
+    let half: Vec<usize> = (0..rows).step_by(2).collect();
+    let other: Vec<usize> = (1..rows).step_by(2).collect();
+    let time = |name: &str, f: &mut dyn FnMut()| {
+        for _ in 0..50 { f(); }
+        let t = std::time::Instant::now();
+        for _ in 0..iters { f(); }
+        println!("{name}: {:.3} ms", t.elapsed().as_secs_f64() * 1e3 / iters as f64);
+    };
+    time("full flat", &mut || { a.submit_react_flat(&obs, rows, w, &[], 0, &dev).wait(); });
+    time("indexed half (current)", &mut || { a.submit_react_indexed_flat(&obs, w, &[], 0, &half, &dev).wait(); });
+    time("two indexed, same model clone", &mut || {
+        let p = a.submit_react_indexed_flat(&obs, w, &[], 0, &half, &dev);
+        let q = b.submit_react_indexed_flat(&obs, w, &[], 0, &other, &dev);
+        p.wait(); q.wait();
+    });
+    time("two indexed, separately loaded model", &mut || {
+        let p = a.submit_react_indexed_flat(&obs, w, &[], 0, &half, &dev);
+        let q = fixed.submit_react_indexed_flat(&obs, w, &[], 0, &other, &dev);
+        p.wait(); q.wait();
+    });
+    time("indexed half (fixed only)", &mut || { fixed.submit_react_indexed_flat(&obs, w, &[], 0, &half, &dev).wait(); });
 }
 
 #[cfg(test)]
