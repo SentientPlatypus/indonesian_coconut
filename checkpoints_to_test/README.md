@@ -14,7 +14,18 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
-### st2_5512M.bpk (current best)
+### st3_5772M.bpk (current best)
+
+| | |
+|---|---|
+| Lineage | ST3 strength run (ST2 recipe + entropy 0.008, LR 4e-5 cosine to 0.25x), chunk `1793809757` (5771.6M steps), warm-started from ST2 5511.6M. 106-input obs (`INDOCOCO_OBS_EXT=1`) |
+| H2H | **53.4%** vs ST2 5511.6M (534-466), **69.1%** vs FR4, over 1000 games each |
+| Pool | **91.17** on pool400 (ST2 89.12): 1v1.pt 77.75, 430M 84.5, Nexto 91.5, Necto 98.0, Element 98.25, Immortal 97.0 |
+| Botpack5 | 61.5 avg (ST2 61.58): Ripple 56.75, Kira 60.75, Dice 56.25, Chronos 74.25, Galactus 21.25, Seer 99.75. Auto-promoted |
+| Galactus | 20.4% over 1000 games (ST2 20.8%) |
+| sha256 | `bd72a8a7293f88f463b536242cce51873c1af0a4dd8f1541b2f97d14e0d23b75` |
+
+### st2_5512M.bpk
 
 | | |
 |---|---|

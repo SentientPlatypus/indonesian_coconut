@@ -1221,3 +1221,20 @@ would mean a new trainer binary mid-chain. If wanted later: upload the full
 obs buffer once per decision and `select` rows on the GPU for both models.
 Cutting the inherent 2x would require training on the opponent's half of the
 data, which is off-policy and not done.
+
+## 2026-11-04 4:10 PM ET: ST3 done and promoted; ST4 running; ST5 queued
+
+ST3 (entropy 0.008, LR 4e-5 cosine to 0.25x, from ST2 5511.6M) finals on the best
+chunk 5771.6M (`exp_ST3/checkpoints/1793809757`): 53.4% vs ST2, 69.1% vs FR4
+(1000 g), pool400 91.17 (ST2 89.12), botpack5 61.5 (ST2 61.58), **Galactus 20.4%**
+(1000 g; ST2 20.8%). Promoted; shipped as `checkpoints_to_test/st3_5772M.bpk`.
+Mid-run Galactus (200 g per chunk) stayed flat at 16-29%, so sharpening alone does
+not close the Galactus gap. REPORT.md 11.8i, data/st3_mid.csv.
+
+ST4 (gamma 0.998, 300k/iter, mb 100k, LR 5e-5, entropy 0.012, Galactus league
+weight 2.5) started 4:09 PM ET from ST3 5771.6M, measured against ST3.
+
+Queued ST5 (`experiments/st_ST5.env`): ST4 with one change, Galactus league weight
+6.0 (about 35% of opponent iterations, 12% of all, vs 19% / 7% in ST4). Starts from
+ST4's best chunk. If ST4's Galactus trend is flat this tests whether more exposure
+helps; if ST4 already climbs, it tests whether the trend scales.

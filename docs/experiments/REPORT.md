@@ -1064,6 +1064,28 @@ Mid-run checks (200 games, ±3.5): vs FR8-final 58-74.5% in every chunk (61.5-64
 
 ST3 (entropy 0.008, lr 4e-5 cosine to 0.25x) started 10:07 AM ET from ST2 5511.6M and is now measured against ST2. ST4 is queued: the ST2 recipe pushed further (gamma 0.998, 300k/iter, mb 100k). Data: `data/st2_mid.csv`, script `make_figures_st2.py`.
 
+### 11.8i ST3 results: entropy 0.008 + LR cosine, from ST2 5511.6M (→ 6511.6M). NEW BEST (narrow)
+
+ST3 is ST2 with lower entropy (0.008) and a learning rate of 4e-5 decayed by cosine to 0.25x, meant to sharpen the policy. Same rewards, setters and league as ST2. Started 10:07 AM ET Nov 4 from ST2 5511.6M; trained to 3:39 PM ET; finals done 4:09 PM ET. Galactus was tracked by a sidecar (200 games per chunk, 1000 in finals).
+
+![ST3 mid-run h2h, Galactus, and final pool](figures/st3_mid.png)
+
+Mid-run checks (200 games, ±3.5): vs ST2 45-58.5% (mostly 50-58%), vs FR4 63.5-76%, vs Galactus 16-29% (mean 22.6%, flat across the run). The finals used the best chunk by vs-BEST, **5771.6M** (`exp_ST3/checkpoints/1793809757`, 58.5% in 200 g).
+
+| finals (seed 424242) | ST3 5771.6M | ST2 5511.6M |
+|---|---|---|
+| h2h vs ST2 5511.6M, 1000 g | **53.4%** (534-466, ±1.6) | 50% |
+| h2h vs FR4-final, 1000 g | **69.1%** (691-309) | 64.4% |
+| **Galactus, 1000 g** | 20.4% (204-796, ±1.3) | 20.8% |
+| pool400 mean | **91.17** | 89.12 |
+| pool400: 1v1.pt / ppo_430M / Nexto / Necto / Element / Immortal | 77.75 / 84.5 / 91.5 / 98.0 / 98.25 / 97.0 | 75.5 / 75.5 / 91.25 / 96.75 / 99.0 / 96.75 |
+| botpack5 mean | 61.5 | 61.58 |
+| botpack5: Ripple / Kira / Dice / Chronos / Galactus / Seer | 56.75 / 60.75 / 56.25 / 74.25 / 21.25 / 99.75 | 58.75 / 61.5 / 54.75 / 72.25 / 22.25 / 100 |
+
+`st_promote.py`: **promoted**. 53.4% vs ST2 clears the 52% bar by about one standard error, vs FR4 is +4.7 pt, pool400 +2.05 (430M +9), and botpack5 is flat (-0.08). Galactus did not move (20.4% vs 20.8%, within noise): sharpening makes us better against our own lineage and the pool but does nothing against Galactus, so the Galactus gap needs a direct signal. **ST3 5771.6M is the new best** and is shipped as `checkpoints_to_test/st3_5772M.bpk` (sha256 `bd72a8a7…d23b75`; needs the 106-input RLBot binaries).
+
+ST4 (gamma 0.998, 300k/iter, mb 100k, LR 5e-5, entropy 0.012, + Galactus as a league opponent at weight 2.5) started 4:09 PM ET from ST3 5771.6M and is measured against ST3. Queued next: ST5 = ST4 with Galactus weight 6.0 (about 35% of opponent iterations instead of 19%), the one change, to test whether more Galactus exposure moves the Galactus win rate. Data: `data/st3_mid.csv`, script `make_figures_st3.py`.
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
@@ -1093,7 +1115,8 @@ ST3 (entropy 0.008, lr 4e-5 cosine to 0.25x) started 10:07 AM ET from ST2 5511.6
 | FR9-final | 5491.6M | R11 (FR9, changed recipe, from FR8-final 4491.6M) | **53.3% vs FR4**, **54.1% vs FR7 3491.6M**, 48.3% vs FR8-final (1000 g); pool 87.5 (Nexto 87.2); rates_fr7 0 / 0 / 0, rates_fr3 3 / 0 / 0 (curriculum) | box: `exp_FR9/checkpoints/1793737699`, `fr9_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
 | FR9b-final | 6101.6M | R11 (FR9b, from FR9 5101.6M) | 50.7% vs FR4, 53.7% vs FR7 3491.6M, 50.4% vs FR8-final (1000 g); pool 86.8 (Nexto 86.5); rates_fr7 5 / 1 / 0 (use in curriculum), rates_fr3 5 / 1 / 0; mid-run: first normal-play (replay) goal after a reset, no use | box: `exp_FR9b/checkpoints/1793758509`, `fr9b_final/final_policy.safetensors`; not shipped (fails reset half of push rule) |
 | ST1 5051.6M | 5051.6M | ST1 (strength-only, from FR8-final) | 62.2% vs FR8-final, 61.6% vs FR4 (1000 g); pool 86.6; botpack5 56.25 (FR8 58.0) | `checkpoints_to_test/st1_5052M.bpk` (not promoted) |
-| **ST2 5511.6M** | 5511.6M | ST2 (gamma 0.997, 2x batch, from ST1 5051.6M) | **68.2% vs FR8-final**, 64.4% vs FR4 (1000 g); **pool 89.1** (best, Nexto 91.25); **botpack5 61.6** (best) | `checkpoints_to_test/st2_5512M.bpk`; box `exp_ST2/checkpoints/1793792743`, `st2_final/`; needs the 106-input RLBot binaries |
+| ST2 5511.6M | 5511.6M | ST2 (gamma 0.997, 2x batch, from ST1 5051.6M) | **68.2% vs FR8-final**, 64.4% vs FR4 (1000 g); **pool 89.1** (best, Nexto 91.25); **botpack5 61.6** (best) | `checkpoints_to_test/st2_5512M.bpk`; box `exp_ST2/checkpoints/1793792743`, `st2_final/`; needs the 106-input RLBot binaries |
+| **ST3 5771.6M** | 5771.6M | ST3 (entropy 0.008, LR cosine, from ST2 5511.6M) | **53.4% vs ST2**, 69.1% vs FR4 (1000 g); **pool 91.2** (best); botpack5 61.5; Galactus 20.4% (1000 g) | `checkpoints_to_test/st3_5772M.bpk`; box `exp_ST3/checkpoints/1793809757`, `st3_final/`; needs the 106-input RLBot binaries |
 
 ## 13. Lessons learned and threats to validity
 
