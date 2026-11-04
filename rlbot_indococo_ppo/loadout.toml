@@ -1,47 +1,56 @@
+# Indonesian theme (Merah Putih: red over white). RLBot v5 loadout, referenced by
+# bot.toml [settings] loadout_file. Item IDs from RLBotGUI items.csv (BakkesMod
+# dumpitems): https://github.com/RLBot/RLBotGUI/blob/master/rlbot_gui/gui/csv/items.csv
+# Colors index the swatches in RLBotGUI colors.json; paint ids from
+# https://wiki.rlbot.org/v5/botmaking/bot-loadouts/ (1 Crimson, 12 Titanium White).
+# Orange team: red primary (orange swatch 37 = rgb 252,12,12) + white accent.
+# Blue team: the game only allows blue-palette primaries, so the deepest blue
+# (37 = rgb 12,44,252) with the same white accent, red/white items, Indonesia flag.
+
 [blue_loadout]
-  team_color_id = 37
-  custom_color_id = 51
-  car_id = 4284
-  decal_id = 0
-  wheels_id = 2715
-  boost_id = 32
-  antenna_id = 0
-  hat_id = 2728
-  paint_finish_id = 4127
-  custom_finish_id = 2275
-  engine_audio_id = 10620
-  trails_id = 1996
-  goal_explosion_id = 5287
+  team_color_id = 37        # blue palette (no red allowed on blue)
+  custom_color_id = 0       # accent: white (229,229,229)
+  car_id = 4284             # Fennec (unchanged)
+  decal_id = 4286           # Fennec: Stripes
+  wheels_id = 2441          # Peppermint (red/white swirl)
+  boost_id = 41             # Flamethrower Red
+  antenna_id = 160          # Indonesia (CountryFlag_Indonesia)
+  hat_id = 2787             # Palm Tree (hat_coconuttree) - for the coconut
+  paint_finish_id = 275     # Metallic Pearl
+  custom_finish_id = 273    # Matte
+  engine_audio_id = 10620   # unchanged
+  trails_id = 2400          # Candy Cane (ss_redwhite)
+  goal_explosion_id = 1905  # Fireworks
   [blue_loadout.paint]
-    car_paint_id = 12
-    decal_paint_id = 1
+    car_paint_id = 0
+    decal_paint_id = 12     # Titanium White stripes
     wheels_paint_id = 0
-    boost_paint_id = 14
+    boost_paint_id = 0
     antenna_paint_id = 0
     hat_paint_id = 0
     trails_paint_id = 0
-    goal_explosion_paint_id = 0
+    goal_explosion_paint_id = 1   # Crimson
 
 [orange_loadout]
-  team_color_id = 34
-  custom_color_id = 59
+  team_color_id = 37        # orange palette 37 = pure red (252,12,12)
+  custom_color_id = 0       # accent: white
   car_id = 4284
-  decal_id = 0
-  wheels_id = 2715
-  boost_id = 63
-  antenna_id = 0
-  hat_id = 2728
-  paint_finish_id = 4127
-  custom_finish_id = 2275
+  decal_id = 4286
+  wheels_id = 2441
+  boost_id = 41
+  antenna_id = 160
+  hat_id = 2787
+  paint_finish_id = 275
+  custom_finish_id = 273
   engine_audio_id = 10620
-  trails_id = 1996
-  goal_explosion_id = 5287
+  trails_id = 2400
+  goal_explosion_id = 1905
   [orange_loadout.paint]
-    car_paint_id = 12
-    decal_paint_id = 0
+    car_paint_id = 0
+    decal_paint_id = 12
     wheels_paint_id = 0
-    boost_paint_id = 12
+    boost_paint_id = 0
     antenna_paint_id = 0
     hat_paint_id = 0
     trails_paint_id = 0
-    goal_explosion_paint_id = 0
+    goal_explosion_paint_id = 1
