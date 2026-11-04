@@ -14,6 +14,16 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
+### st1_5052M.bpk
+
+| | |
+|---|---|
+| Lineage | ST1 strength run (no reset rewards/drills, no KL anchor, league of FR4/FR7/FR8/FR9/FR9b/1v1.pt + self), chunk `1793773641` (5051.6M steps), warm-started from FR8-final. 106-input obs (`INDOCOCO_OBS_EXT=1`) |
+| H2H | **62.2%** vs FR8-final (622-378), **61.6%** vs FR4, over 1000 games each |
+| Pool | **86.62** on pool400 (FR8-final 86.95; Nexto 85.8 vs 88.5) |
+| Botpack5 | 56.25 avg (FR8-final 58.0; Ripple 48.8, Kira 51.0). Not auto-promoted (rule allows at most a 1-point botpack drop) |
+| sha256 | `eec1a3b2a162138a26c21a341adc3e5cab787dd1856e0f3e07b8993db9fc4297` |
+
 ### aud.pt
 The AUD 1132M policy (same weights as `aud_1132M.bpk`) converted to the Python `DiscreteFF` state_dict format with `indococo_ppo_bot/tools/bpk_to_pt/`. It's byte-identical to `rlbot_submission/policies/1v1.pt` on master (sha256 `15e16300…53f68`). To test it in the Python bot: `cp checkpoints_to_test/aud.pt rlbot_submission/policies/1v1.pt`.
 
