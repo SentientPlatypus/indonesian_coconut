@@ -1083,3 +1083,12 @@ Queue (~/ippo_runs/ST_QUEUE, each from the previous run's best chunk, 1.0B steps
 3. ST3: entropy 0.008, lr 4e-5 cosine from the start to 0.25x over 800M (sharpen).
 Empty queue -> the last variant repeats as <RUN>r. Bigger nets / attention left for
 later (3-4x SPS cost, no 1v1 evidence).
+
+### ST1 results (finals 2026-11-04 4:20 AM ET)
+Best chunk 5051.6M (exp_ST1/checkpoints/1793773641): 62.2% vs FR8-final and 61.6% vs FR4
+(1000 g, seed 424242), pool400 86.62 (FR8 86.95; Nexto 85.8 vs 88.5), botpack5 56.25
+(FR8 58.0; Ripple 48.8 vs 56.0, Kira 51.0 vs 60.2). Mid checks vs FR8-final 48-71% (200 g),
+59.5-71% from 4901.6M on. NOT promoted (bp5 -1.75 > 1.0 tolerance); FR8-final stays best,
+no bpk pushed. Big h2h gain with a small outside-bot loss suggests league overfitting; a
+later variant should add outside bots (Nexto etc.) or more past-version play to the league.
+ST2 running from ST1 5051.6M (-> 6051.6M), ST3 queued. REPORT.md 11.8g, data/st1_mid.csv.

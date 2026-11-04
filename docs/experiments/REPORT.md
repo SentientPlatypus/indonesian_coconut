@@ -1023,6 +1023,27 @@ on the box workspace):
 - **2v2 stays paused** (normal-play reset gate not met, no checkpoint beats FR8-final).
 - **Follow-up (running):** FR9c started 10:15 PM ET Nov 3 from the FR9b final checkpoint (6101.6M, the chunk with the replay goal after a reset), same FR9 recipe, 1.0B steps to about 7101.6M, then FR9d automatically.
 
+### 11.8g ST1 results: strength-only chain from FR8-final (4491.6M → 5491.6M)
+
+ST1 dropped every flip-reset term and drill, removed the BC refresh + KL anchor to FR4-final, used 100% normal-play setters and a fixed league of past bests (FR4, FR7 3491.6M, FR8-final x2, FR9, FR9b, 1v1.pt). Trained 10:26 PM ET Nov 3 to 3:55 AM ET Nov 4; finals done 4:20 AM ET.
+
+![ST1 mid-run h2h and final pool](figures/st1_mid.png)
+
+Mid-run checks (200 games, ±3.5): vs FR8-final rose from 48-52.5% in the first 150M to 59.5-71% from 4901.6M on; vs FR4 51-68%. The finals used the best chunk by vs-BEST, **5051.6M** (`exp_ST1/checkpoints/1793773641`, 71% in 200 g).
+
+| finals (seed 424242) | ST1 5051.6M | FR8-final |
+|---|---|---|
+| h2h vs FR8-final, 1000 g | **62.2%** (622-378, ±1.5) | 50% |
+| h2h vs FR4-final, 1000 g | **61.6%** (615-384-1) | 51.85% |
+| pool400 mean | 86.62 | 86.95 |
+| pool400: 1v1.pt / ppo_430M / Nexto / Necto / Element / Immortal | 71.2 / 71.5 / 85.8 / 98.0 / 98.0 / 95.2 | 68.0 / 71.5 / 88.5 / 98.5 / 99.2 / 96.0 |
+| botpack5 mean | 56.25 | 58.0 |
+| botpack5: Ripple / Kira / Dice / Chronos / Galactus / Seer | 48.8 / 51.0 / 54.0 / 67.0 / 16.8 / 100 | 56.0 / 60.2 / 51.0 / 67.0 / 14.8 / 99.0 |
+
+`st_promote.py`: **not promoted**. It clears the h2h bar by a wide margin (+12 pt vs FR8-final, +10 pt vs FR4) and pool400 is within tolerance (-0.3), but botpack5 is 1.75 below FR8-final (tolerance 1.0), driven by Ripple (-7.2) and Kira (-9.2, both ±2.5) plus Nexto -2.7 in pool400. Reading: removing the anchor and the reset budget made the policy much stronger against its own lineage, with a small loss against some outside bots, which looks like league overfitting. FR8-final stays best; no bpk pushed.
+
+ST2 (gamma 0.997, 200k/iter, mb 100k) started 4:20 AM ET from ST1 5051.6M (→ 6051.6M); ST3 queued. Data: `data/st1_mid.csv`, script `make_figures_st1.py`.
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
