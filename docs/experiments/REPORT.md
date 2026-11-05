@@ -1086,6 +1086,25 @@ Mid-run checks (200 games, ±3.5): vs ST2 45-58.5% (mostly 50-58%), vs FR4 63.5-
 
 ST4 (gamma 0.998, 300k/iter, mb 100k, LR 5e-5, entropy 0.012, + Galactus as a league opponent at weight 2.5) started 4:09 PM ET from ST3 5771.6M and is measured against ST3. Queued next: ST5 = ST4 with Galactus weight 6.0 (about 35% of opponent iterations instead of 19%), the one change, to test whether more Galactus exposure moves the Galactus win rate. Data: `data/st3_mid.csv`, script `make_figures_st3.py`.
 
+### 11.8j ST5 results: broader league for generalization, from ST4 6032.3M (→ 7032.3M). NEW BEST
+
+ST5 kept the ST4 recipe (gamma 0.998, 300k/iter, LR 5e-5, entropy 0.012, flip_reset 70) and changed one thing: 7 extra frozen checkpoints of different eras and styles (X0, ADB, AUD, FR6, FR8c, FR9c, ST3-final) joined the league at weight 1.0 each, with Galactus held at 2.5 (~12% of opponent iterations). Trained 10:22 PM to 4:12 AM ET; finals (old 1000-game set) done 4:31 AM ET Nov 5.
+
+Finals checkpoint = best chunk 6192.8M (`exp_ST5/checkpoints/1793851923`):
+
+| Metric | ST5 6192.8M | ST3 5771.6M (prev best) |
+|---|---|---|
+| H2H vs best (1000 g) | **57.4%** | – |
+| vs FR4 (1000 g) | 69.2% | 69.1% |
+| pool400 | 91.21 (1v1.pt 80.25, 430M 82.0, Nexto 89.5, Necto 98.5, Element 99.25, Immortal 97.75) | 91.17 (77.75 / 84.5 / 91.5 / 98.0 / 98.25 / 97.0) |
+| botpack5 | 63.46 (Ripple 65.25, Kira 61.0, Dice 62.25, Chronos 68.5, Galactus 23.75, Seer 100) | 61.5 (56.75 / 60.75 / 56.25 / 74.25 / 21.25 / 99.75) |
+| Galactus (1000 g) | 23.4% | 20.4% |
+| Gen panel min / mean | 23.4% / 77.3% | 20.4% / 76.3% |
+
+Promoted on every gate. The broader league lifted the weakest public-bot matchups (Ripple +8.5, Dice +6.0) and Galactus (+3.0), consistent with the generalization goal. Regressions to watch: Chronos −5.75, Nexto −2.0, ppo_430M −2.5. Mid-run (200 g per chunk) vs ST3 was flat around 0.50–0.60 and Galactus 0.18–0.28, so the 6192.8M chunk (0.61 vs best mid) was picked as the finals checkpoint. Shipped as `checkpoints_to_test/st5_6193M.bpk`. ST6 (ST5 + OPPCH 0.50) started from this chunk at 4:31 AM ET and measures against ST5.
+
+![ST5 mid-run and finals](figures/st5_mid.png)
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |

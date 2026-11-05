@@ -1265,3 +1265,8 @@ User: "eval against the public bots too." From ST6 on, finals keep 500 g vs BEST
 
 ## ST7 (generalization): higher entropy under diverse league (ENT 0.016)
 One change on top of ST6 (broader league + OPPCH 0.50): raise entropy from 0.012 to 0.016 so the policy explores more against the diverse fixed/external pool and is less likely to overfit self-play or any single style. Same Galactus 2.5, same EXTRA_OPPS, flip_reset 70, same gamma/batch/LR. From ST6 best chunk. Hypothesis: mid-run Galactus still sticky ~20–25% and vs-BEST noisy — more entropy under a half-league schedule should lift the weakest panel matchups without regressing FR4/pool.
+
+## ST5 results (Nov 5, 2026, 4:31 AM ET): PROMOTED, new best ST5 6192.8M
+Finals ckpt = best chunk 6192.8M (exp_ST5/checkpoints/1793851923). 57.4% vs ST3 (1000 g), 69.2% vs FR4 (ST3 69.1%), pool400 91.21 (ST3 91.17), bp5 63.46 (ST3 61.5), Galactus 23.4% (1000 g; ST3 20.4%). Gen panel min 23.4% (Galactus), mean 77.3% (ST3 20.4% / 76.3%).
+Per-bot vs ST3: Ripple +8.5, Dice +6.0, Kira +0.25, Galactus(bp5) +2.5, 1v1.pt +2.5, Necto/Element/Immortal +0.5..1.0; Chronos −5.75, ppo_430M −2.5, Nexto −2.0.
+Read-out: broader league helped the weakest public-bot matchups and Galactus without large regressions; watch Chronos/Nexto in ST6. Shipped checkpoints_to_test/st5_6193M.bpk. ST6 now runs from this chunk, measured vs ST5.
