@@ -1262,3 +1262,6 @@ ST5 was already running when this landed, so ST5 finals still use the old set; t
 
 ### Finals: botpack5 restored (Nov 4, 2026, ~11:55 PM ET)
 User: "eval against the public bots too." From ST6 on, finals keep 500 g vs BEST/FR4 + pool400 + Galactus 500 g and restore botpack5 by default (`FIN_BP5_ON=1`; clear to skip); st_promote.py bp5 gate (>= BEST - 1.0) and gen_panel bp5 are back. ST5 (already running under the pre-a89ff17 script) still finishes with its launch-time finals set.
+
+## ST7 (generalization): higher entropy under diverse league (ENT 0.016)
+One change on top of ST6 (broader league + OPPCH 0.50): raise entropy from 0.012 to 0.016 so the policy explores more against the diverse fixed/external pool and is less likely to overfit self-play or any single style. Same Galactus 2.5, same EXTRA_OPPS, flip_reset 70, same gamma/batch/LR. From ST6 best chunk. Hypothesis: mid-run Galactus still sticky ~20–25% and vs-BEST noisy — more entropy under a half-league schedule should lift the weakest panel matchups without regressing FR4/pool.
