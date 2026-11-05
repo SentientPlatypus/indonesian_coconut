@@ -1105,6 +1105,25 @@ Promoted on every gate. The broader league lifted the weakest public-bot matchup
 
 ![ST5 mid-run and finals](figures/st5_mid.png)
 
+### 11.8k ST6 results: opponent chance 0.50 on the broader league, from ST5 6192.8M (→ 7192.8M). NEW BEST
+
+ST6 kept the ST5 recipe (broader league with 7 extra frozen checkpoints, Galactus weight 2.5, gamma 0.998, 300k/iter, LR 5e-5, entropy 0.012, flip_reset 70) and changed one thing: the chance of facing a league opponent instead of self-play went to 0.50. Trained 4:31 AM to ~10:33 AM ET; finals (new quick set: 500 g h2h/FR4/Galactus + pool400 + botpack5) done 10:56 AM ET Nov 5.
+
+Finals checkpoint = best chunk 6954.5M (`exp_ST6/checkpoints/1793887366`):
+
+| Metric | ST6 6954.5M | ST5 6192.8M (prev best) |
+|---|---|---|
+| H2H vs best (500 g) | **56.2%** | – |
+| vs FR4 (500 g) | 71.2% | 69.2% |
+| pool400 | 92.21 (1v1.pt 83.75, 430M 80.75, Nexto 92.75, Necto 98.25, Element 99.25, Immortal 98.5) | 91.21 (80.25 / 82.0 / 89.5 / 98.5 / 99.25 / 97.75) |
+| botpack5 | 63.42 (Ripple 61.0, Kira 55.25, Dice 60.25, Chronos 78.5, Galactus 26.0, Seer 99.5) | 63.46 (65.25 / 61.0 / 62.25 / 68.5 / 23.75 / 100) |
+| Galactus (500 g) | 23.8% | 23.4% (1000 g) |
+| Gen panel min / mean | 23.8% / 77.6% | 23.4% / 77.3% |
+
+Promoted on every gate. More league time recovered Chronos (+10.0) and Nexto (+3.25) and nudged Galactus up, but gave back some of ST5's gains on Kira (−5.75), Ripple (−4.25) and Dice (−2.0), so botpack5 is flat; the panel is broader-better but not uniformly. Mid-run (200 g) vs ST5 sat around 0.44–0.59 and Galactus 0.20–0.31. Shipped as `checkpoints_to_test/st6_6955M.bpk`. ST7 (ST6 + entropy 0.016) started from this chunk at 10:56 AM ET and measures against ST6; ST8 (ST7 + ST4/ST5/ST6 frozen snapshots in the league) is queued.
+
+![ST6 mid-run and finals](figures/st6_mid.png)
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |

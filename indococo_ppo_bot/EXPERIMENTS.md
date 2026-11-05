@@ -1270,3 +1270,11 @@ One change on top of ST6 (broader league + OPPCH 0.50): raise entropy from 0.012
 Finals ckpt = best chunk 6192.8M (exp_ST5/checkpoints/1793851923). 57.4% vs ST3 (1000 g), 69.2% vs FR4 (ST3 69.1%), pool400 91.21 (ST3 91.17), bp5 63.46 (ST3 61.5), Galactus 23.4% (1000 g; ST3 20.4%). Gen panel min 23.4% (Galactus), mean 77.3% (ST3 20.4% / 76.3%).
 Per-bot vs ST3: Ripple +8.5, Dice +6.0, Kira +0.25, Galactus(bp5) +2.5, 1v1.pt +2.5, Necto/Element/Immortal +0.5..1.0; Chronos −5.75, ppo_430M −2.5, Nexto −2.0.
 Read-out: broader league helped the weakest public-bot matchups and Galactus without large regressions; watch Chronos/Nexto in ST6. Shipped checkpoints_to_test/st5_6193M.bpk. ST6 now runs from this chunk, measured vs ST5.
+
+## ST6 results (Nov 5, 2026, 10:56 AM ET): PROMOTED, new best ST6 6954.5M
+Finals ckpt = best chunk 6954.5M (exp_ST6/checkpoints/1793887366). 56.2% vs ST5 (500 g), 71.2% vs FR4 (ST5 69.2%), pool400 92.21 (ST5 91.21), bp5 63.42 (ST5 63.46), Galactus 23.8% (500 g; ST5 23.4%). Gen panel min 23.8% (Galactus), mean 77.6% (ST5 23.4% / 77.3%).
+Per-bot vs ST5: Chronos +10.0, 1v1.pt +3.5, Nexto +3.25, Galactus(bp5) +2.25, Immortal +0.75; Kira −5.75, Ripple −4.25, Dice −2.0, ppo_430M −1.25.
+Read-out: OPPCH 0.50 helped league-style opponents and Chronos but cost some Kira/Ripple/Dice. Shipped checkpoints_to_test/st6_6955M.bpk. ST7 runs from this chunk, measured vs ST6.
+
+## ST8 (generalization): add recent frozen snapshots ST4/ST5/ST6 to the league
+One change on top of ST7: three more frozen self-checkpoints (ST4-final 6032.3M, ST5-final 6192.8M, ST6-final 6954.5M) join EXTRA_OPPS at weight 1.0 each. Hypothesis: the newest generations play differently from the older eras already in the pool, and ST6 lost ground on Kira/Ripple/Dice-style play, so more distinct recent opponents should keep the policy from specializing against the old snapshots. Galactus stays 2.5, flip_reset 70, entropy as in ST7.
