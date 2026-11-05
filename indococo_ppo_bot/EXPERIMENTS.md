@@ -1252,3 +1252,10 @@ Read-out: ST5 succeeds on generalization if the panel mean rises and the botpack
 
 ## ST6 (generalization): larger league fraction (OPPCH 0.50)
 One change on top of ST5's broader league: raise `OPPCH` from 0.35 to 0.50 so half of iterations face the diverse fixed/external pool (Galactus 2.5 + ST5 EXTRA_OPPS + base FR/ST finals) instead of self-play. Same gamma/batch/LR/entropy and flip_reset 70. From ST5 best chunk. Targets robustness across styles without overweighting any single opponent.
+
+### Finals trimmed (Nov 4, 2026, 11 PM ET)
+Finals were not actually slow: ST1-ST4 finals took 26-30 min each (h2h BEST 1000 g ~5-7 min, h2h FR4 ~5-7 min, pool400 ~7 min, botpack5 ~8 min, Galactus 1000 g ~3.5 min). ST4: 02:52-03:22 UTC.
+From ST6 on, finals = 500 g vs BEST + 500 g vs FR4 + pool400 + Galactus 500 g (galactus_final.jsonl); botpack5 dropped (opt-in FIN_BP5_ON=1). Expected ~15-17 min.
+st_promote.py: bp5 gate removed (52% vs BEST, FR4 -0.01, pool -1.0, Galactus -0.04 unchanged); gen panel = pool400 + Galactus.
+ST4 (best chunk 6032.3M): 51.0% vs ST3 (1000 g), 69.2% vs FR4, pool 90.33 (ST3 91.17), bp5 62.42, Galactus 27.6% (1000 g; ST3 20.4%). Not promoted (<52%). ST5 started from ST4 6032.3M chunk, BEST stays ST3.
+ST5 was already running when this landed, so ST5 finals still use the old set; the change applies from ST6.
