@@ -1259,3 +1259,6 @@ From ST6 on, finals = 500 g vs BEST + 500 g vs FR4 + pool400 + Galactus 500 g (g
 st_promote.py: bp5 gate removed (52% vs BEST, FR4 -0.01, pool -1.0, Galactus -0.04 unchanged); gen panel = pool400 + Galactus.
 ST4 (best chunk 6032.3M): 51.0% vs ST3 (1000 g), 69.2% vs FR4, pool 90.33 (ST3 91.17), bp5 62.42, Galactus 27.6% (1000 g; ST3 20.4%). Not promoted (<52%). ST5 started from ST4 6032.3M chunk, BEST stays ST3.
 ST5 was already running when this landed, so ST5 finals still use the old set; the change applies from ST6.
+
+### Finals: botpack5 restored (Nov 4, 2026, ~11:55 PM ET)
+User: "eval against the public bots too." From ST6 on, finals keep 500 g vs BEST/FR4 + pool400 + Galactus 500 g and restore botpack5 by default (`FIN_BP5_ON=1`; clear to skip); st_promote.py bp5 gate (>= BEST - 1.0) and gen_panel bp5 are back. ST5 (already running under the pre-a89ff17 script) still finishes with its launch-time finals set.

@@ -1,7 +1,7 @@
 """ST promotion rule: candidate dir F vs best dir BF. Prints JSON.
-promote = >= 52% decisive vs BEST over the finals h2h (500 g since ST5, seed 424242) AND pool400 mean
->= BEST's pool400 - 1.0 AND vs FR4 >= BEST's vs FR4 - 0.01 (tolerances = noise allowance).
-bp5 gate removed (bp5 no longer in finals).
+promote = >= 52% decisive vs BEST over the finals h2h (500 g since ST6, seed 424242) AND pool400 mean
+>= BEST's pool400 - 1.0 AND vs FR4 >= BEST's vs FR4 - 0.01 AND bp5 mean >= BEST's - 1.0
+(tolerances = noise allowance; bp5 skipped if either side is missing).
 Galactus (galactus_final.jsonl 500 g, or legacy galactus1000.jsonl; seed 424242) is reported, and only blocks on a
 regression beyond noise: >= BEST's - 0.04 (~2 SE of the difference); skipped if missing."""
 import json, sys, os
@@ -25,15 +25,16 @@ bc, bb = poolscore(f"{F}/bp5.jsonl"), poolscore(f"{BF}/bp5.jsonl")
 ok = vb is not None and vb >= 0.52
 ok = ok and (f4 is not None and (bf4 is None or f4 >= bf4 - 0.01))
 ok = ok and (pc is None or pb is None or pc >= pb - 1.0)
+ok = ok and (bc is None or bb is None or bc >= bb - 1.0)
 gc, gb = wr(galf(F)), wr(galf(BF))
 ok = ok and (gc is None or gb is None or gc >= gb - 0.04)
 # Generalization panel (report only, not part of the gate): per-opponent win rates
-# across pool400 + Galactus; min / mean / weakest matchup.
+# across pool400 + bp5 + Galactus; min / mean / weakest matchup.
 def per_opp(p):
     try: return {d["opponent"]: d["win_rate_decisive"] for d in (json.loads(l) for l in open(p) if l.strip())}
     except Exception: return {}
 def panel(D):
-    m = per_opp(f"{D}/pool400.jsonl")  # pool400 + Galactus; bp5 dropped so panels compare like for like
+    m = {**per_opp(f"{D}/pool400.jsonl"), **per_opp(f"{D}/bp5.jsonl")}
     g = wr(galf(D))
     if g is not None: m["galactus"] = g
     if not m: return None

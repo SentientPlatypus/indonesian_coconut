@@ -3,9 +3,9 @@
 # no BC/KL refresh. RUN=ST1 VARIANT=ST1 bash st_launch.sh (resumes). Chunks of
 # 50M; after each chunk: 200 g vs BEST (FR8-final) + 200 g vs FR4 -> mid.jsonl.
 # Guard: 2 chunks in a row < 45% vs FR4 -> roll back to the best chunk.
-# Also 200 g vs Galactus per chunk (field galactus_200) and 1000 g in finals
-# (galactus_final.jsonl). Finals (<run>_final): 500 g vs BEST + FR4 (seed 424242), pool400, Galactus 500 g (bp5 opt-in), and
-# PROMOTE (>= 52% vs BEST, pool and FR4 not worse than BEST's). Then pops the
+# Also 200 g vs Galactus per chunk (field galactus_200) and 500 g in finals
+# (galactus_final.jsonl). Finals (<run>_final): 500 g vs BEST + FR4 (seed 424242), pool400, botpack5, Galactus 500 g, and
+# PROMOTE (>= 52% vs BEST, pool/FR4/bp5 not worse than BEST's). Then pops the
 # next line "RUN VARIANT" of ~/ippo_runs/ST_QUEUE, starting from this run's best
 # chunk (vs BEST, with >= 48% vs FR4). Empty queue -> repeats this variant as
 # <RUN>r so the GPU never idles. Stop chain: touch ~/ippo_runs/ST_NO_FOLLOWUP.
@@ -14,7 +14,7 @@ R=/home/ubuntu/ippo_runs; RUN=${RUN:-ST1}; VARIANT=${VARIANT:-ST1}; X=$R/exp_$RU
 C=${C:-$R/code_fr9/indococo_ppo_bot}; B0=${BIN:-$R/code_fr9/bin/indococo-train-fr9}
 export INDOCOCO_OBS_EXT=1
 THREADS=${THREADS:-24}; GAMES=${GAMES:-512}; H2H_GAMES=${H2H_GAMES:-200}; PROCS=${PROCS:-16}
-FIN_H2H=${FIN_H2H:-500}; FIN_POOL=${FIN_POOL:-400}; FIN_BP5=${FIN_BP5:-400}; GAL_GAMES=${GAL_GAMES:-200}; FIN_GAL=${FIN_GAL:-500}; CHUNK=${CHUNK:-50000000}
+FIN_H2H=${FIN_H2H:-500}; FIN_POOL=${FIN_POOL:-400}; FIN_BP5=${FIN_BP5:-400}; FIN_BP5_ON=${FIN_BP5_ON:-1}; GAL_GAMES=${GAL_GAMES:-200}; FIN_GAL=${FIN_GAL:-500}; CHUNK=${CHUNK:-50000000}
 export LD_LIBRARY_PATH=$R/e8b2_1v1/bin/sp/torch/lib TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 INDOCOCO_METRICS=$X/logs/metrics.jsonl
 PYT=/home/ubuntu/coco-venv/bin/python; T=$C/tools/pool_eval; SNAP=$R/fr7_snap
 GALP=$C/experiments/pool_galactus.toml   # Galactus (botpack5, the bot we have not beaten): tracked every chunk + finals
@@ -119,7 +119,7 @@ for o in BEST FR4; do
 done
 echo "$(date) pool400" >> $F/run.log
 nice -n 19 $PYT $T/pool_eval.py --candidate $CAND --pool $T/pool.toml --games $FIN_POOL --procs $PROCS --seed 424242 --out $F/pool400.jsonl --label ${RUN}final > $F/pool400.log 2>&1
-# botpack5 (5 Python public bots, ~8 min) dropped from finals per user (quick set + Galactus); opt in with FIN_BP5_ON=1.
+# botpack5 (5 Python public bots, ~8 min) on by default (FIN_BP5_ON=1); set FIN_BP5_ON= to skip.
 if [[ -n "$FIN_BP5_ON" ]]; then
 echo "$(date) pool_botpack5" >> $F/run.log
 OMP_NUM_THREADS=1 nice -n 19 $PYT $T/pool_eval.py --candidate $CAND --pool $T/pool_botpack5.toml --games $FIN_BP5 --procs $PROCS --seed 424242 --out $F/bp5.jsonl --label ${RUN}final > $F/bp5.log 2>&1
