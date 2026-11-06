@@ -1201,6 +1201,26 @@ Promoted on every gate (pool −0.63 within 1.0 tol). Recent-gen league lifted F
 - Multi-seed reruns of the key comparisons (X0 vs ADB) to measure seed variance.
 - Framework: reuse collection values (stage 3), CUDA graphs and a GPU rollout buffer, as in the indococo-ppo README roadmap.
 
+
+### 11.8m ST9 results: OPPCH 0.55 on ST8 league, from ST8 8666.3M (→ 9628.4M). NEW BEST
+
+ST9 kept the ST8 recipe (broader league + ENT 0.016, Galactus weight 2.5, gamma 0.998, 300k/iter, LR 5e-5, flip_reset 70, ST4/ST5/ST6 in EXTRA_OPPS) and changed one thing: OPPCH 0.50 → 0.55. Trained ~11:57 PM ET Nov 5 to ~6:14 AM ET Nov 6; finals done 6:38 AM ET Nov 6.
+
+Finals checkpoint = best mid chunk 9628.4M (`exp_ST9/checkpoints/1793962509`):
+
+| Metric | ST9 9628.4M | ST8 8666.3M (prev best) |
+|---|---|---|
+| vs BEST (500 g) | **54.0%** (270-230) | — |
+| vs FR4 (500 g) | **72.8%** | 73.0% |
+| pool400 | **91.67** | 91.58 |
+| botpack5 | **63.21** | 64.21 |
+| Galactus (500 g) | **21.8%** | 25.2% |
+| gen panel min / mean | 21.8 / 77.5 | 25.2 / 77.87 |
+
+Promoted on every gate (bp5 exactly at −1.0 tol; Galactus −3.4 within −4). OPPCH 0.55 beat ST8 head-to-head and nudged pool up, with Ripple +3.0 and Necto +2.25, while giving back Galactus (−3.4 / bp5 −4.5) and Chronos (−3.25). Mid-run (200 g) peak Galactus 34.5% at 8826.8M; late mid vs ST8 often 0.46–0.59. Shipped as `checkpoints_to_test/st9_9628M.bpk`. ST10 (ST7_final + Megabyte@2.0 via indococo-train-mega) auto-started from this chunk at 6:38 AM ET and measures against ST9; ST11 then ST12 are queued.
+
+![ST9 mid-run and finals](figures/st9_mid.png)
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):

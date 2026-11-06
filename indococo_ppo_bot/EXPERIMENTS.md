@@ -1295,3 +1295,17 @@ One change on top of ST9: fold the newest entropy-bumped style into the league. 
 
 ## ST11 (generalization): add ST8_final (new BEST) to EXTRA_OPPS at w1.0
 One change on top of ST10: face the newly promoted best in-league. Same OPPCH 0.55 / ENT 0.016 / Galactus 2.5. From ST10 best chunk.
+
+## ST9 results (Nov 6, 2026, ~6:38 AM ET): PROMOTED, new best ST9 9628.4M
+Finals ckpt = best mid 9628.4M (exp_ST9/checkpoints/1793962509). 54.0% vs ST8 (500 g), 72.8% vs FR4 (ST8 73.0%), pool400 91.67 (ST8 91.58), bp5 63.21 (ST8 64.21; at −1.0 tol), Galactus 21.8% (ST8 25.2%; within −4 pts). Gen panel min 21.8% (Galactus), mean 77.5% (ST8 25.2% / 77.87%).
+Per-bot vs ST8: Ripple +3.0, Necto +2.25, Element +0.5, Immortal +0.25, Nexto +0.25; Chronos −3.25, 1v1.pt −2.0, Galactus −3.4, Galactus-bp5 −4.5, 430M −0.75, Kira −0.75, Seer −0.5; Dice flat.
+Read-out: OPPCH 0.55 cleared every gate vs ST8, with a clear Ripple gain and a Galactus regression that still stayed inside the 4-pt bar. Mid peak Galactus 34.5% at 8826.8M. Shipped checkpoints_to_test/st9_9628M.bpk. ST10 (ST9 + ST7_final + Megabyte@2.0 via indococo-train-mega) auto-started from this chunk; ST11 then ST12 queued.
+
+## ST10 (generalization): add ST7_final + Megabyte@2.0
+On top of ST9: fold ST7_final into EXTRA_OPPS at w1.0 and add Megabyte (SubparN0va/ByteBotpack; strong air-dribble-bump dodge) at weight 2.0 via `indococo-train-mega` (`MEGA_WEIGHT=2.0`). Galactus stays 2.5, flip_reset 70. From ST9 best chunk. Megabyte mid/final evals are report-only (not a promotion gate).
+
+## ST11 (generalization): add ST8_final to EXTRA_OPPS at w1.0
+One change on top of ST10: face the previously promoted ST8 best in-league. Same Megabyte@2.0 / Galactus 2.5. From ST10 best chunk.
+
+## ST12 (generalization): add ST9_final (new BEST) to EXTRA_OPPS at w1.0
+One change on top of ST11: fold the newly promoted ST9 best into the league at w1.0. Same Megabyte@2.0 / Galactus 2.5 / OPPCH 0.55 / ENT 0.016. From ST11 best chunk. Hypothesis: after Galactus dipped on ST9 finals, keeping Megabyte diversity while facing the new best in-league should stabilize the panel without overweighting any single style.
