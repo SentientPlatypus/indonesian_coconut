@@ -243,7 +243,19 @@ pub fn build_obs(
         if oi.team == info.team { mates.push(p) } else { opps.push(p) }
     }
     
-    // Limit to max 2 teammates, max 3 opponents (keep closest to ball)
+    // Sort by distance to ball (as ByteObs.cpp KeepClosestToBall does)
+    let ball_pos = state.ball.pos;
+    mates.sort_by(|a, b| {
+        let d_a = ((a[0] - ball_pos[0]).powi(2) + (a[1] - ball_pos[1]).powi(2) + (a[2] - ball_pos[2]).powi(2)).sqrt();
+        let d_b = ((b[0] - ball_pos[0]).powi(2) + (b[1] - ball_pos[1]).powi(2) + (b[2] - ball_pos[2]).powi(2)).sqrt();
+        d_a.partial_cmp(&d_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    opps.sort_by(|a, b| {
+        let d_a = ((a[0] - ball_pos[0]).powi(2) + (a[1] - ball_pos[1]).powi(2) + (a[2] - ball_pos[2]).powi(2)).sqrt();
+        let d_b = ((b[0] - ball_pos[0]).powi(2) + (b[1] - ball_pos[1]).powi(2) + (b[2] - ball_pos[2]).powi(2)).sqrt();
+        d_a.partial_cmp(&d_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    // Limit to max 2 teammates, max 3 opponents (keep closest)
     mates.resize(std::cmp::min(mates.len(), 2), vec![0.0; PLAYER_SIZE]);
     opps.resize(std::cmp::min(opps.len(), 3), vec![0.0; PLAYER_SIZE]);
     
@@ -296,28 +308,99 @@ pub fn action_mask(c: &CarState, mask: &mut [bool]) {
     }
 }
 
-/// TorchScript module loader using tch::CModule.
-pub struct TorchModule {
-    module: tch::CModule,
+/// Layer in a Sequential: Linear or LayerNorm.
+enum Layer {
+    Linear { w: tch::Tensor, b: tch::Tensor },
+    LayerNorm { weight: tch::Tensor, bias: tch::Tensor },
 }
 
-impl TorchModule {
-    pub fn load(path: &Path) -> Result<Self, String> {
+/// Rebuilt Sequential from TorchScript module parameters.
+/// The .lt files have no `forward` method, so we extract params and run manually.
+pub struct SequentialModule {
+    layers: Vec<Layer>,
+    device: tch::Device,
+}
+
+impl SequentialModule {
+    pub fn load(path: &Path, device: tch::Device) -> Result<Self, String> {
         let module = tch::CModule::load(path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(Self { module })
+        
+        // Extract named parameters (format: "0.weight", "0.bias", "1.weight", etc.)
+        let mut params = module.named_parameters()
+            .map_err(|e| format!("named_parameters: {e}"))?;
+        
+        // Move tensors to device
+        for (_, tensor) in &mut params {
+            *tensor = tensor.to(device);
+        }
+        
+        params.sort_by(|a, b| {
+            // Sort by numeric prefix
+            let a_num: usize = a.0.split('.').next().unwrap_or("0").parse().unwrap_or(0);
+            let b_num: usize = b.0.split('.').next().unwrap_or("0").parse().unwrap_or(0);
+            a_num.cmp(&b_num).then_with(|| a.0.cmp(&b.0))
+        });
+        
+        // Group into layers: each layer has weight + bias
+        let mut layers = Vec::new();
+        let mut i = 0;
+        while i < params.len() {
+            let (name, _) = &params[i];
+            if !name.contains("weight") {
+                return Err(format!("expected weight at {name}"));
+            }
+            let w = params[i].1.shallow_clone();
+            let b = if i + 1 < params.len() && params[i + 1].0.contains("bias") {
+                i += 1;
+                params[i].1.shallow_clone()
+            } else {
+                return Err(format!("expected bias after {name}"));
+            };
+            i += 1;
+            
+            // Distinguish Linear (2D weight) from LayerNorm (1D weight)
+            let layer = if w.dim() == 2 {
+                // Linear layer: transpose weight for correct matmul direction
+                Layer::Linear { w: w.transpose(0, 1), b }
+            } else {
+                Layer::LayerNorm { weight: w, bias: b }
+            };
+            layers.push(layer);
+        }
+        
+        Ok(Self { layers, device })
     }
 
     pub fn forward(&self, input: &tch::Tensor) -> tch::Tensor {
-        self.module.forward_ts(&[input.shallow_clone()])
-            .expect("forward failed")
+        tch::no_grad(|| {
+            let mut x = input.shallow_clone();
+            let last_idx = self.layers.len() - 1;
+            for (i, layer) in self.layers.iter().enumerate() {
+                x = match layer {
+                    Layer::Linear { w, b } => x.matmul(w) + b,
+                    Layer::LayerNorm { weight, bias } => {
+                        let mean = x.mean_dim(&[1i64][..], true, x.kind());
+                        let xc = &x - &mean;
+                        let var = xc.pow_tensor_scalar(2).mean_dim(&[1i64][..], true, x.kind());
+                        let normalized = &xc / (var + 1e-5).sqrt();
+                        normalized * weight + bias
+                    }
+                };
+                // ReLU activation after each layer except the last (logits)
+                if i < last_idx {
+                    x = x.relu();
+                }
+            }
+            x
+        })
     }
 }
 
 /// The frozen Megabyte network on tch/LibTorch.
 pub struct MegabytePolicy {
-    shared: TorchModule,
-    policy: TorchModule,
+    shared: SequentialModule,
+    policy: SequentialModule,
     device: tch::Device,
     /// Shuffle the empty player slots each step, as the C++ does.
     pub shuffle_slots: bool,
@@ -330,26 +413,28 @@ unsafe impl Send for MegabytePolicy {}
 impl MegabytePolicy {
     /// Loads `SHARED_HEAD.lt` + `POLICY.lt` from `dir`.
     pub fn load(dir: &Path, device: tch::Device) -> Result<Self, String> {
-        let shared = TorchModule::load(&dir.join("SHARED_HEAD.lt"))?;
-        let policy = TorchModule::load(&dir.join("POLICY.lt"))?;
+        let shared = SequentialModule::load(&dir.join("SHARED_HEAD.lt"), device)?;
+        let policy = SequentialModule::load(&dir.join("POLICY.lt"), device)?;
         Ok(Self { shared, policy, device, shuffle_slots: true })
     }
 
     /// Raw logits `[rows, 90]`.
     pub fn logits(&self, obs: &[f32], rows: usize) -> Vec<f32> {
-        let obs_tensor = tch::Tensor::f_from_slice(obs)
-            .expect("failed to create tensor from obs")
-            .view([rows as i64, OBS_SIZE as i64])
-            .to(self.device);
-        let hidden = self.shared.forward(&obs_tensor);
-        let logits = self.policy.forward(&hidden);
-        let cpu_logits = logits.to(tch::Device::Cpu);
-        let shape: Vec<i64> = cpu_logits.size();
-        let size: usize = shape.iter().product::<i64>() as usize;
-        let mut result = vec![0.0f32; size];
-        cpu_logits.f_copy_data(&mut result, size)
-            .expect("failed to copy logits to vec");
-        result
+        tch::no_grad(|| {
+            let obs_tensor = tch::Tensor::f_from_slice(obs)
+                .expect("failed to create tensor from obs")
+                .view([rows as i64, OBS_SIZE as i64])
+                .to(self.device);
+            let hidden = self.shared.forward(&obs_tensor);
+            let logits = self.policy.forward(&hidden);
+            let cpu_logits = logits.to(tch::Device::Cpu);
+            let shape: Vec<i64> = cpu_logits.size();
+            let size: usize = shape.iter().product::<i64>() as usize;
+            let mut result = vec![0.0f32; size];
+            cpu_logits.f_copy_data(&mut result, size)
+                .expect("failed to copy logits to vec");
+            result
+        })
     }
 }
 

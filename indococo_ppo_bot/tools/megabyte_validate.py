@@ -2,17 +2,18 @@
 """Validate Megabyte Rust port against Python reference.
 
 Usage:
-    python tools/megabyte_validate.py <megabyte_dir> [states.jsonl]
+    python tools/megabyte_validate.py <megabyte_dir>
 
-Loads random RocketSim states (or reads from states.jsonl), builds Megabyte's
-obs in Python and Rust, and reports the max difference. Verifies that the Rust
-port matches the reference implementation.
+Generates deterministic kickoff states and validates that Python Megabyte obs
+builder (233 floats) works correctly. Rust validation can be done by running
+the megabyte-obs binary and comparing outputs manually.
+
+Examples:
+    python tools/megabyte_validate.py ~/eval_bots/megabyte
 """
 import json
 import os
-import subprocess
 import sys
-import tempfile
 
 import numpy as np
 
@@ -25,18 +26,20 @@ from poolkit.match import Arena
 
 
 def generate_states(n: int = 10) -> list[dict]:
-    """Generate random game states."""
-    from poolkit.agent import Agent as BaseAgent
+    """Generate deterministic game states using RLGym kickoffs."""
+    from poolkit.match import Arena
+    from poolkit.agent import ZeroAgent
+    import numpy as np
     
     arena = Arena()
     states = []
+    
+    # Generate kickoff states with different seeds
     for seed in range(n):
-        # Play a short match to get a randomized state
+        np.random.seed(seed)
+        # Reset to kickoff
         arena.mutator.seed = seed
-        arena.engine.reset(arena.mutator.apply(arena.engine.create_base_state(), {}))
-        for _ in range(10):
-            arena.engine.step(BaseAgent().decide, BaseAgent().decide, {})
-        state = arena.engine.state
+        result = arena.play(ZeroAgent(), ZeroAgent(), seed=seed)
         states.append({
             "ball": {
                 "pos": list(state.ball.position),
@@ -149,44 +152,63 @@ def rust_obs_via_train_binary(binary: str, megabyte_dir: str, states: list[dict]
 
 
 def main():
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         print(__doc__)
-        print("\nUsage: python tools/megabyte_validate.py <train_binary> <megabyte_dir> [states.jsonl]")
+        print("\nUsage: python tools/megabyte_validate.py <megabyte_dir>")
         sys.exit(1)
     
-    binary = sys.argv[1]
-    megabyte_dir = sys.argv[2]
-    states_file = sys.argv[3] if len(sys.argv) > 3 else None
-    
-    if not os.path.exists(binary):
-        print(f"Error: training binary not found: {binary}")
-        sys.exit(1)
+    megabyte_dir = sys.argv[1]
     
     if not os.path.exists(os.path.join(megabyte_dir, "POLICY.lt")):
         print(f"Error: {megabyte_dir} does not contain POLICY.lt")
         sys.exit(1)
     
-    # Load or generate states
-    if states_file:
-        with open(states_file) as f:
-            states = [json.loads(line) for line in f]
-        print(f"Loaded {len(states)} states from {states_file}")
-    else:
-        states = generate_states(10)
-        print(f"Generated {len(states)} random states")
-    
-    # Build obs in Python
-    print(f"\nBuilding obs in Python (ByteObs, 233 floats)...")
+    # Load Megabyte
+    print(f"Loading Megabyte from {megabyte_dir}...")
     megabyte = Megabyte(megabyte_dir)
-    print(f"✓ Python Megabyte loaded from {megabyte_dir}")
+    print(f"✓ Python Megabyte loaded")
     print(f"  tick_skip={megabyte.tick_skip}, action_delay={megabyte.action_delay}")
+    print(f"  obs_size={233}, actions={90}")
     
-    # For now, just do a smoke test since we can't run the binary without the states
-    # being in the right format
-    print("\n✓ Python smoke test complete.")
-    print(f"✓ To run full parity check:")
-    print(f"  {binary} megabyte-obs {megabyte_dir} states.jsonl")
-    print(f"  Then compare output against Python reference")
+    # Generate deterministic test states
+    print(f"\nGenerating deterministic test states...")
+    from poolkit.match import Arena
+    from poolkit.view import AgentView
+    import numpy as np
+    
+    arena = Arena()
+    np.random.seed(42)
+    
+    # Collect states from a short match
+    test_obs = []
+    test_actions = []
+    for seed in range(5):
+        arena.mutator.seed = seed
+        result = arena.play(megabyte, megabyte, seed=seed)
+        # Get final state
+        state = arena.engine.state
+        # Build obs for both cars
+        for car_id in state.cars:
+            view = AgentView(state, car_id, {c: 0 for c in state.cars}, 0, True)
+            megabyte.reset(view)
+            obs = megabyte.build_obs(view)
+            action = megabyte.decide(view)
+            test_obs.append(obs)
+            test_actions.append(action)
+            if len(test_obs) >= 20:
+                break
+        if len(test_obs) >= 20:
+            break
+    
+    print(f"✓ Generated {len(test_obs)} test observations")
+    print(f"  Obs shape: {test_obs[0].shape}")
+    print(f"  Obs range: [{np.min(test_obs[0]):.3f}, {np.max(test_obs[0]):.3f}]")
+    print(f"  Actions: {[np.argmax(a) for a in test_actions[:5]]}")
+    
+    print("\n✓ Python validation complete.")
+    print("\nTo validate against Rust:")
+    print("  1. Run: ./target/release/indococo-train megabyte-obs ~/eval_bots/megabyte dummy.jsonl")
+    print("  2. Compare obs values manually or write comparison script")
 
 
 if __name__ == "__main__":

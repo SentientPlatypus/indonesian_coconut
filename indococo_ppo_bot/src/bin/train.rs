@@ -1194,8 +1194,8 @@ fn galactus_worker(
     out
 }
 
-/// `megabyte-obs`: dump Megabyte obs + action for deterministic test states.
-/// Simplified version: runs a few kickoff resets and dumps obs for each.
+/// `megabyte-obs`: dump Megabyte obs for deterministic kickoff states.
+/// Generates 20 obs (10 seeds × 2 cars) for validation. Optionally runs inference.
 fn megabyte_obs(mdir: &Path, _states_path: &Path) {
     use indococo_bot::megabyte as mx;
     use rlgymppo::ExternalPolicy;
@@ -1204,19 +1204,19 @@ fn megabyte_obs(mdir: &Path, _states_path: &Path) {
     let dev = tch::Device::Cuda(0);
     let mb = mx::MegabytePolicy::load(mdir, dev).expect("megabyte weights");
     
-    // Create simple kickoff states for validation
+    // Generate deterministic kickoff states
     let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let mut env = create_env(&RewardConfig::default(), &mix);
     
-    // Generate a few states (deterministic via reset RNG)
+    eprintln!("Generating deterministic kickoff obs (10 seeds × 2 cars)...");
     for seed in 0..10 {
         let (state, _, _) = env.reset();
-        
-        // Build obs for both teams
         for car_idx in 0..2 {
             let mut obs = vec![0.0f32; mx::OBS_SIZE];
             let mut mask = vec![false; mx::N_ACTIONS];
             mb.build(&state, car_idx, &mut obs, &mut mask);
+            
+            // Optionally run inference
             let actions = mb.infer(&obs, &mask, 1);
             
             let out = serde_json::json!({
@@ -1228,9 +1228,13 @@ fn megabyte_obs(mdir: &Path, _states_path: &Path) {
             println!("{out}");
         }
     }
+    eprintln!("✓ Generated 20 observations (233 floats each)");
 }
 
 fn megabyte_h2h(ckpt: &Path, mdir: &Path, games: usize, threads: usize) {
+    // Ensure obs extension enabled for 106-wide actor (as galactus-h2h does)
+    unsafe { std::env::set_var("INDOCOCO_OBS_EXT", "1"); }
+    
     init_from_default(true).expect("load collision meshes");
     let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let per = games.div_ceil(threads);
