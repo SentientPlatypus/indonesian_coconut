@@ -21,17 +21,17 @@ These are real RLBot matches (separate from sim eval numbers elsewhere in this R
 | Bot | Rank | Checkpoint that beat it | Date beaten | Score | Replay |
 |---|---|---|---|---|---|
 | Psyonix Allstar | TBD | pending | pending | pending | pending |
-| Element | TBD | pending | pending | pending | pending |
-| Necto | TBD | pending | pending | pending | pending |
-| Nexto | TBD | pending | pending | pending | pending |
-| Ripple v1.1 | Pro | ST8 (`checkpoints_to_test/st8_8666M.bpk`, 8666.3M steps) | 2026-11-05 | 17-1 | [ballchasing](https://ballchasing.com/replay/2fc5fa80-2a16-4905-84b4-c175f72743dc) |
+| Element | Champion | pending | pending | pending | pending |
+| Necto | Champion | pending | pending | pending | pending |
+| Nexto | Grand Champion | pending | pending | pending | pending |
 | Kira | TBD | pending | pending | pending | pending |
 | Dice | TBD | pending | pending | pending | pending |
-| Chronos | TBD | pending | pending | pending | pending |
+| Chronos | SSL | pending | pending | pending | pending |
+| Ripple v1.1 | Pro | ST8 (`checkpoints_to_test/st8_8666M.bpk`, 8666.3M steps) | 2026-11-05 | 17-1 | [ballchasing](https://ballchasing.com/replay/2fc5fa80-2a16-4905-84b4-c175f72743dc) |
 | Megabyte | TBD | pending | pending | pending | pending |
 | GalactusV2 | TBD | pending | pending | pending | pending |
 
-Note: Ripple v1.1 match featured 23 shots, 42 aerial hits, 1 flip reset.
+Ranks are tentative and based on sim win rates. Ripple v1.1 match featured 23 shots, 42 aerial hits, 1 flip reset.
 
 ## Repository layout
 
