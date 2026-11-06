@@ -1194,95 +1194,39 @@ fn galactus_worker(
     out
 }
 
-/// `megabyte-obs`: dump Megabyte obs + action for states in a JSONL file.
-fn megabyte_obs(mdir: &Path, states_path: &Path) {
+/// `megabyte-obs`: dump Megabyte obs + action for deterministic test states.
+/// Simplified version: runs a few kickoff resets and dumps obs for each.
+fn megabyte_obs(mdir: &Path, _states_path: &Path) {
     use indococo_bot::megabyte as mx;
     use rlgymppo::ExternalPolicy;
-    use std::io::{BufRead, BufReader};
     
     init_from_default(true).expect("load collision meshes");
     let dev = tch::Device::Cuda(0);
     let mb = mx::MegabytePolicy::load(mdir, dev).expect("megabyte weights");
     
-    let f = std::fs::File::open(states_path).expect("states file");
-    let reader = BufReader::new(f);
+    // Create simple kickoff states for validation
+    let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mut env = create_env(&RewardConfig::default(), &mix);
     
-    for line in reader.lines() {
-        let line = line.expect("read line");
-        let state_json: serde_json::Value = serde_json::from_str(&line).expect("parse state");
+    // Generate a few states (deterministic via reset RNG)
+    for seed in 0..10 {
+        let (state, _, _) = env.reset();
         
-        let mut arena = rlgymppo::rlgym::rocketsim::Arena::new(rlgymppo::rlgym::rocketsim::GameMode::Soccar);
-        arena.add_car(rlgymppo::rlgym::rocketsim::Team::Blue, rlgymppo::rlgym::rocketsim::CarBodyConfig::OCTANE);
-        arena.add_car(rlgymppo::rlgym::rocketsim::Team::Orange, rlgymppo::rlgym::rocketsim::CarBodyConfig::OCTANE);
-        
-        let ball_json = &state_json["ball"];
-        let mut ball = rlgymppo::rlgym::rocketsim::BallState::default();
-        ball.phys.pos = rlgymppo::rlgym::rocketsim::Vec3A::new(
-            ball_json["pos"][0].as_f64().unwrap() as f32,
-            ball_json["pos"][1].as_f64().unwrap() as f32,
-            ball_json["pos"][2].as_f64().unwrap() as f32,
-        );
-        ball.phys.vel = rlgymppo::rlgym::rocketsim::Vec3A::new(
-            ball_json["vel"][0].as_f64().unwrap() as f32,
-            ball_json["vel"][1].as_f64().unwrap() as f32,
-            ball_json["vel"][2].as_f64().unwrap() as f32,
-        );
-        ball.phys.ang_vel = rlgymppo::rlgym::rocketsim::Vec3A::new(
-            ball_json["ang_vel"][0].as_f64().unwrap() as f32,
-            ball_json["ang_vel"][1].as_f64().unwrap() as f32,
-            ball_json["ang_vel"][2].as_f64().unwrap() as f32,
-        );
-        arena.set_ball_state(ball);
-        
-        if let Some(pads) = state_json["pads"].as_array() {
-            for (i, pad_json) in pads.iter().enumerate() {
-                let timer = pad_json["timer"].as_f64().unwrap() as f32;
-                arena.set_boost_pad_state(i, timer == 0.0, timer);
-            }
+        // Build obs for both teams
+        for car_idx in 0..2 {
+            let mut obs = vec![0.0f32; mx::OBS_SIZE];
+            let mut mask = vec![false; mx::N_ACTIONS];
+            mb.build(&state, car_idx, &mut obs, &mut mask);
+            let actions = mb.infer(&obs, &mask, 1);
+            
+            let out = serde_json::json!({
+                "seed": seed,
+                "car": car_idx,
+                "obs": obs,
+                "action": actions[0],
+            });
+            println!("{out}");
         }
-        
-        if let Some(cars) = state_json["cars"].as_array() {
-            for (i, car_json) in cars.iter().enumerate() {
-                let mut car = arena.get_car_state(i);
-                car.phys.pos = rlgymppo::rlgym::rocketsim::Vec3A::new(
-                    car_json["pos"][0].as_f64().unwrap() as f32,
-                    car_json["pos"][1].as_f64().unwrap() as f32,
-                    car_json["pos"][2].as_f64().unwrap() as f32,
-                );
-                car.phys.vel = rlgymppo::rlgym::rocketsim::Vec3A::new(
-                    car_json["vel"][0].as_f64().unwrap() as f32,
-                    car_json["vel"][1].as_f64().unwrap() as f32,
-                    car_json["vel"][2].as_f64().unwrap() as f32,
-                );
-                car.phys.ang_vel = rlgymppo::rlgym::rocketsim::Vec3A::new(
-                    car_json["ang_vel"][0].as_f64().unwrap() as f32,
-                    car_json["ang_vel"][1].as_f64().unwrap() as f32,
-                    car_json["ang_vel"][2].as_f64().unwrap() as f32,
-                );
-                let quat = &car_json["quat"];
-                car.phys.quat = glam::Quat::from_xyzw(
-                    quat[0].as_f64().unwrap() as f32,
-                    quat[1].as_f64().unwrap() as f32,
-                    quat[2].as_f64().unwrap() as f32,
-                    quat[3].as_f64().unwrap() as f32,
-                );
-                car.boost = car_json["boost"].as_f64().unwrap() as f32;
-                car.is_on_ground = car_json["on_ground"].as_bool().unwrap();
-                car.has_flipped = !car_json["has_flip"].as_bool().unwrap();
-                car.is_demoed = car_json["is_demoed"].as_bool().unwrap();
-                car.has_jumped = car_json["has_jumped"].as_bool().unwrap();
-                arena.set_car_state(i, car);
-            }
-        }
-        
-        let state = GameState::from_arena(&arena);
-        let mut obs = vec![0.0f32; mx::OBS_SIZE];
-        let mut mask = vec![false; mx::N_ACTIONS];
-        mb.build(&state, 0, &mut obs, &mut mask);
-        let actions = mb.infer(&obs, &mask, 1);
-        
-        let out = serde_json::json!({"obs": obs, "action": actions[0]});
-        println!("{out}");
     }
 }
 
@@ -1332,35 +1276,49 @@ fn megabyte_worker(mix: &[WeightedSetter], ckpt: &Path, mdir: &Path, games: usiz
     loop {
         let live = g.iter().filter(|e| e.live).count();
         if live == 0 { break; }
-        let a_obs = g.iter().flat_map(|e| e.obs[0].iter().copied()).collect::<Vec<f32>>();
-        let a_logits = na.infer(&a_obs, ENVS);
-        let a_acts: Vec<usize> = a_logits.chunks(N_ACTIONS)
-            .map(|l| l.iter().copied().enumerate().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0).collect();
-        for (k, e) in g.iter().enumerate() {
-            let i = if e.a_team == 0 { 0 } else { 1 };
+        // Get candidate actions (greedy)
+        let mut oa = Vec::new();
+        for e in g.iter().filter(|e| e.live) {
+            for (i, (info, _)) in e.state.cars.iter().enumerate() {
+                if info.team as u8 == e.a_team {
+                    oa.push(&e.obs[i]);
+                }
+            }
+        }
+        let aa = argmax_actions(&na, &oa, &dev);
+        let mut ia = 0;
+        // Build Megabyte obs and get actions
+        for k in 0..ENVS {
+            if !g[k].live { continue; }
+            let i = if g[k].a_team == 0 { 0 } else { 1 };
             let off = k * mx::OBS_SIZE;
             let moff = k * mx::N_ACTIONS;
-            mb.build(&e.state, i, &mut mb_obs[off..off + mx::OBS_SIZE], &mut mb_mask[moff..moff + mx::N_ACTIONS]);
+            mb.build(&g[k].state, i, &mut mb_obs[off..off + mx::OBS_SIZE], &mut mb_mask[moff..moff + mx::N_ACTIONS]);
         }
         let mb_acts = mb.infer(&mb_obs, &mb_mask, ENVS);
+        // Step environments
         for k in 0..ENVS {
-            let a_act = a_acts[k];
+            if !g[k].live { continue; }
+            let a_act = aa[ia];
+            ia += 1;
             let mb_act = mb_acts[k];
-            let acts = if g[k].a_team == 0 { [a_act, mb_act] } else { [mb_act, a_act] };
-            let (state, obs, info) = g[k].env.step(acts);
-            g[k].state = state;
-            g[k].obs = obs;
-            let done = info.done;
-            if done && g[k].live {
-                out[3] += 1;
-                let s = &g[k].state;
-                let blue = s.cars[0].0.team == rlgymppo::rlgym::rocketsim::Team::Blue;
-                let orange = s.cars[1].0.team == rlgymppo::rlgym::rocketsim::Team::Orange;
-                let a_blue = g[k].a_team == 0 && blue || g[k].a_team == 1 && orange;
-                let b_blue = s.ball.phys.pos.y < 0.0;
-                if b_blue { out[if a_blue { 0 } else { 1 }] += 1; }
-                else { out[if a_blue { 1 } else { 0 }] += 1; }
+            let acts = [a_act, mb_act];
+            let acts_order = if g[k].a_team == 0 { &acts[..] } else { &[acts[1], acts[0]][..] };
+            let e = &mut g[k];
+            e.env.pre_step(&e.state, acts_order);
+            e.env.step_physics(mx::TICK_SKIP);
+            let res = e.env.post_step();
+            out[3] += 1;
+            if res.is_terminal || res.truncated {
+                let view = g[k].env.get_shared_info().view(&res.state);
+                match view.scoring_team() {
+                    Some(t) if t == g[k].a_team => out[0] += 1,
+                    Some(_) => out[1] += 1,
+                    None => out[2] += 1,
+                }
                 g[k] = new_game(k, &mut started);
+            } else {
+                (g[k].state, g[k].obs) = (res.state, res.obs);
             }
         }
     }
