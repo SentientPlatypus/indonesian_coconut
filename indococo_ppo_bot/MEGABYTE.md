@@ -123,12 +123,17 @@ source (`inc/RLGymCPP/ObsBuilders/ByteObs.cpp`,
    ```sh
    ./target/release/indococo-train megabyte-obs ~/eval_bots/megabyte dummy.jsonl
    ```
-5. **Head-to-head strength check**:
+5. **Logits parity check** (compares Python vs Rust inference):
+   ```sh
+   python tools/megabyte_compare_logits.py ~/eval_bots/megabyte ./target/release/indococo-train
+   ```
+   Expected: max-abs logit diff < 1e-4, action match rate 100%.
+6. **Head-to-head strength check**:
    ```sh
    ./target/release/indococo-train megabyte-h2h <checkpoint> ~/eval_bots/megabyte 100 4
    ```
    Expected: Megabyte wins ~36% (similar to Python Megabyte vs ST8).
-6. **Compilation test** (verify both with and without torch feature):
+7. **Compilation test** (verify both with and without torch feature):
    ```sh
    cargo check                  # Without torch
    cargo check --features torch # With torch
