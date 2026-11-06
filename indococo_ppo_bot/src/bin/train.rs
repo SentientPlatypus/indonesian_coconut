@@ -1344,26 +1344,50 @@ fn megabyte_worker(mix: &[WeightedSetter], ckpt: &Path, mdir: &Path, games: usiz
         }
         let aa = argmax_actions(&na, &oa, &dev);
         let mut ia = 0;
-        // Build Megabyte obs and get actions
+        // Build Megabyte obs and get actions for opponent cars
         for k in 0..ENVS {
             if !g[k].live { continue; }
-            let i = if g[k].a_team == 0 { 0 } else { 1 };
             let off = k * mx::OBS_SIZE;
             let moff = k * mx::N_ACTIONS;
-            mb.build(&g[k].state, i, &mut mb_obs[off..off + mx::OBS_SIZE], &mut mb_mask[moff..moff + mx::N_ACTIONS]);
+            // Find Megabyte's car (the one NOT on a_team)
+            for (i, (info, _)) in g[k].state.cars.iter().enumerate() {
+                if info.team as u8 != g[k].a_team {
+                    mb.build(&g[k].state, i, &mut mb_obs[off..off + mx::OBS_SIZE], &mut mb_mask[moff..moff + mx::N_ACTIONS]);
+                    break;
+                }
+            }
         }
         let mb_acts = mb.infer(&mb_obs, &mb_mask, ENVS);
-        // Step environments
+        // Step environments with action delay protocol
         for k in 0..ENVS {
             if !g[k].live { continue; }
+            let e = &mut g[k];
             let a_act = aa[ia];
             ia += 1;
             let mb_act = mb_acts[k];
-            let acts = [a_act, mb_act];
-            let acts_order = if g[k].a_team == 0 { &acts[..] } else { &[acts[1], acts[0]][..] };
-            let e = &mut g[k];
-            e.env.pre_step(&e.state, acts_order);
-            e.env.step_physics(mx::TICK_SKIP);
+            // Build acts array in game order (blue first, orange second)
+            let mut acts = Vec::new();
+            let mut ext = Vec::new();  // (car_idx, held_controls, new_controls)
+            for (i, (info, car)) in e.state.cars.iter().enumerate() {
+                if info.team as u8 == e.a_team {
+                    acts.push(a_act);
+                } else {
+                    acts.push(0);  // placeholder
+                    ext.push((i, car.controls, mx::controls_of(mb_act)));
+                }
+            }
+            // Apply candidate actions
+            e.env.pre_step(&e.state, &acts);
+            // Hold Megabyte's previous controls for ACTION_DELAY ticks
+            for &(i, held, _) in &ext {
+                e.env.arena.set_car_controls(i, held);
+            }
+            e.env.step_physics(mx::ACTION_DELAY);
+            // Apply Megabyte's new controls for remaining ticks
+            for &(i, _, new) in &ext {
+                e.env.arena.set_car_controls(i, new);
+            }
+            e.env.step_physics(mx::TICK_SKIP - mx::ACTION_DELAY);
             let res = e.env.post_step();
             out[3] += 1;
             if res.is_terminal || res.truncated {
