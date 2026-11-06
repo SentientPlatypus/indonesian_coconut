@@ -26,8 +26,9 @@ These are real RLBot matches (separate from sim eval numbers elsewhere in this R
 | Nexto | Grand Champion | E2G1 (`PPO_POLICY_V4_E2G1.pt`, Python policy) | 2026-09-30 | 42-11 | [ballchasing](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30) |
 | Kira | TBD | pending | pending | pending | pending |
 | Dice | TBD | pending | pending | pending | pending |
-| Chronos | SSL | pending | pending | pending | pending |
+| Chronos | TBD | pending | pending | pending | pending |
 | Ripple v1.1 | Pro | ST8 (`checkpoints_to_test/st8_8666M.bpk`, 8666.3M steps) | 2026-11-05 | 17-1 | [ballchasing](https://ballchasing.com/replay/2fc5fa80-2a16-4905-84b4-c175f72743dc) |
+| Ripple v1.0 | SSL | pending | pending | pending | pending |
 | Megabyte | TBD | pending | pending | pending | pending |
 | GalactusV2 | TBD | pending | pending | pending | pending |
 
