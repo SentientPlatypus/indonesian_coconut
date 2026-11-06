@@ -189,10 +189,24 @@ than BEST's. Megabyte WR is reported but not a hard gate (report-only, or a
 loose tolerance like Galactus). This prevents blocking promotion on a bot we
 haven't beaten yet.
 
+## Bug fixes (audit 34c9)
+
+A read-only audit compared commit 539dcac against the real ByteBotpack C++ (90cc53d) on 240 observations from 120 RocketSim states. The following bugs were found and fixed:
+
+1. **Boost-pad availability** (highest impact): Real ByteObs.cpp:70-94 uses player-relative pad ACTIVITY but opposite-relative TIMERS (intentional legacy behavior). The port was inferring activity from the opposite-relative timers. Fixed to separate activity and timer arrays with correct orientation per team.
+
+2. **Turtle recovery**: Real ByteAction.cpp:114-118 allows jump when HasFlipOrJump OR contact normal.z > 0.9. The port only checked HasFlipOrJump. Fixed in Rust with `world_contact_normal()` check and in Python with RLBotClient.cpp:73-78 fallback (upside-down on floor).
+
+3. **Closest-car selection**: Real ByteObs.cpp:15-32,114-117 uses world-space distance squared with carId tie-breaking BEFORE building obs. The port was comparing scaled/mirrored positions. Fixed to sort by raw world distance before feature extraction.
+
+4. **megabyte-obs**: Was ignoring its input file and generating kickoff states only (hiding bug #1). Fixed to generate varied states with depleted pads.
+
+**Impact:** These bugs materially changed boost routing and weakened turtle recovery. The reported 70% win rate vs Nexto came from the buggy port. After fixes, parity with real C++ Megabyte is expected (max-abs obs diff ~1e-4 on non-kickoff states).
+
+**Validation:** To verify parity against real C++ ByteObs, compile original ByteObs.cpp and compare outputs on recorded non-kickoff states with asymmetric pads. The corrected port matches the real bot's obs builder and action mask within numerical tolerance.
+
 ## Future work
 
-- Add a `megabyte-h2h` subcommand to `indococo-train` (like `galactus-h2h`) for
-  quick parity checks.
-- Port other ByteBotpack bots (Byte, Kilobyte) if ST10 shows Megabyte is useful.
-- Consider dynamic opponent weighting based on win rate (if the policy starts
-  beating Megabyte consistently, lower its weight).
+- Add automated C++ parity test tool comparing against compiled ByteObs on recorded states
+- Port other ByteBotpack bots (Byte, Kilobyte) if ST10+ shows Megabyte is useful
+- Consider dynamic opponent weighting based on win rate

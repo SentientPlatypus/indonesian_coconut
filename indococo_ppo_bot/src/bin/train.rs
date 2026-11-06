@@ -1196,8 +1196,8 @@ fn galactus_worker(
     out
 }
 
-/// `megabyte-obs`: dump Megabyte obs for deterministic kickoff states.
-/// Generates 20 obs (10 seeds × 2 cars) for validation. Optionally runs inference.
+/// `megabyte-obs`: dump Megabyte obs for various states.
+/// Generates states and runs them for some time to deplete pads, creating non-kickoff obs.
 fn megabyte_obs(mdir: &Path, _states_path: &Path) {
     use indococo_bot::megabyte as mx;
     use rlgymppo::ExternalPolicy;
@@ -1206,31 +1206,41 @@ fn megabyte_obs(mdir: &Path, _states_path: &Path) {
     let dev = tch::Device::Cuda(0);
     let mb = mx::MegabytePolicy::load(mdir, dev).expect("megabyte weights");
     
-    // Generate deterministic kickoff states
+    // Generate varied states: kickoffs and mid-game states with some pads consumed
     let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let mut env = create_env(&RewardConfig::default(), &mix);
     
-    eprintln!("Generating deterministic kickoff obs (10 seeds × 2 cars)...");
-    for seed in 0..10 {
-        let (state, _, _) = env.reset();
-        for car_idx in 0..2 {
+    eprintln!("Generating observations from simulated states (including depleted pads)...");
+    let mut count = 0;
+    for seed in 0..20 {
+        let (mut state, _, _) = env.reset();
+        
+        // Advance the state by random steps to create varied pad states
+        for _ in 0..(seed % 8) * 20 {
+            let acts = vec![0; state.cars.len()];
+            env.pre_step(&state, &acts);
+            env.step_physics(8);
+            state = env.post_step().state;
+        }
+        
+        for car_idx in 0..state.cars.len() {
             let mut obs = vec![0.0f32; mx::OBS_SIZE];
             let mut mask = vec![false; mx::N_ACTIONS];
             mb.build(&state, car_idx, &mut obs, &mut mask);
-            
-            // Optionally run inference
             let actions = mb.infer(&obs, &mask, 1);
             
             let out = serde_json::json!({
-                "seed": seed,
+                "state_idx": count,
                 "car": car_idx,
                 "obs": obs,
+                "mask": mask,
                 "action": actions[0],
             });
             println!("{out}");
+            count += 1;
         }
     }
-    eprintln!("✓ Generated 20 observations (233 floats each)");
+    eprintln!("✓ Generated {} observations", count);
 }
 
 /// `megabyte-logits`: read obs vectors from JSON and output logits + argmax.

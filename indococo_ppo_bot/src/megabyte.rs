@@ -223,41 +223,61 @@ pub fn build_obs(
         f32::from(c.boost),
         f32::from(c.handbrake),
     ]);
-    let order = cached_pad_order(state);
-    let mut timers: Vec<f32> = order.iter().map(|&k| state.boost_pads[k].1.cooldown).collect();
-    // ByteObs uses the OPPOSITE timer orientation from the player-relative pads
-    // (legacy behavior required by existing policies)
-    if !inv {
-        timers.reverse();
+    // Boost pads (34): Real ByteObs.cpp:70-94 uses player-relative pad ACTIVITY
+    // but opposite-relative TIMERS (intentional legacy behavior).
+    // Blue slot k: active[k] ? 1 : 1/(1+timer[33-k])
+    // Orange slot k: active[33-k] ? 1 : 1/(1+timer[k])
+    let pads = &state.boost_pads;
+    for k in 0..34 {
+        let active_idx = if inv { 33 - k } else { k };
+        let timer_idx = if inv { k } else { 33 - k };
+        let active = pads[active_idx].1.cooldown == 0.0;
+        let timer = pads[timer_idx].1.cooldown;
+        let val = if active { 1.0 } else { 1.0 / (1.0 + timer) };
+        o.push(val);
     }
-    o.extend(timers.iter().map(|&t| if t == 0.0 { 1.0 } else { 1.0 / (1.0 + t) }));
     
-    let mut mates: Vec<Vec<f32>> = Vec::new();
-    let mut opps: Vec<Vec<f32>> = Vec::new();
+    // Real ByteObs.cpp:15-32,114-117 sorts by world-space distance squared with carId tie-break
+    // BEFORE building obs. Select and sort cars by their raw world position, then build features.
+    let ball_pos = state.ball.pos;
+    let mut mate_cars: Vec<(usize, f32)> = Vec::new();
+    let mut opp_cars: Vec<(usize, f32)> = Vec::new();
     for (j, (oi, oc)) in state.cars.iter().enumerate() {
         if j == car {
             continue;
         }
+        let dist_sq = oc.phys.pos.distance_squared(ball_pos);
+        if oi.team == info.team {
+            mate_cars.push((j, dist_sq));
+        } else {
+            opp_cars.push((j, dist_sq));
+        }
+    }
+    // Sort by distance squared, then by car index (tie-break)
+    mate_cars.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+    opp_cars.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+    
+    // Truncate to capacity
+    mate_cars.truncate(2);
+    opp_cars.truncate(3);
+    
+    // Build obs for selected cars
+    let mut mates: Vec<Vec<f32>> = Vec::new();
+    let mut opps: Vec<Vec<f32>> = Vec::new();
+    for (j, _) in mate_cars {
         let mut p = Vec::with_capacity(PLAYER_SIZE);
-        player_obs(&mut p, oc, inv, bpos, bvel);
-        if oi.team == info.team { mates.push(p) } else { opps.push(p) }
+        player_obs(&mut p, &state.cars[j].1, inv, bpos, bvel);
+        mates.push(p);
+    }
+    for (j, _) in opp_cars {
+        let mut p = Vec::with_capacity(PLAYER_SIZE);
+        player_obs(&mut p, &state.cars[j].1, inv, bpos, bvel);
+        opps.push(p);
     }
     
-    // Sort by distance to ball (as ByteObs.cpp KeepClosestToBall does)
-    let ball_pos = state.ball.pos;
-    mates.sort_by(|a, b| {
-        let d_a = ((a[0] - ball_pos[0]).powi(2) + (a[1] - ball_pos[1]).powi(2) + (a[2] - ball_pos[2]).powi(2)).sqrt();
-        let d_b = ((b[0] - ball_pos[0]).powi(2) + (b[1] - ball_pos[1]).powi(2) + (b[2] - ball_pos[2]).powi(2)).sqrt();
-        d_a.partial_cmp(&d_b).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    opps.sort_by(|a, b| {
-        let d_a = ((a[0] - ball_pos[0]).powi(2) + (a[1] - ball_pos[1]).powi(2) + (a[2] - ball_pos[2]).powi(2)).sqrt();
-        let d_b = ((b[0] - ball_pos[0]).powi(2) + (b[1] - ball_pos[1]).powi(2) + (b[2] - ball_pos[2]).powi(2)).sqrt();
-        d_a.partial_cmp(&d_b).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    // Limit to max 2 teammates, max 3 opponents (keep closest)
-    mates.resize(std::cmp::min(mates.len(), 2), vec![0.0; PLAYER_SIZE]);
-    opps.resize(std::cmp::min(opps.len(), 3), vec![0.0; PLAYER_SIZE]);
+    // Pad to fixed size
+    mates.resize(2, vec![0.0; PLAYER_SIZE]);
+    opps.resize(3, vec![0.0; PLAYER_SIZE]);
     
     // Add counts
     o.push(mates.len() as f32 / 2.0);
@@ -287,17 +307,19 @@ pub fn build_obs(
 }
 
 /// The action mask of car `c` (DefaultAction::GetActionMask).
+/// Real ByteAction.cpp:114-118 restores jump when HasFlipOrJump OR contact normal.z > 0.9.
 pub fn action_mask(c: &CarState, mask: &mut [bool]) {
     let t = action_table();
     let on_ground = flags(c).on_ground;
     let flip = has_flip_or_jump(c, on_ground);
+    let contact_up = c.world_contact_normal().is_some_and(|n| n.z > 0.9);
     let mut any = false;
     for i in 0..N_ACTIONS {
         let mut m = if on_ground { t.ground[i] } else { t.air[i] };
         if c.boost == 0.0 && t.boost[i] {
             m = false;
         }
-        if flip && t.jump[i] {
+        if (flip || contact_up) && t.jump[i] {
             m = true;
         }
         mask[i] = m;

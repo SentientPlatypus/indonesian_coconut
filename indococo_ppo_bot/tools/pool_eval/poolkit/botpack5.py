@@ -197,10 +197,21 @@ class GigaLearn(Agent):
         return np.asarray(obs, dtype=np.float32)
 
     def mask(self, car) -> np.ndarray:
+        """Real ByteAction.cpp:114-118 restores jump when HasFlipOrJump OR contact normal.z > 0.9.
+        Fallback from RLBotClient.cpp:73-78: upside-down on floor with low velocity."""
         m = self.m_ground.copy() if car.on_ground else self.m_air.copy()
         if car.boost_amount == 0:
             m &= ~self.m_boost
-        if has_flip_or_jump(car):
+        # Turtle recovery: restore jump if has flip or upside-down on floor
+        has_jump = has_flip_or_jump(car)
+        contact_up = (
+            not car.is_demolished
+            and not car.on_ground
+            and car.physics.rotation.up.z < -0.9
+            and 0 <= car.physics.location.z < 60
+            and abs(car.physics.velocity.z) < 50
+        )
+        if has_jump or contact_up:
             m |= self.m_jump
         return m
 
@@ -318,24 +329,35 @@ class Megabyte(GigaLearn):
         inv = me.team_num == 1
         # _phys already applies INV=[-1,-1,1] for orange, matching ByteObs C++ InvertPhys
         bpos, bvel, bang, _ = self._phys(s.ball, inv)
-        # ByteObs pad timers: use OPPOSITE orientation (legacy behavior)
-        # Orange gets non-inverted timers, blue gets inverted timers
-        timers = np.asarray(s.inverted_boost_pad_timers if not inv else s.boost_pad_timers, dtype=np.float64)
-        avail = timers == 0
-        pads = np.where(avail, 1.0, 1.0 / (1.0 + timers))
-        obs = [*(bpos / 5000), *(bvel / 2300), *(bang / 3), *self.prev_action, *pads]
+        # Real ByteObs.cpp:70-94 uses player-relative pad ACTIVITY but opposite-relative TIMERS (legacy).
+        # Blue slot k: active[k] ? 1 : 1/(1+timer[33-k])
+        # Orange slot k: active[33-k] ? 1 : 1/(1+timer[k])
+        pad_order = list(range(34))  # canonical order
+        pads_obs = []
+        for k in range(34):
+            active_idx = (33 - k) if inv else k
+            timer_idx = k if inv else (33 - k)
+            active_timers = s.inverted_boost_pad_timers if inv else s.boost_pad_timers
+            opposite_timers = s.boost_pad_timers if inv else s.inverted_boost_pad_timers
+            active = active_timers[active_idx] == 0
+            timer = opposite_timers[timer_idx]
+            val = 1.0 if active else 1.0 / (1.0 + timer)
+            pads_obs.append(val)
+        obs = [*(bpos / 5000), *(bvel / 2300), *(bang / 3), *self.prev_action, *pads_obs]
         
         mates, opps = [], []
         for cid, car in s.cars.items():
             if cid != view.car_id:
                 (mates if car.team_num == me.team_num else opps).append(car)
-        # Keep closest 2 teammates, 3 opponents
+        # Real ByteObs.cpp:15-32,114-117 sorts by world-space distance squared with carId tie-break
         if len(mates) > 2:
-            dists = [np.linalg.norm(np.array(c.physics.position) - np.array(s.ball.position)) for c in mates]
-            mates = [mates[i] for i in np.argsort(dists)[:2]]
+            mate_data = [(c, np.linalg.norm(np.array(c.physics.position) - np.array(s.ball.position))**2, cid) for cid, c in s.cars.items() if c in mates]
+            mate_data.sort(key=lambda x: (x[1], x[2]))
+            mates = [c for c, _, _ in mate_data[:2]]
         if len(opps) > 3:
-            dists = [np.linalg.norm(np.array(c.physics.position) - np.array(s.ball.position)) for c in opps]
-            opps = [opps[i] for i in np.argsort(dists)[:3]]
+            opp_data = [(c, np.linalg.norm(np.array(c.physics.position) - np.array(s.ball.position))**2, cid) for cid, c in s.cars.items() if c in opps]
+            opp_data.sort(key=lambda x: (x[1], x[2]))
+            opps = [c for c, _, _ in opp_data[:3]]
         
         obs += [len(mates) / 2.0, len(opps) / 3.0]
         obs += self._player_obs(me, inv, bpos, bvel) + [1.0]  # self + padding
