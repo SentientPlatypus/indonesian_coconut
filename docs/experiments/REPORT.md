@@ -1221,6 +1221,25 @@ Promoted on every gate (bp5 exactly at −1.0 tol; Galactus −3.4 within −4).
 
 ![ST9 mid-run and finals](figures/st9_mid.png)
 
+### 11.8n ST10 results: ST7_final + Megabyte@2.0, from ST9 9628.4M (→ 10628.6M). NEW BEST (manual override)
+
+ST10 kept the ST9 recipe (OPPCH 0.55, ENT 0.016, Galactus weight 2.5, gamma 0.998, 300k/iter, LR 5e-5, flip_reset 70, ST4/ST5/ST6 in EXTRA_OPPS) and added ST7_final at w1.0 plus Megabyte at weight 2.0 via `indococo-train-mega`. Trained ~6:38 AM ET to ~1:05 PM ET Nov 6; finals done 1:31 PM ET Nov 6.
+
+Finals checkpoint = best mid chunk 10628.6M (`exp_ST10/checkpoints/1793988079`):
+
+| Metric | ST10 10628.6M | ST9 9628.4M (prev best) |
+|---|---|---|
+| vs BEST (500 g) | **54.6%** (273-227) | — |
+| vs FR4 (500 g) | 71.2% | 72.8% |
+| pool400 | **92.29** | 91.67 |
+| botpack5 | **66.75** | 63.21 |
+| Galactus (500 g) | **24.4%** | 21.8% |
+| Megabyte (500 g, report-only) | **71.0%** | — |
+| gen panel min / mean | **24.4% / 79.43%** | 21.8% / 77.5% |
+
+`st_promote.py` initially set **promote=false** only on FR4 (−1.6 vs −1.0 tol). User approved a **manual override** at 1:36 PM ET Nov 6: FR4 noise on 500 games is ~±2 pt, and every other gate plus the gen panel improved (Kira +11.75, Chronos +1.75, 1v1.pt +5.0, Nexto +0.75, Galactus +2.6). Mid-run (200 g) peak Galactus 29.5% at 10089.5M; Megabyte mid mostly 0.65–0.75. **ST10 10628.6M is the new best** (manual) and is shipped as `checkpoints_to_test/st10_10629M.bpk`. ST11 (ST10 + ST8_final + Megabyte@2.0) auto-started from this chunk at 1:31 PM ET; after the override, ST11 mid/finals measure against ST10, and ST12 will inherit ST10 as BEST unless ST11 promotes.
+
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):

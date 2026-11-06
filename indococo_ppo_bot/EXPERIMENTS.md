@@ -1304,8 +1304,12 @@ Read-out: OPPCH 0.55 cleared every gate vs ST8, with a clear Ripple gain and a G
 ## ST10 (generalization): add ST7_final + Megabyte@2.0
 On top of ST9: fold ST7_final into EXTRA_OPPS at w1.0 and add Megabyte (SubparN0va/ByteBotpack; strong air-dribble-bump dodge) at weight 2.0 via `indococo-train-mega` (`MEGA_WEIGHT=2.0`). Galactus stays 2.5, flip_reset 70. From ST9 best chunk. Megabyte mid/final evals are report-only (not a promotion gate).
 
-## ST11 (generalization): add ST8_final to EXTRA_OPPS at w1.0
-One change on top of ST10: face the previously promoted ST8 best in-league. Same Megabyte@2.0 / Galactus 2.5. From ST10 best chunk.
+## ST10 results (Nov 6, 2026, ~1:31 PM ET): MANUAL PROMOTE, new best ST10 10628.6M
+Finals ckpt = best mid 10628.6M (exp_ST10/checkpoints/1793988079). 54.6% vs ST9 (500 g), 71.2% vs FR4 (ST9 72.8%; −1.6 vs −1.0 tol → auto promote=false), pool400 92.29 (ST9 91.67), bp5 66.75 (ST9 63.21), Galactus 24.4% (ST9 21.8%), Megabyte 71.0% (report-only). Gen panel min 24.4% (Galactus), mean 79.43% (ST9 21.8% / 77.5%).
+User override 1:36 PM ET: FR4 drop within ~2 pt noise; all other gates + gen panel improved. Shipped checkpoints_to_test/st10_10629M.bpk. BESTF=/home/ubuntu/ippo_runs/st10_final. ST11 mid/finals re-pointed to ST10; st_launch follow-up refreshes BESTF from latest promote=true when the current run does not promote.
 
-## ST12 (generalization): add ST9_final (new BEST) to EXTRA_OPPS at w1.0
-One change on top of ST11: fold the newly promoted ST9 best into the league at w1.0. Same Megabyte@2.0 / Galactus 2.5 / OPPCH 0.55 / ENT 0.016. From ST11 best chunk. Hypothesis: after Galactus dipped on ST9 finals, keeping Megabyte diversity while facing the new best in-league should stabilize the panel without overweighting any single style.
+## ST11 (generalization): add ST8_final to EXTRA_OPPS at w1.0
+One change on top of ST10: face the previously promoted ST8 best in-league. Same Megabyte@2.0 / Galactus 2.5. From ST10 best chunk (training weights); measured vs ST10 after the manual override.
+
+## ST12 (generalization): add ST9_final to EXTRA_OPPS at w1.0
+One change on top of ST11: fold ST9_final into the league at w1.0. Same Megabyte@2.0 / Galactus 2.5 / OPPCH 0.55 / ENT 0.016. From ST11 best chunk. BEST for measurement is ST10 (manual) unless ST11 promotes. Hypothesis: after Galactus dipped on ST9 finals, keeping Megabyte diversity while facing recent strengths in-league should stabilize the panel without overweighting any single style.
