@@ -308,14 +308,17 @@ pub fn action_mask(c: &CarState, mask: &mut [bool]) {
     }
 }
 
-/// Layer in a Sequential: Linear or LayerNorm.
+/// Layer in a Sequential: Linear, LayerNorm, or ReLU activation.
 enum Layer {
     Linear { w: tch::Tensor, b: tch::Tensor },
-    LayerNorm { weight: tch::Tensor, bias: tch::Tensor },
+    LayerNorm { weight: tch::Tensor, bias: tch::Tensor, eps: f64 },
+    ReLU,
 }
 
 /// Rebuilt Sequential from TorchScript module parameters.
 /// The .lt files have no `forward` method, so we extract params and run manually.
+/// Matches Python's load_gigalearn_seq: Linear/LayerNorm layers with ReLU activations
+/// between them (pattern depends on GigaLearn's export, typically Linear->LayerNorm->ReLU).
 pub struct SequentialModule {
     layers: Vec<Layer>,
     device: tch::Device,
@@ -327,6 +330,7 @@ impl SequentialModule {
             .map_err(|e| format!("{}: {e}", path.display()))?;
         
         // Extract named parameters (format: "0.weight", "0.bias", "1.weight", etc.)
+        // TorchScript returns them in weight-then-bias order already, so don't re-sort.
         let mut params = module.named_parameters()
             .map_err(|e| format!("named_parameters: {e}"))?;
         
@@ -335,15 +339,8 @@ impl SequentialModule {
             *tensor = tensor.to(device);
         }
         
-        params.sort_by(|a, b| {
-            // Sort by numeric prefix
-            let a_num: usize = a.0.split('.').next().unwrap_or("0").parse().unwrap_or(0);
-            let b_num: usize = b.0.split('.').next().unwrap_or("0").parse().unwrap_or(0);
-            a_num.cmp(&b_num).then_with(|| a.0.cmp(&b.0))
-        });
-        
-        // Group into layers: each layer has weight + bias
-        let mut layers = Vec::new();
+        // Group into layers: each param pair is Linear or LayerNorm
+        let mut param_layers = Vec::new();
         let mut i = 0;
         while i < params.len() {
             let (name, _) = &params[i];
@@ -360,13 +357,40 @@ impl SequentialModule {
             i += 1;
             
             // Distinguish Linear (2D weight) from LayerNorm (1D weight)
-            let layer = if w.dim() == 2 {
+            if w.dim() == 2 {
                 // Linear layer: transpose weight for correct matmul direction
-                Layer::Linear { w: w.transpose(0, 1), b }
+                param_layers.push(Layer::Linear { w: w.transpose(0, 1), b });
             } else {
-                Layer::LayerNorm { weight: w, bias: b }
-            };
-            layers.push(layer);
+                param_layers.push(Layer::LayerNorm { weight: w, bias: b, eps: 1e-5 });
+            }
+        }
+        
+        // Build full Sequential with ReLU activations
+        // GigaLearn pattern: Linear -> LayerNorm -> ReLU -> ... -> final Linear (no ReLU)
+        // Insertion rule: add ReLU after LayerNorm, or after Linear if no LayerNorm follows
+        let mut layers = Vec::new();
+        for (idx, layer) in param_layers.iter().enumerate() {
+            layers.push(match layer {
+                Layer::Linear { w, b } => Layer::Linear { w: w.shallow_clone(), b: b.shallow_clone() },
+                Layer::LayerNorm { weight, bias, eps } => Layer::LayerNorm { 
+                    weight: weight.shallow_clone(), 
+                    bias: bias.shallow_clone(), 
+                    eps: *eps 
+                },
+                _ => unreachable!(),
+            });
+            
+            // Check if we should add ReLU after this layer
+            let is_last = idx == param_layers.len() - 1;
+            if !is_last {
+                let next_is_layernorm = matches!(param_layers[idx + 1], Layer::LayerNorm { .. });
+                let is_layernorm = matches!(layer, Layer::LayerNorm { .. });
+                
+                // Add ReLU after LayerNorm, or after Linear if next is not LayerNorm
+                if is_layernorm || !next_is_layernorm {
+                    layers.push(Layer::ReLU);
+                }
+            }
         }
         
         Ok(Self { layers, device })
@@ -375,22 +399,20 @@ impl SequentialModule {
     pub fn forward(&self, input: &tch::Tensor) -> tch::Tensor {
         tch::no_grad(|| {
             let mut x = input.shallow_clone();
-            let last_idx = self.layers.len() - 1;
-            for (i, layer) in self.layers.iter().enumerate() {
+            for layer in &self.layers {
                 x = match layer {
                     Layer::Linear { w, b } => x.matmul(w) + b,
-                    Layer::LayerNorm { weight, bias } => {
+                    Layer::LayerNorm { weight, bias, eps } => {
+                        // LayerNorm: normalize over last dim, then affine transform
                         let mean = x.mean_dim(&[1i64][..], true, x.kind());
                         let xc = &x - &mean;
                         let var = xc.pow_tensor_scalar(2).mean_dim(&[1i64][..], true, x.kind());
-                        let normalized = &xc / (var + 1e-5).sqrt();
-                        normalized * weight + bias
+                        let normalized = &xc / (var + *eps).sqrt();
+                        // Broadcast weight and bias (they are 1D, need to match last dim)
+                        normalized * weight.unsqueeze(0) + bias.unsqueeze(0)
                     }
+                    Layer::ReLU => x.relu(),
                 };
-                // ReLU activation after each layer except the last (logits)
-                if i < last_idx {
-                    x = x.relu();
-                }
             }
             x
         })

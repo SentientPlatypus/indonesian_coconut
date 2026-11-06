@@ -13,6 +13,7 @@
 //! indococo-train galactus-h2h <ckpt> <galactus_dir> <games> [threads] [dump.jsonl]  # Rust Galactus parity
 //! indococo-train megabyte-obs <megabyte_dir> <states.jsonl>    # Dump Megabyte obs for validation
 //! indococo-train megabyte-h2h <ckpt> <megabyte_dir> <games> [threads]  # Rust Megabyte h2h
+//! indococo-train megabyte-logits <megabyte_dir> <obs.jsonl>    # Rust Megabyte logits for parity check
 //! ```
 
 use std::collections::BTreeMap;
@@ -1029,6 +1030,7 @@ fn main() {
             arg(3).parse().expect("games"),
             args.get(4).map_or(8, |t| t.parse().expect("threads")),
         ),
+        "megabyte-logits" => megabyte_logits(Path::new(arg(1)), Path::new(arg(2))),
         other => panic!("unknown mode {other:?}"),
     }
 }
@@ -1229,6 +1231,57 @@ fn megabyte_obs(mdir: &Path, _states_path: &Path) {
         }
     }
     eprintln!("✓ Generated 20 observations (233 floats each)");
+}
+
+/// `megabyte-logits`: read obs vectors from JSON and output logits + argmax.
+/// Each line should be {"obs": [233 floats]}. Outputs {"logits": [90 floats], "action": int}.
+fn megabyte_logits(mdir: &Path, obs_file: &Path) {
+    use indococo_bot::megabyte as mx;
+    use std::io::{BufRead, BufReader};
+    
+    init_from_default(true).expect("load collision meshes");
+    let dev = tch::Device::Cuda(0);
+    let mb = mx::MegabytePolicy::load(mdir, dev).expect("megabyte weights");
+    
+    let f = std::fs::File::open(obs_file).expect("open obs file");
+    let reader = BufReader::new(f);
+    
+    for line in reader.lines() {
+        let line = line.expect("read line");
+        if line.trim().is_empty() {
+            continue;
+        }
+        
+        let json: serde_json::Value = serde_json::from_str(&line).expect("parse JSON");
+        let obs_arr = json["obs"].as_array().expect("obs array");
+        let obs: Vec<f32> = obs_arr.iter()
+            .map(|v| v.as_f64().expect("obs float") as f32)
+            .collect();
+        
+        if obs.len() != mx::OBS_SIZE {
+            eprintln!("Warning: expected {} obs, got {}", mx::OBS_SIZE, obs.len());
+            continue;
+        }
+        
+        let mask = vec![false; mx::N_ACTIONS];
+        let logits = mb.logits(&obs, 1);
+        
+        // Find argmax
+        let mut max_idx = 0;
+        let mut max_val = logits[0];
+        for (i, &v) in logits.iter().enumerate() {
+            if v > max_val {
+                max_val = v;
+                max_idx = i;
+            }
+        }
+        
+        let out = serde_json::json!({
+            "logits": logits,
+            "action": max_idx,
+        });
+        println!("{out}");
+    }
 }
 
 fn megabyte_h2h(ckpt: &Path, mdir: &Path, games: usize, threads: usize) {
