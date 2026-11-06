@@ -1278,3 +1278,20 @@ Read-out: OPPCH 0.50 helped league-style opponents and Chronos but cost some Kir
 
 ## ST8 (generalization): add recent frozen snapshots ST4/ST5/ST6 to the league
 One change on top of ST7: three more frozen self-checkpoints (ST4-final 6032.3M, ST5-final 6192.8M, ST6-final 6954.5M) join EXTRA_OPPS at weight 1.0 each. Hypothesis: the newest generations play differently from the older eras already in the pool, and ST6 lost ground on Kira/Ripple/Dice-style play, so more distinct recent opponents should keep the policy from specializing against the old snapshots. Galactus stays 2.5, flip_reset 70, entropy as in ST7.
+
+## ST7 results (Nov 5, 2026, ~5:26 PM ET): NOT promoted
+Finals ckpt = best mid 7666.1M (exp_ST7/checkpoints/1793909607). 51.8% vs ST6 (500 g; under 52% bar), FR4 72.8%, pool400 92.12 (ST6 92.21), bp5 64.38 (ST6 63.42), Galactus 23.0% (ST6 23.8%). BEST stayed ST6. ST8 auto-launched from this chunk.
+
+## ST8 results (Nov 5, 2026, 11:57 PM ET): PROMOTED, new best ST8 8666.3M
+Finals ckpt = 8666.3M (exp_ST8/checkpoints/1793939483). 55.4% vs ST6 (500 g), 73.0% vs FR4 (ST6 71.2%), pool400 91.58 (ST6 92.21; within 1.0), bp5 64.21 (ST6 63.42), Galactus 25.2% (ST6 23.8%). Gen panel min 25.2% (Galactus), mean 77.87% (ST6 23.8% / 77.63%).
+Per-bot vs ST6: Kira +6.5, Dice +2.5, 430M +2.5, Galactus +1.4, Seer +0.5, Immortal +0.25; 1v1.pt −4.5, Ripple −3.0, Chronos −1.25, Necto −0.75, Nexto −0.75, Element −0.5, Galactus-bp5 −0.5.
+Read-out: adding recent ST eras helped FR4/botpack/Galactus enough to clear every gate despite a small pool dip. Shipped checkpoints_to_test/st8_8666M.bpk. ST9 runs from this chunk, measured vs ST8.
+
+## ST9 (generalization): raise OPPCH 0.50 → 0.55
+One change on top of ST8: more of each iteration faces the diverse fixed/external pool. Same ENT 0.016, Galactus 2.5, flip_reset 70. From ST8 best chunk.
+
+## ST10 (generalization): add ST7_final to EXTRA_OPPS at w1.0
+One change on top of ST9: fold the newest entropy-bumped style into the league. Same OPPCH 0.55 / ENT 0.016 / Galactus 2.5. From ST9 best chunk.
+
+## ST11 (generalization): add ST8_final (new BEST) to EXTRA_OPPS at w1.0
+One change on top of ST10: face the newly promoted best in-league. Same OPPCH 0.55 / ENT 0.016 / Galactus 2.5. From ST10 best chunk.

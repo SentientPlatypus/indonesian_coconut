@@ -1124,6 +1124,25 @@ Promoted on every gate. More league time recovered Chronos (+10.0) and Nexto (+3
 
 ![ST6 mid-run and finals](figures/st6_mid.png)
 
+### 11.8l ST8 results: recent frozen ST4/ST5/ST6 in the league, from ST7 mid 7666.1M (→ 8666.3M). NEW BEST
+
+ST8 kept the ST7 recipe (broader league + OPPCH 0.50 + ENT 0.016, Galactus weight 2.5, gamma 0.998, 300k/iter, LR 5e-5, flip_reset 70) and changed one thing: ST4/ST5/ST6 frozen finals joined EXTRA_OPPS at w1.0 each. Trained ~5:26 PM ET Nov 5 to ~11:34 PM ET; finals done 11:57 PM ET Nov 5.
+
+Finals checkpoint = end/best chunk 8666.3M (`exp_ST8/checkpoints/1793939483`):
+
+| Metric | ST8 8666.3M | ST6 6954.5M (prev best) |
+|---|---|---|
+| H2H vs best (500 g) | **55.4%** | – |
+| vs FR4 (500 g) | **73.0%** | 71.2% |
+| pool400 | 91.58 (1v1.pt 79.25, 430M 83.25, Nexto 92.0, Necto 97.5, Element 98.75, Immortal 98.75) | 92.21 (83.75 / 80.75 / 92.75 / 98.25 / 99.25 / 98.5) |
+| botpack5 | **64.21** (Ripple 58.0, Kira 61.75, Dice 62.75, Chronos 77.25, Galactus 25.5, Seer 100) | 63.42 (61.0 / 55.25 / 60.25 / 78.5 / 26.0 / 99.5) |
+| Galactus (500 g) | **25.2%** | 23.8% |
+| Gen panel min / mean | **25.2% / 77.87%** | 23.8% / 77.63% |
+
+Promoted on every gate (pool −0.63 within 1.0 tol). Recent-gen league lifted FR4, botpack mean (Kira +6.5, Dice +2.5), and Galactus (+1.4), while giving back some 1v1.pt (−4.5) and a touch of Nexto (−0.75); Chronos −1.25, Ripple −3.0. Mid-run (200 g) peak Galactus 31.5% at 8077.1M; late mid vs ST6 often 0.45–0.60. ST7 finals earlier the same day were not promoted (51.8% vs ST6). Shipped as `checkpoints_to_test/st8_8666M.bpk`. ST9 (OPPCH 0.55) auto-started from this chunk at 11:57 PM ET and measures against ST8; ST10 then ST11 are queued.
+
+![ST8 mid-run and finals](figures/st8_mid.png)
+
 ## 12. Summary of checkpoints
 
 | checkpoint | steps | lineage | best evidence | where |
