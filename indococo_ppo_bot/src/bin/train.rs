@@ -163,6 +163,14 @@ fn load_external_opponents(cfg: &OpponentsConfig, dev: &Device) -> Vec<ExternalO
                     indococo_bot::galactus::GalactusPolicy::load(&o.path, dev)
                         .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
                 ),
+                "megabyte" => {
+                    // For now, assume CUDA device 0 if backend is torch/cuda
+                    let tch_dev = tch::Device::Cuda(0);
+                    std::sync::Arc::new(
+                        indococo_bot::megabyte::MegabytePolicy::load(&o.path, tch_dev)
+                            .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
+                    )
+                }
                 other => panic!("opponent {}: unknown external kind {other:?}", o.name),
             };
             ExternalOpponent { name: o.name.clone(), policy, weight: o.weight }
@@ -267,7 +275,7 @@ fn device(backend: &str) -> Device {
         #[cfg(feature = "torch")]
         #[allow(deprecated)]
         "torch" => Device::libtorch_cuda(0),
-        "cuda" => Device::cuda(0),
+        "cuda" => Device::libtorch_cuda(0),
         other => panic!("backend {other:?} is not compiled in"),
     }
 }

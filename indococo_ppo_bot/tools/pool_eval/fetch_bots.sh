@@ -27,8 +27,9 @@ clone https://github.com/stepkrav06/Kira Kira ba73b0557c4fa47b0408d09a5dd6b55059
 clone https://github.com/V1XT1/Dice-BotPackV5 Dice-BotPackV5 88198294fa16bbee617fe38b3cf6e5ebb30e4569
 clone https://github.com/KingJake3113/Chronos Chronos 4f8fdd27e4802d977b33b9ade4759ff6aeaca5aa
 clone https://github.com/SoldierDoge/GalactusV2 GalactusV2 217324c2fc516048effe0407595fa61c2ebc6863
+clone https://github.com/SubparN0va/ByteBotpack ByteBotpack HEAD
 
-mkdir -p "$DEST"/{nexto,necto,element,immortal,ripple,kira,dice,chronos/rlbot,kira/rlbot,dice/rlbot,galactus/rlbot}
+mkdir -p "$DEST"/{nexto,necto,element,immortal,ripple,kira,dice,chronos/rlbot,kira/rlbot,dice/rlbot,galactus/rlbot,megabyte}
 cp "$SRC"/NectoFamily/nexto/{agent.py,nexto_obs.py,nexto-model.pt} "$DEST/nexto/"
 cp "$SRC"/NectoFamily/necto/{agent.py,necto_obs.py,necto-model.pt} "$DEST/necto/"
 cp -r "$SRC"/Elementv5/src/{agent.py,obs.py,model.p,sequences} "$DEST/element/"
@@ -39,6 +40,7 @@ cp -r "$SRC"/Ripple-RLBot/{src,bots,LICENSE,NOTICE} "$DEST/ripple/"
 for b in kira:Kira dice:Dice-BotPackV5 chronos:Chronos galactus:GalactusV2; do
   cp "$SRC/${b#*:}"/rlbot/{POLICY.lt,SHARED_HEAD.lt} "$DEST/${b%%:*}/rlbot/"
 done
+cp "$SRC"/ByteBotpack/rlbot/models/megabyte/{POLICY.lt,SHARED_HEAD.lt} "$DEST/megabyte/"
 
 if [[ -n ${2:-} ]]; then mkdir -p "$DEST/indococo_1v1"; cp "$2" "$DEST/indococo_1v1/1v1.pt"; fi
 if [[ -n ${3:-} ]]; then mkdir -p "$DEST/indococo_430M"; cp "$3" "$DEST/indococo_430M/policy.safetensors"; fi

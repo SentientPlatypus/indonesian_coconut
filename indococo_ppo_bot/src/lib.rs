@@ -16,6 +16,8 @@ pub mod events;
 pub mod expert;
 #[cfg(feature = "train")]
 pub mod galactus;
+#[cfg(feature = "train")]
+pub mod megabyte;
 pub mod math;
 pub mod obs;
 pub mod resets;

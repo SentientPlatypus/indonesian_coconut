@@ -300,6 +300,58 @@ class Galactus(GigaLearn):
         return np.asarray(obs, dtype=np.float32)
 
 
+class Megabyte(GigaLearn):
+    """Megabyte (SubparN0va/ByteBotpack, MIT 2026): ByteObs (233) + DefaultAction.
+    
+    233 obs: ball (9), prev action (8), 34 pads, teammate count / 2, opponent count / 3,
+    self (30), 2 teammate slots (30 each, zero padded), 3 opponent slots (30 each, zero padded).
+    Player (30): pos, forward, up, vel, angvel, local angvel, local ball pos/vel,
+    boost, on_ground, has_flip, is_demoed, has_jumped, padding 1.0.
+    Orange mirrors x and y (NOT z). Pad timers use the OPPOSITE orientation from
+    the player-relative pads (legacy behavior).
+    """
+    def __init__(self, directory: str) -> None:
+        super().__init__(directory, padded=0, activation="relu", model_dir="")
+
+    def build_obs(self, view: AgentView) -> np.ndarray:
+        s, me = view.state, view.car
+        inv = me.team_num == 1
+        bpos, bvel, bang, _ = self._phys(s.ball, inv)
+        # ByteObs mirrors x and y, NOT z (unlike Galactus)
+        if inv:
+            bpos = bpos * np.array([-1, -1, 1])
+            bvel = bvel * np.array([-1, -1, 1])
+            bang = bang * np.array([-1, -1, 1])
+        timers = np.asarray(s.inverted_boost_pad_timers if not inv else s.boost_pad_timers, dtype=np.float64)
+        avail = timers == 0
+        pads = np.where(avail, 1.0, 1.0 / (1.0 + timers))
+        obs = [*(bpos / 5000), *(bvel / 2300), *(bang / 3), *self.prev_action, *pads]
+        
+        mates, opps = [], []
+        for cid, car in s.cars.items():
+            if cid != view.car_id:
+                (mates if car.team_num == me.team_num else opps).append(car)
+        # Keep closest 2 teammates, 3 opponents
+        if len(mates) > 2:
+            dists = [np.linalg.norm(np.array(c.physics.position) - np.array(s.ball.position)) for c in mates]
+            mates = [mates[i] for i in np.argsort(dists)[:2]]
+        if len(opps) > 3:
+            dists = [np.linalg.norm(np.array(c.physics.position) - np.array(s.ball.position)) for c in opps]
+            opps = [opps[i] for i in np.argsort(dists)[:3]]
+        
+        obs += [len(mates) / 2.0, len(opps) / 3.0]
+        obs += self._player_obs(me, inv, bpos, bvel) + [1.0]  # self + padding
+        mate_obs = [self._player_obs(c, inv, bpos, bvel) + [1.0] for c in mates]
+        opp_obs = [self._player_obs(c, inv, bpos, bvel) + [1.0] for c in opps]
+        mate_obs += [[0.0] * 30] * (2 - len(mate_obs))
+        opp_obs += [[0.0] * 30] * (3 - len(opp_obs))
+        np.random.shuffle(mate_obs)
+        np.random.shuffle(opp_obs)
+        for p in mate_obs + opp_obs:
+            obs += p
+        return np.asarray(obs, dtype=np.float32)
+
+
 class Seer(Agent):
     """Seer (Neville Walo, RLBotPack v4 `RLBotPack/Seer`): 1v1 LSTM (512) policy.
 
