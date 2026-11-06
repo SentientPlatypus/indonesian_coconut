@@ -21,9 +21,9 @@ These are real RLBot matches (separate from sim eval numbers elsewhere in this R
 | Bot | Rank | Checkpoint that beat it | Date beaten | Score | Replay |
 |---|---|---|---|---|---|
 | Psyonix Allstar | TBD | pending | pending | pending | pending |
-| Element | Champion | pending | pending | pending | pending |
+| Element | Champion | V3 checkpoint (Python policy) | 2025-12-28 | 47-3 | [ballchasing](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b) |
 | Necto | Champion | pending | pending | pending | pending |
-| Nexto | Grand Champion | pending | pending | pending | pending |
+| Nexto | Grand Champion | E2G1 (`PPO_POLICY_V4_E2G1.pt`, Python policy) | 2026-09-30 | 42-11 | [ballchasing](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30) |
 | Kira | TBD | pending | pending | pending | pending |
 | Dice | TBD | pending | pending | pending | pending |
 | Chronos | SSL | pending | pending | pending | pending |
