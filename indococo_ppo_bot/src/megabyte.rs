@@ -367,7 +367,10 @@ impl SequentialModule {
         
         // Build full Sequential with ReLU activations
         // GigaLearn pattern: Linear -> LayerNorm -> ReLU -> ... -> final Linear (no ReLU)
-        // Insertion rule: add ReLU after LayerNorm, or after Linear if no LayerNorm follows
+        // Insertion rule:
+        // - ALWAYS add ReLU after LayerNorm (even if it's the last param layer)
+        // - Add ReLU after Linear only if next is not LayerNorm
+        // - Never add ReLU after the final Linear (logits)
         let mut layers = Vec::new();
         for (idx, layer) in param_layers.iter().enumerate() {
             layers.push(match layer {
@@ -380,14 +383,17 @@ impl SequentialModule {
                 _ => unreachable!(),
             });
             
-            // Check if we should add ReLU after this layer
+            let is_layernorm = matches!(layer, Layer::LayerNorm { .. });
             let is_last = idx == param_layers.len() - 1;
-            if !is_last {
+            
+            // Always add ReLU after LayerNorm
+            if is_layernorm {
+                layers.push(Layer::ReLU);
+            }
+            // Add ReLU after Linear only if next is not LayerNorm and this is not the final Linear
+            else if !is_last {
                 let next_is_layernorm = matches!(param_layers[idx + 1], Layer::LayerNorm { .. });
-                let is_layernorm = matches!(layer, Layer::LayerNorm { .. });
-                
-                // Add ReLU after LayerNorm, or after Linear if next is not LayerNorm
-                if is_layernorm || !next_is_layernorm {
+                if !next_is_layernorm {
                     layers.push(Layer::ReLU);
                 }
             }
