@@ -227,12 +227,13 @@ pub fn build_obs(
     // but opposite-relative TIMERS (intentional legacy behavior).
     // Blue slot k: active[k] ? 1 : 1/(1+timer[33-k])
     // Orange slot k: active[33-k] ? 1 : 1/(1+timer[k])
+    let order = cached_pad_order(state);
     let pads = &state.boost_pads;
     for k in 0..34 {
         let active_idx = if inv { 33 - k } else { k };
         let timer_idx = if inv { k } else { 33 - k };
-        let active = pads[active_idx].1.cooldown == 0.0;
-        let timer = pads[timer_idx].1.cooldown;
+        let active = pads[order[active_idx]].1.cooldown == 0.0;
+        let timer = pads[order[timer_idx]].1.cooldown;
         let val = if active { 1.0 } else { 1.0 / (1.0 + timer) };
         o.push(val);
     }
@@ -275,13 +276,17 @@ pub fn build_obs(
         opps.push(p);
     }
     
+    // Capture counts before padding (Real ByteObs.cpp:119-129 emits real counts)
+    let mate_count = mates.len() as f32 / 2.0;
+    let opp_count = opps.len() as f32 / 3.0;
+    
     // Pad to fixed size
     mates.resize(2, vec![0.0; PLAYER_SIZE]);
     opps.resize(3, vec![0.0; PLAYER_SIZE]);
     
     // Add counts
-    o.push(mates.len() as f32 / 2.0);
-    o.push(opps.len() as f32 / 3.0);
+    o.push(mate_count);
+    o.push(opp_count);
     
     // Self observation
     player_obs(&mut o, me, inv, bpos, bvel);

@@ -205,11 +205,11 @@ class GigaLearn(Agent):
         # Turtle recovery: restore jump if has flip or upside-down on floor
         has_jump = has_flip_or_jump(car)
         contact_up = (
-            not car.is_demolished
+            not car.is_demoed
             and not car.on_ground
-            and car.physics.rotation.up.z < -0.9
-            and 0 <= car.physics.location.z < 60
-            and abs(car.physics.velocity.z) < 50
+            and car.physics.rotation_mtx[2, 2] < -0.9
+            and 0 <= car.physics.position[2] < 60
+            and abs(car.physics.linear_velocity[2]) < 50
         )
         if has_jump or contact_up:
             m |= self.m_jump
@@ -330,34 +330,32 @@ class Megabyte(GigaLearn):
         # _phys already applies INV=[-1,-1,1] for orange, matching ByteObs C++ InvertPhys
         bpos, bvel, bang, _ = self._phys(s.ball, inv)
         # Real ByteObs.cpp:70-94 uses player-relative pad ACTIVITY but opposite-relative TIMERS (legacy).
-        # Blue slot k: active[k] ? 1 : 1/(1+timer[33-k])
-        # Orange slot k: active[33-k] ? 1 : 1/(1+timer[k])
-        pad_order = list(range(34))  # canonical order
-        pads_obs = []
-        for k in range(34):
-            active_idx = (33 - k) if inv else k
-            timer_idx = k if inv else (33 - k)
-            active_timers = s.inverted_boost_pad_timers if inv else s.boost_pad_timers
-            opposite_timers = s.boost_pad_timers if inv else s.inverted_boost_pad_timers
-            active = active_timers[active_idx] == 0
-            timer = opposite_timers[timer_idx]
-            val = 1.0 if active else 1.0 / (1.0 + timer)
-            pads_obs.append(val)
+        # Use player-relative activity at index k, and opposite-relative timers at index k.
+        # No additional index reversal - the arrays are already oriented.
+        active_timers = s.inverted_boost_pad_timers if inv else s.boost_pad_timers
+        opposite_timers = s.boost_pad_timers if inv else s.inverted_boost_pad_timers
+        active_arr = np.asarray(active_timers, dtype=np.float64)
+        timer_arr = np.asarray(opposite_timers, dtype=np.float64)
+        pads_obs = np.where(active_arr == 0, 1.0, 1.0 / (1.0 + timer_arr))
         obs = [*(bpos / 5000), *(bvel / 2300), *(bang / 3), *self.prev_action, *pads_obs]
         
-        mates, opps = [], []
+        # Real ByteObs.cpp:15-32,114-117 sorts by world-space distance squared with carId tie-break
+        # Carry (carId, car) pairs, filter by team, sort by distance then carId
+        mate_data = []
+        opp_data = []
         for cid, car in s.cars.items():
             if cid != view.car_id:
-                (mates if car.team_num == me.team_num else opps).append(car)
-        # Real ByteObs.cpp:15-32,114-117 sorts by world-space distance squared with carId tie-break
-        if len(mates) > 2:
-            mate_data = [(c, np.linalg.norm(np.array(c.physics.position) - np.array(s.ball.position))**2, cid) for cid, c in s.cars.items() if c in mates]
-            mate_data.sort(key=lambda x: (x[1], x[2]))
-            mates = [c for c, _, _ in mate_data[:2]]
-        if len(opps) > 3:
-            opp_data = [(c, np.linalg.norm(np.array(c.physics.position) - np.array(s.ball.position))**2, cid) for cid, c in s.cars.items() if c in opps]
-            opp_data.sort(key=lambda x: (x[1], x[2]))
-            opps = [c for c, _, _ in opp_data[:3]]
+                dist_sq = np.linalg.norm(np.array(car.physics.position) - np.array(s.ball.position))**2
+                if car.team_num == me.team_num:
+                    mate_data.append((cid, car, dist_sq))
+                else:
+                    opp_data.append((cid, car, dist_sq))
+        
+        # Sort by distance squared, then by carId, and truncate
+        mate_data.sort(key=lambda x: (x[2], x[0]))
+        opp_data.sort(key=lambda x: (x[2], x[0]))
+        mates = [car for _, car, _ in mate_data[:2]]
+        opps = [car for _, car, _ in opp_data[:3]]
         
         obs += [len(mates) / 2.0, len(opps) / 3.0]
         obs += self._player_obs(me, inv, bpos, bvel) + [1.0]  # self + padding
