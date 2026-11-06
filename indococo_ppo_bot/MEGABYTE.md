@@ -115,19 +115,24 @@ source (`inc/RLGymCPP/ObsBuilders/ByteObs.cpp`,
 
 1. Fetch the weights: `bash tools/pool_eval/fetch_bots.sh ~/eval_bots`.
 2. Build the training binary: `cargo build --release --features torch --bin indococo-train`.
-3. **Observation parity check**:
+3. **Python validation** (generates deterministic states and validates obs builder):
    ```sh
-   # Generate test states and dump Rust obs
-   ./target/release/indococo-train megabyte-obs ~/eval_bots/megabyte states.jsonl > rust_obs.jsonl
-   
-   # Compare against Python reference (manual for now; automation TBD)
-   python tools/megabyte_validate.py ./target/release/indococo-train ~/eval_bots/megabyte
+   python tools/megabyte_validate.py ~/eval_bots/megabyte
    ```
-4. **Head-to-head strength check**:
+4. **Rust observation generation** (outputs 20 JSON lines with obs + action):
    ```sh
-   ./target/release/indococo-train megabyte-h2h <checkpoint> ~/eval_bots/megabyte 100 8
+   ./target/release/indococo-train megabyte-obs ~/eval_bots/megabyte dummy.jsonl
    ```
-   If the bot plays at strength (not random), obs and actions are correct.
+5. **Head-to-head strength check**:
+   ```sh
+   ./target/release/indococo-train megabyte-h2h <checkpoint> ~/eval_bots/megabyte 100 4
+   ```
+   Expected: Megabyte wins ~36% (similar to Python Megabyte vs ST8).
+6. **Compilation test** (verify both with and without torch feature):
+   ```sh
+   cargo check                  # Without torch
+   cargo check --features torch # With torch
+   ```
 5. Run an evaluation against Nexto with Megabyte in the pool:
    ```sh
    # Create a pool with Nexto + Megabyte
