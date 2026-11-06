@@ -316,12 +316,10 @@ class Megabyte(GigaLearn):
     def build_obs(self, view: AgentView) -> np.ndarray:
         s, me = view.state, view.car
         inv = me.team_num == 1
+        # _phys already applies INV=[-1,-1,1] for orange, matching ByteObs C++ InvertPhys
         bpos, bvel, bang, _ = self._phys(s.ball, inv)
-        # ByteObs mirrors x and y, NOT z (unlike Galactus)
-        if inv:
-            bpos = bpos * np.array([-1, -1, 1])
-            bvel = bvel * np.array([-1, -1, 1])
-            bang = bang * np.array([-1, -1, 1])
+        # ByteObs pad timers: use OPPOSITE orientation (legacy behavior)
+        # Orange gets non-inverted timers, blue gets inverted timers
         timers = np.asarray(s.inverted_boost_pad_timers if not inv else s.boost_pad_timers, dtype=np.float64)
         avail = timers == 0
         pads = np.where(avail, 1.0, 1.0 / (1.0 + timers))

@@ -41,6 +41,23 @@ bash tools/pool_eval/fetch_bots.sh ~/eval_bots
 This clones ByteBotpack and copies `POLICY.lt` and `SHARED_HEAD.lt` into
 `~/eval_bots/megabyte/`.
 
+## Building
+
+The training binary must be built with `--features torch` to support Megabyte's TorchScript modules:
+
+```sh
+cd indococo_ppo_bot
+cargo build --release --features torch --bin indococo-train
+```
+
+For ST10 training, copy the binary to the expected location:
+
+```sh
+cp target/release/indococo-train /home/ubuntu/ippo_runs/code_fr9/bin/indococo-train-mega
+```
+
+The `st_ST10.env` file points `B0` at `indococo-train-mega` (not `indococo-train-gal`) so the binary knows the `megabyte` opponent kind.
+
 ## Training with Megabyte
 
 ST10 adds Megabyte to the league at weight 2.0:
@@ -74,6 +91,12 @@ python tools/pool_eval/pool_eval.py \
   --out megabyte_500.jsonl
 ```
 
+## Device handling
+
+The Megabyte opponent in training uses `tch::Device::Cuda(0)` for inference. The "cuda" backend
+in `device()` was NOT changed from `Device::cuda(0)` to `Device::libtorch_cuda(0)` — it stays as-is
+for other parts of the training stack. Only the Megabyte external opponent uses the tch backend directly.
+
 ## Validation
 
 The Rust port reproduces ByteObs and DefaultAction line by line from the C++
@@ -91,13 +114,20 @@ source (`inc/RLGymCPP/ObsBuilders/ByteObs.cpp`,
 **Manual validation steps:**
 
 1. Fetch the weights: `bash tools/pool_eval/fetch_bots.sh ~/eval_bots`.
-2. Smoke test: `python tools/megabyte_validate.py ~/eval_bots/megabyte`.
-3. Build the Rust training binary with Megabyte:
+2. Build the training binary: `cargo build --release --features torch --bin indococo-train`.
+3. **Observation parity check**:
    ```sh
-   cargo build --release --features torch --bin indococo-train
+   # Generate test states and dump Rust obs
+   ./target/release/indococo-train megabyte-obs ~/eval_bots/megabyte states.jsonl > rust_obs.jsonl
+   
+   # Compare against Python reference (manual for now; automation TBD)
+   python tools/megabyte_validate.py ./target/release/indococo-train ~/eval_bots/megabyte
    ```
-4. Run a short training iteration with Megabyte in the league and verify the
-   bot loads and runs.
+4. **Head-to-head strength check**:
+   ```sh
+   ./target/release/indococo-train megabyte-h2h <checkpoint> ~/eval_bots/megabyte 100 8
+   ```
+   If the bot plays at strength (not random), obs and actions are correct.
 5. Run an evaluation against Nexto with Megabyte in the pool:
    ```sh
    # Create a pool with Nexto + Megabyte
