@@ -1,6 +1,7 @@
 # Indonesian Coconut: Rocket League PPO bot (Rust)
 
 ![indonesian_coconut air dribbling past Ripple v1.0](assets/indococo_vs_ripple_v1.png)
+<p align="center"><img src="assets/highlight.webp" alt="indonesian_coconut highlights" width="100%"></p>
 
 Indonesian Coconut is a 1v1 Rocket League bot trained with PPO on a discrete
 90-action lookup table. On this branch it runs on
