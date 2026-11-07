@@ -11,6 +11,9 @@
 //! indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>  # FR7 replay states
 //! indococo-train normal-obs <ckpt> <setters.toml> <steps> <threads> <out.f32>
 //! indococo-train galactus-h2h <ckpt> <galactus_dir> <games> [threads] [dump.jsonl]  # Rust Galactus parity
+//! indococo-train megabyte-obs <megabyte_dir> <states.jsonl>    # Dump Megabyte obs for validation
+//! indococo-train megabyte-h2h <ckpt> <megabyte_dir> <games> [threads]  # Rust Megabyte h2h
+//! indococo-train megabyte-logits <megabyte_dir> <obs.jsonl>    # Rust Megabyte logits for parity check
 //! ```
 
 use std::collections::BTreeMap;
@@ -163,6 +166,14 @@ fn load_external_opponents(cfg: &OpponentsConfig, dev: &Device) -> Vec<ExternalO
                     indococo_bot::galactus::GalactusPolicy::load(&o.path, dev)
                         .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
                 ),
+                "megabyte" => {
+                    // Megabyte requires tch backend; map from Burn device
+                    let tch_dev = tch::Device::Cuda(0);  // TODO: extract index from dev when it's libtorch_cuda
+                    std::sync::Arc::new(
+                        indococo_bot::megabyte::MegabytePolicy::load(&o.path, tch_dev)
+                            .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
+                    )
+                }
                 other => panic!("opponent {}: unknown external kind {other:?}", o.name),
             };
             ExternalOpponent { name: o.name.clone(), policy, weight: o.weight }
@@ -267,6 +278,7 @@ fn device(backend: &str) -> Device {
         #[cfg(feature = "torch")]
         #[allow(deprecated)]
         "torch" => Device::libtorch_cuda(0),
+        #[cfg(feature = "cuda")]
         "cuda" => Device::cuda(0),
         other => panic!("backend {other:?} is not compiled in"),
     }
@@ -1011,6 +1023,14 @@ fn main() {
             args.get(4).map_or(8, |t| t.parse().expect("threads")),
             args.get(5).map(Path::new),
         ),
+        "megabyte-obs" => megabyte_obs(Path::new(arg(1)), Path::new(arg(2))),
+        "megabyte-h2h" => megabyte_h2h(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3).parse().expect("games"),
+            args.get(4).map_or(8, |t| t.parse().expect("threads")),
+        ),
+        "megabyte-logits" => megabyte_logits(Path::new(arg(1)), Path::new(arg(2))),
         other => panic!("unknown mode {other:?}"),
     }
 }
@@ -1170,6 +1190,226 @@ fn galactus_worker(
                 *g = new_game(k, &mut started);
             } else {
                 (g.state, g.obs) = (res.state, res.obs);
+            }
+        }
+    }
+    out
+}
+
+/// `megabyte-obs`: dump Megabyte obs for various states.
+/// Generates states and runs them for some time to deplete pads, creating non-kickoff obs.
+fn megabyte_obs(mdir: &Path, _states_path: &Path) {
+    use indococo_bot::megabyte as mx;
+    use rlgymppo::ExternalPolicy;
+    
+    init_from_default(true).expect("load collision meshes");
+    let dev = tch::Device::Cuda(0);
+    let mb = mx::MegabytePolicy::load(mdir, dev).expect("megabyte weights");
+    
+    // Generate varied states: kickoffs and mid-game states with some pads consumed
+    let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mut env = create_env(&RewardConfig::default(), &mix);
+    
+    eprintln!("Generating observations from simulated states (including depleted pads)...");
+    let mut count = 0;
+    for seed in 0..20 {
+        let (mut state, _, _) = env.reset();
+        
+        // Advance the state by random steps to create varied pad states
+        for _ in 0..(seed % 8) * 20 {
+            let acts = vec![0; state.cars.len()];
+            env.pre_step(&state, &acts);
+            env.step_physics(8);
+            state = env.post_step().state;
+        }
+        
+        for car_idx in 0..state.cars.len() {
+            let mut obs = vec![0.0f32; mx::OBS_SIZE];
+            let mut mask = vec![false; mx::N_ACTIONS];
+            mb.build(&state, car_idx, &mut obs, &mut mask);
+            let actions = mb.infer(&obs, &mask, 1);
+            
+            let out = serde_json::json!({
+                "state_idx": count,
+                "car": car_idx,
+                "obs": obs,
+                "mask": mask,
+                "action": actions[0],
+            });
+            println!("{out}");
+            count += 1;
+        }
+    }
+    eprintln!("✓ Generated {} observations", count);
+}
+
+/// `megabyte-logits`: read obs vectors from JSON and output logits + argmax.
+/// Each line should be {"obs": [233 floats]}. Outputs {"logits": [90 floats], "action": int}.
+fn megabyte_logits(mdir: &Path, obs_file: &Path) {
+    use indococo_bot::megabyte as mx;
+    use std::io::{BufRead, BufReader};
+    
+    init_from_default(true).expect("load collision meshes");
+    let dev = tch::Device::Cuda(0);
+    let mb = mx::MegabytePolicy::load(mdir, dev).expect("megabyte weights");
+    
+    let f = std::fs::File::open(obs_file).expect("open obs file");
+    let reader = BufReader::new(f);
+    
+    for line in reader.lines() {
+        let line = line.expect("read line");
+        if line.trim().is_empty() {
+            continue;
+        }
+        
+        let json: serde_json::Value = serde_json::from_str(&line).expect("parse JSON");
+        let obs_arr = json["obs"].as_array().expect("obs array");
+        let obs: Vec<f32> = obs_arr.iter()
+            .map(|v| v.as_f64().expect("obs float") as f32)
+            .collect();
+        
+        if obs.len() != mx::OBS_SIZE {
+            eprintln!("Warning: expected {} obs, got {}", mx::OBS_SIZE, obs.len());
+            continue;
+        }
+        
+        let mask = vec![false; mx::N_ACTIONS];
+        let logits = mb.logits(&obs, 1);
+        
+        // Find argmax
+        let mut max_idx = 0;
+        let mut max_val = logits[0];
+        for (i, &v) in logits.iter().enumerate() {
+            if v > max_val {
+                max_val = v;
+                max_idx = i;
+            }
+        }
+        
+        let out = serde_json::json!({
+            "logits": logits,
+            "action": max_idx,
+        });
+        println!("{out}");
+    }
+}
+
+fn megabyte_h2h(ckpt: &Path, mdir: &Path, games: usize, threads: usize) {
+    // Ensure obs extension enabled for 106-wide actor (as galactus-h2h does)
+    unsafe { std::env::set_var("INDOCOCO_OBS_EXT", "1"); }
+    
+    init_from_default(true).expect("load collision meshes");
+    let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let per = games.div_ceil(threads);
+    let t0 = std::time::Instant::now();
+    let res: Vec<[u64; 4]> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..threads).map(|t| {
+            let mix = &mix;
+            s.spawn(move || megabyte_worker(mix, ckpt, mdir, per))
+        }).collect();
+        hs.into_iter().map(|h| h.join().expect("worker")).collect()
+    });
+    let mut tot = [0u64; 4];
+    for r in &res { for i in 0..4 { tot[i] += r[i]; } }
+    let [w, l, d, steps] = tot;
+    let out = serde_json::json!({
+        "a": ckpt, "b": "megabyte(rust)", "games": w + l + d, "wins": w, "losses": l, "draws": d,
+        "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
+        "steps": steps, "seconds": t0.elapsed().as_secs_f64(),
+    });
+    println!("{out}");
+}
+
+fn megabyte_worker(mix: &[WeightedSetter], ckpt: &Path, mdir: &Path, games: usize) -> [u64; 4] {
+    use indococo_bot::megabyte as mx;
+    use rlgymppo::ExternalPolicy;
+    const ENVS: usize = 8;
+    let dev = Device::flex();
+    let na = load_actor(ckpt, &dev);
+    let mb = mx::MegabytePolicy::load(mdir, tch::Device::Cuda(0)).expect("megabyte weights");
+    let mut out = [0u64; 4];
+    let mut started = 0usize;
+    struct G { env: BotEnv, state: GameState, obs: Vec<Vec<f32>>, a_team: u8, live: bool }
+    let mut new_game = |k: usize, started: &mut usize| -> G {
+        let mut env = create_env(&RewardConfig::default(), mix);
+        let (state, obs, _) = env.reset();
+        let live = *started < games;
+        *started += 1;
+        G { env, state, obs, a_team: (k % 2) as u8, live }
+    };
+    let mut g: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
+    let mut mb_obs: Vec<f32> = vec![0.0; ENVS * mx::OBS_SIZE];
+    let mut mb_mask: Vec<bool> = vec![false; ENVS * mx::N_ACTIONS];
+    loop {
+        let live = g.iter().filter(|e| e.live).count();
+        if live == 0 { break; }
+        // Get candidate actions (greedy)
+        let mut oa = Vec::new();
+        for e in g.iter().filter(|e| e.live) {
+            for (i, (info, _)) in e.state.cars.iter().enumerate() {
+                if info.team as u8 == e.a_team {
+                    oa.push(&e.obs[i]);
+                }
+            }
+        }
+        let aa = argmax_actions(&na, &oa, &dev);
+        let mut ia = 0;
+        // Build Megabyte obs and get actions for opponent cars
+        for k in 0..ENVS {
+            if !g[k].live { continue; }
+            let off = k * mx::OBS_SIZE;
+            let moff = k * mx::N_ACTIONS;
+            // Find Megabyte's car (the one NOT on a_team)
+            for (i, (info, _)) in g[k].state.cars.iter().enumerate() {
+                if info.team as u8 != g[k].a_team {
+                    mb.build(&g[k].state, i, &mut mb_obs[off..off + mx::OBS_SIZE], &mut mb_mask[moff..moff + mx::N_ACTIONS]);
+                    break;
+                }
+            }
+        }
+        let mb_acts = mb.infer(&mb_obs, &mb_mask, ENVS);
+        // Step environments with action delay protocol
+        for k in 0..ENVS {
+            if !g[k].live { continue; }
+            let e = &mut g[k];
+            let a_act = aa[ia];
+            ia += 1;
+            let mb_act = mb_acts[k];
+            // Build acts array in game order (blue first, orange second)
+            let mut acts = Vec::new();
+            let mut ext = Vec::new();  // (car_idx, held_controls, new_controls)
+            for (i, (info, car)) in e.state.cars.iter().enumerate() {
+                if info.team as u8 == e.a_team {
+                    acts.push(a_act);
+                } else {
+                    acts.push(0);  // placeholder
+                    ext.push((i, car.controls, mx::controls_of(mb_act)));
+                }
+            }
+            // Apply candidate actions
+            e.env.pre_step(&e.state, &acts);
+            // Hold Megabyte's previous controls for ACTION_DELAY ticks
+            for &(i, held, _) in &ext {
+                e.env.arena.set_car_controls(i, held);
+            }
+            e.env.step_physics(mx::ACTION_DELAY);
+            // Apply Megabyte's new controls for remaining ticks
+            for &(i, _, new) in &ext {
+                e.env.arena.set_car_controls(i, new);
+            }
+            e.env.step_physics(mx::TICK_SKIP - mx::ACTION_DELAY);
+            let res = e.env.post_step();
+            out[3] += 1;
+            if res.is_terminal || res.truncated {
+                let view = g[k].env.get_shared_info().view(&res.state);
+                match view.scoring_team() {
+                    Some(t) if t == g[k].a_team => out[0] += 1,
+                    Some(_) => out[1] += 1,
+                    None => out[2] += 1,
+                }
+                g[k] = new_game(k, &mut started);
+            } else {
+                (g[k].state, g[k].obs) = (res.state, res.obs);
             }
         }
     }

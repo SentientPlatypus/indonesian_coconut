@@ -1,0 +1,6 @@
+# Megabyte (SubparN0va/ByteBotpack, MIT 2026) as a 1v1 eval opponent.
+# 233 obs, 90 actions, tick_skip 8, action_delay 7. Rust port in src/megabyte.rs.
+[[opponent]]
+name = "Megabyte"
+kind = "megabyte"
+path = "~/eval_bots/megabyte"

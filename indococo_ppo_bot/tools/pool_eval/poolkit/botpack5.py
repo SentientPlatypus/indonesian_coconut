@@ -197,10 +197,21 @@ class GigaLearn(Agent):
         return np.asarray(obs, dtype=np.float32)
 
     def mask(self, car) -> np.ndarray:
+        """Real ByteAction.cpp:114-118 restores jump when HasFlipOrJump OR contact normal.z > 0.9.
+        Fallback from RLBotClient.cpp:73-78: upside-down on floor with low velocity."""
         m = self.m_ground.copy() if car.on_ground else self.m_air.copy()
         if car.boost_amount == 0:
             m &= ~self.m_boost
-        if has_flip_or_jump(car):
+        # Turtle recovery: restore jump if has flip or upside-down on floor
+        has_jump = has_flip_or_jump(car)
+        contact_up = (
+            not car.is_demoed
+            and not car.on_ground
+            and car.physics.rotation_mtx[2, 2] < -0.9
+            and 0 <= car.physics.position[2] < 60
+            and abs(car.physics.linear_velocity[2]) < 50
+        )
+        if has_jump or contact_up:
             m |= self.m_jump
         return m
 
@@ -297,6 +308,65 @@ class Galactus(GigaLearn):
             if inv:
                 pv = pv * np.concatenate([INV, INV])
             obs += list(pv[:3] / 5000) + list(pv[3:] / 2300)
+        return np.asarray(obs, dtype=np.float32)
+
+
+class Megabyte(GigaLearn):
+    """Megabyte (SubparN0va/ByteBotpack, MIT 2026): ByteObs (233) + DefaultAction.
+    
+    233 obs: ball (9), prev action (8), 34 pads, teammate count / 2, opponent count / 3,
+    self (30), 2 teammate slots (30 each, zero padded), 3 opponent slots (30 each, zero padded).
+    Player (30): pos, forward, up, vel, angvel, local angvel, local ball pos/vel,
+    boost, on_ground, has_flip, is_demoed, has_jumped, padding 1.0.
+    Orange mirrors x and y (NOT z). Pad timers use the OPPOSITE orientation from
+    the player-relative pads (legacy behavior).
+    """
+    def __init__(self, directory: str) -> None:
+        super().__init__(directory, padded=0, activation="relu", model_dir="")
+
+    def build_obs(self, view: AgentView) -> np.ndarray:
+        s, me = view.state, view.car
+        inv = me.team_num == 1
+        # _phys already applies INV=[-1,-1,1] for orange, matching ByteObs C++ InvertPhys
+        bpos, bvel, bang, _ = self._phys(s.ball, inv)
+        # Real ByteObs.cpp:70-94 uses player-relative pad ACTIVITY but opposite-relative TIMERS (legacy).
+        # Use player-relative activity at index k, and opposite-relative timers at index k.
+        # No additional index reversal - the arrays are already oriented.
+        active_timers = s.inverted_boost_pad_timers if inv else s.boost_pad_timers
+        opposite_timers = s.boost_pad_timers if inv else s.inverted_boost_pad_timers
+        active_arr = np.asarray(active_timers, dtype=np.float64)
+        timer_arr = np.asarray(opposite_timers, dtype=np.float64)
+        pads_obs = np.where(active_arr == 0, 1.0, 1.0 / (1.0 + timer_arr))
+        obs = [*(bpos / 5000), *(bvel / 2300), *(bang / 3), *self.prev_action, *pads_obs]
+        
+        # Real ByteObs.cpp:15-32,114-117 sorts by world-space distance squared with carId tie-break
+        # Carry (carId, car) pairs, filter by team, sort by distance then carId
+        mate_data = []
+        opp_data = []
+        for cid, car in s.cars.items():
+            if cid != view.car_id:
+                dist_sq = np.linalg.norm(np.array(car.physics.position) - np.array(s.ball.position))**2
+                if car.team_num == me.team_num:
+                    mate_data.append((cid, car, dist_sq))
+                else:
+                    opp_data.append((cid, car, dist_sq))
+        
+        # Sort by distance squared, then by carId, and truncate
+        mate_data.sort(key=lambda x: (x[2], x[0]))
+        opp_data.sort(key=lambda x: (x[2], x[0]))
+        mates = [car for _, car, _ in mate_data[:2]]
+        opps = [car for _, car, _ in opp_data[:3]]
+        
+        obs += [len(mates) / 2.0, len(opps) / 3.0]
+        obs += self._player_obs(me, inv, bpos, bvel) + [1.0]  # self + padding
+        mate_obs = [self._player_obs(c, inv, bpos, bvel) + [1.0] for c in mates]
+        opp_obs = [self._player_obs(c, inv, bpos, bvel) + [1.0] for c in opps]
+        mate_obs += [[0.0] * 30] * (2 - len(mate_obs))
+        opp_obs += [[0.0] * 30] * (3 - len(opp_obs))
+        np.random.shuffle(mate_obs)
+        np.random.shuffle(opp_obs)
+        for p in mate_obs + opp_obs:
+            obs += p
         return np.asarray(obs, dtype=np.float32)
 
 

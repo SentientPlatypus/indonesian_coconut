@@ -39,7 +39,7 @@ Ranks are tentative and based on sim win rates. Ripple v1.1 match featured 23 sh
 
 | Path | What it is |
 |---|---|
-| [`indococo_ppo_bot/`](indococo_ppo_bot/README.md) | The Rust bot: rewards (one module each, with parity tests against Python), obs/actions, the trainer (`train`, `import`, `export`, `record`) and the RLBot client. **Start here.** |
+| [`indococo_ppo_bot/`](indococo_ppo_bot/README.md) | The Rust bot: rewards (one module each, with parity tests against Python), obs/actions, the trainer (`train`, `import`, `export`, `record`) and the RLBot client. Includes Rust ports of **Galactus** (`src/galactus.rs`) and **Megabyte** (`src/megabyte.rs`) as frozen league opponents. **Start here.** |
 | `rlbot_indococo_ppo/` | RLBot v5 package: `bot.toml`, Linux and Windows binaries, `weights/actor.bpk`. |
 | [`checkpoints_to_test/`](checkpoints_to_test/README.md) | Candidate policies as `<name>.bpk` (`adb_832M.bpk`, `430M.bpk`) with results. To test one, copy it over `rlbot_indococo_ppo/weights/actor.bpk` and restart the bot. |
 | [`docs/experiments/`](docs/experiments/REPORT.md) | Research report of every training experiment (R0–R3), with figures, data extracts and `make_figures.py`. |
