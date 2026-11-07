@@ -7,7 +7,7 @@
 #
 # Usage: Fine-tune from ST11 checkpoint (~100-200M steps) with this config,
 # then add the resulting .bpk to the frozen opponent league via EXTRA_OPPS.
-extends = "st.toml"
+extends = "../experiments/st.toml"
 
 # Significantly increase demo rewards to incentivize hunting demos
 [weights]

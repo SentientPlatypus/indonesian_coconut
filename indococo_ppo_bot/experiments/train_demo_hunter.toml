@@ -1,12 +1,23 @@
 # Demo-hunter training config: fine-tune from ST11 to create an aggressive
 # demo-hunting opponent for the frozen league.
 #
-# Run: indococo-train train experiments/train_demo_hunter.toml
-# Binary: Build with a distinct name to avoid replacing the running ST13 binary
-# Export: indococo-train export checkpoints/<final> checkpoints_to_test/demo_hunter_<N>M.bpk
+# NOTE: The recommended path is to use the ST-chain launcher infrastructure
+# (hunt_launch.sh on the training box), which handles checkpoint management,
+# opponent setup, and monitoring. This file provides a standalone config for
+# manual runs if needed.
+#
+# Setup:
+# 1. Copy ST11 checkpoint: cp -r checkpoints/<st11_dir> checkpoints_demo_hunter/1/
+# 2. Build distinct binary: cargo build --release --bin indococo-train
+#                          cp target/release/indococo-train target/release/indococo-train-hunt
+# 3. Run: target/release/indococo-train-hunt train experiments/train_demo_hunter.toml
+# 4. Export: target/release/indococo-train-hunt export checkpoints_demo_hunter/<final> \
+#            checkpoints_to_test/demo_hunter_<N>M.bpk
+#
+# For automated runs with the ST launcher, see EXPERIMENTS.md.
 
 reward_config = "config/demo_hunter.toml"
-checkpoints = "checkpoints_demo_hunter"
+checkpoints = "checkpoints_demo_hunter"  # Absolute path recommended: ~/ippo_runs/demo_hunter/checkpoints
 backend = "torch"
 threads = 24
 pools = 2
@@ -21,21 +32,28 @@ gamma = 0.997
 lambda = 0.95
 policy_bf16 = false
 critic_bf16 = true
-save_every = 25_000_000    # Save more frequently for a short run
+save_every = 25_000_000    # Save every 25M steps
 keep_checkpoints = 10
-iterations = 0              # Run until stopped (typically 100-200M steps)
-critic_warmup_steps = 0     # No warm-up: we're resuming from a trained checkpoint
-self_play_old_versions = false   # Pure self-play for the demo-hunter
+iterations = 1500          # 150M steps: 1500 iterations * 100k steps/iter = 150M
+critic_warmup_steps = 0    # No warm-up: resuming from trained ST11 checkpoint
+self_play_old_versions = true   # Train against past demo-hunter versions
 skill_tracker = false
 
-# No LR schedule for short fine-tune (or use a short cosine)
+# No LR schedule for short fine-tune
 [lr_schedule]
 kind = "constant"
 
-# No frozen opponents: this is a specialized fine-tune against itself
+# Frozen opponents: same league as ST configs to maintain baseline competence
+# while specializing in demos. Adjust paths to match your checkpoint locations.
 [opponents]
-chance = 0.0
-past_versions_weight = 0.0
+chance = 0.25              # 25% of iterations against frozen opponents
+past_versions_weight = 1.0
+
+# Example frozen opponents (adjust paths as needed):
+# [[opponents.fixed]]
+# name = "ST11_base"
+# checkpoint = "checkpoints_to_test/st11_11090M_checkpoint"  # or wherever ST11 is
+# weight = 2.0
 
 # 100% normal play: kickoff, random setups (the situations where demos matter)
 [[state_setters]]
