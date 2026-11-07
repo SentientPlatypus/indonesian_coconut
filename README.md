@@ -41,6 +41,11 @@ cargo build --release --features torch,cuda --bin indococo-train
 Training, warm start, critic warm-up, evals and deploy are covered in
 [`indococo_ppo_bot/README.md`](indococo_ppo_bot/README.md).
 
+## Recent additions
+
+- **Demos-against metric** (Nov 7, 2026): Training and eval metrics now track `Events/Demoed per min` (how often the agent gets demoed) alongside the existing `Events/Demos per min` (demos performed). Eval h2h and rates also report `demos_against_a`, `demos_against_b`, and `demos_against_per_min`.
+- **Demo-hunter opponent config** (`config/demo_hunter.toml`): A specialized reward config for fine-tuning aggressive demo-hunting opponents. Heavily weights demo rewards (250 vs 50) with loosened approach gates, designed to teach the main bot demo dodging through sparring rather than penalties. See `EXPERIMENTS.md` for usage.
+
 ## External tools
 
 - **RLBot v5 server and GUI**, to run `rlbot_indococo_ppo/` in matches:

@@ -1,0 +1,49 @@
+# Demo-hunter fine-tune config: trains an aggressive opponent that prioritizes
+# demoing opponents over scoring goals. Built on the ST chain (aud.toml).
+# 
+# Purpose: Create a frozen opponent that teaches the main bot to dodge demos.
+# Community wisdom: training against demo-hunting opponents works better than
+# just penalizing getting demoed.
+#
+# Usage: Fine-tune from ST11 checkpoint (~100-200M steps) with this config,
+# then add the resulting .bpk to the frozen opponent league via EXTRA_OPPS.
+extends = "st.toml"
+
+# Significantly increase demo rewards to incentivize hunting demos
+[weights]
+demo = 250.0          # Up from 50 (base reward for demos and bumps)
+goal = 1200.0         # Keep goals on so it still plays real Rocket League
+goal_prob = 40.0      # Keep strategic positioning
+vel_ball_to_goal = 12.0  # Keep some offense
+# Getting demoed penalty stays in demo.rs (victim_punishment = 1.0, weight 250)
+
+# Demo reward parameters: boost aerial and ground attack bonuses
+[demo]
+victim_gate = true    # Don't pay the victim (from common_rewards.toml)
+
+# Aerial demo attacks: heavily reward supersonic approaches
+aerial_attack_extra = 5.0     # Up from 1.9: extra reward for aerial bumps/demos
+aerial_attack_min_boost = 15.0  # Lower from 20: easier to trigger
+aerial_hard_target = 900.0
+aerial_hard_power = 2.0
+aerial_ball_min_z = 200.0     # Lower from 300: more opportunities
+aerial_ball_max_dist = 2200.0  # Larger from 1800: wider range
+aerial_away_weight = 0.3      # Lower from 0.5: care less about ball direction
+aerial_carry_min_dist = 200.0  # Lower from 300
+aerial_front_margin = 100.0   # Up from 80: more lenient nose requirement
+aerial_require_boost = true
+aerial_nose_goal_min = 0.30   # Lower from 0.40: easier angle gate
+aerial_nose_hit_min = 0.05    # Lower from 0.10: easier bump angle
+
+# Ground demo attacks: reward chasing down opponents
+ground_attack_extra = 3.5     # Up from 1.5: more ground demo reward
+ground_ball_max_dist = 2800.0  # Larger from 2200: demo away from ball
+ground_carry_min_dist = 120.0  # Lower from 180: more opportunities
+
+# Standard bump reward scaling
+bump_acceleration_reward = 0.35
+wheel_scale = 0.0
+
+# Attacker and victim weights (applied to the scaled bump/demo reward)
+attacker_reward = 1.0
+victim_punishment = 1.0    # Penalty for getting demoed stays on

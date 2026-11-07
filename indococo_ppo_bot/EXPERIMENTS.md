@@ -1313,3 +1313,61 @@ One change on top of ST10: face the previously promoted ST8 best in-league. Same
 
 ## ST12 (generalization): add ST9_final to EXTRA_OPPS at w1.0
 One change on top of ST11: fold ST9_final into the league at w1.0. Same Megabyte@2.0 / Galactus 2.5 / OPPCH 0.55 / ENT 0.016. From ST11 best chunk. BEST for measurement is ST10 (manual) unless ST11 promotes. Hypothesis: after Galactus dipped on ST9 finals, keeping Megabyte diversity while facing recent strengths in-league should stabilize the panel without overweighting any single style.
+
+## Demo-hunter opponent (for ST14+): fine-tune to teach demo dodging
+
+### Motivation
+Community experience: a bigger penalty for getting demoed doesn't teach dodging—training against opponents that actively hunt demos does. The demos_against metric (added Nov 7, 2026) now tracks how often agents get demoed, revealing that demo dodging needs specific opponent pressure to improve.
+
+### Design (`config/demo_hunter.toml`)
+A short fine-tune (100–200M steps) from ST11 (`checkpoints_to_test/st11_<N>M.bpk`) with heavily weighted demo rewards:
+* **demo weight 250** (up from 50): incentivize hunting demos
+* **aerial_attack_extra 5.0** (up from 1.9): reward supersonic aerial approaches
+* **ground_attack_extra 3.5** (up from 1.5): reward ground demo chases
+* Loosened gates: lower boost/angle/distance requirements for demo opportunities
+* **Goals stay on** (goal 1200, goal_prob 40, vel_ball_to_goal 12): ensures it still plays real Rocket League, not pure kamikaze
+* **Getting-demoed penalty stays**: victim_punishment 1.0 at weight 250
+
+### Training commands
+Build the trainer with a distinct binary name (to avoid replacing running ST13):
+```bash
+cd indococo_ppo_bot
+cargo build --release --features torch,cuda --bin indococo-train
+cp target/release/indococo-train target/release/indococo-train-hunt
+```
+
+Run the fine-tune from ST11 checkpoint:
+```bash
+# Copy ST11 checkpoint to the demo-hunter checkpoint dir
+mkdir -p checkpoints_demo_hunter
+cp -r checkpoints_to_test/st11_11090M_checkpoint/* checkpoints_demo_hunter/1/
+
+# Train for 100-200M steps (monitor demos_per_min metric)
+target/release/indococo-train-hunt train experiments/train_demo_hunter.toml
+
+# Stop when demos_per_min plateaus or behavior becomes too extreme
+# Check mid-run with: tail -f <metrics.jsonl> | grep "Events/Demos per min"
+```
+
+### Export and add to league
+```bash
+# Export the final checkpoint (adjust number)
+target/release/indococo-train-hunt export checkpoints_demo_hunter/<final_N> \
+    checkpoints_to_test/demo_hunter_<N>M.bpk
+
+# Add to ST14's frozen opponent league via EXTRA_OPPS:
+# In experiments/st_ST14.env:
+EXTRA_OPPS="... demo_hunter:checkpoints_to_test/demo_hunter_<N>M.bpk:1.0"
+```
+
+### Metrics and monitoring
+* **Events/Demos per min**: should rise significantly above ST11's ~0.4-0.5
+* **Events/Demoed per min**: also tracked; hunter still gets demoed
+* **h2h vs ST11**: expect to lose (demo-hunting trades game strength for teaching utility)
+* **demos_against in ST14 training**: target metric to validate that ST14 learns to dodge
+
+### Notes
+* The demo-hunter is a **training tool**, not a competitive bot
+* Its aggressive style makes it an effective sparring partner for learning evasion
+* Do NOT replace the main bot's reward weights—those stay unchanged (demo 50, air_dribble_bump 40, flip_reset 70)
+* The hunter's .bpk joins the frozen league; the main bot trains against it like any other opponent

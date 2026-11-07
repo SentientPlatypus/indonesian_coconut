@@ -1,0 +1,55 @@
+# Demo-hunter training config: fine-tune from ST11 to create an aggressive
+# demo-hunting opponent for the frozen league.
+#
+# Run: indococo-train train experiments/train_demo_hunter.toml
+# Binary: Build with a distinct name to avoid replacing the running ST13 binary
+# Export: indococo-train export checkpoints/<final> checkpoints_to_test/demo_hunter_<N>M.bpk
+
+reward_config = "config/demo_hunter.toml"
+checkpoints = "checkpoints_demo_hunter"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = 200_000
+mini_batch_size = 100_000
+epochs = 2
+policy_lr = 4e-5
+critic_lr = 4e-5
+entropy = 0.012
+gamma = 0.997
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 25_000_000    # Save more frequently for a short run
+keep_checkpoints = 10
+iterations = 0              # Run until stopped (typically 100-200M steps)
+critic_warmup_steps = 0     # No warm-up: we're resuming from a trained checkpoint
+self_play_old_versions = false   # Pure self-play for the demo-hunter
+skill_tracker = false
+
+# No LR schedule for short fine-tune (or use a short cosine)
+[lr_schedule]
+kind = "constant"
+
+# No frozen opponents: this is a specialized fine-tune against itself
+[opponents]
+chance = 0.0
+past_versions_weight = 0.0
+
+# 100% normal play: kickoff, random setups (the situations where demos matter)
+[[state_setters]]
+kind = "kickoff"
+weight = 0.50
+
+[[state_setters]]
+kind = "random"
+weight = 0.25
+ball_speed = true
+car_speed = true
+
+[[state_setters]]
+kind = "random"
+weight = 0.25
+ball_speed = true
+cars_on_ground = true

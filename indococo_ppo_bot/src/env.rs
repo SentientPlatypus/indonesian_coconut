@@ -114,6 +114,7 @@ impl SharedInfo {
                 per_min(e.flip_reset);
             self.metrics["Events/Bumps per min"] += per_min(e.bump);
             self.metrics["Events/Demos per min"] += per_min(e.demo);
+            self.metrics["Events/Demoed per min"] += per_min(e.demoed);
             self.metrics["Events/Air Dribble Bumps per min"] += per_min(e.air_dribble_bump);
             self.metrics["Events/Goals per min"] += per_min(e.goal);
             self.metrics["Events/Aerial Goals per min"] += per_min(e.aerial_goal);

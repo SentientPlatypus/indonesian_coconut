@@ -587,6 +587,10 @@ struct ResetCounts {
     uses: u64,
     /// Team goals within 3 s of a reset.
     goals_after_reset: u64,
+    /// Demos performed by the candidate (demos-for).
+    demos: u64,
+    /// Times the candidate got demoed (demos-against).
+    demoed: u64,
 }
 
 impl ResetCounts {
@@ -602,6 +606,8 @@ impl ResetCounts {
         self.resets_old_detector += o.resets_old_detector;
         self.uses += o.uses;
         self.goals_after_reset += o.goals_after_reset;
+        self.demos += o.demos;
+        self.demoed += o.demoed;
     }
 
     fn per_min(&self, n: u64) -> f64 {
@@ -621,6 +627,8 @@ impl ResetCounts {
             "resets_per_min": self.per_min(self.resets),
             "resets_old_detector_per_min": self.per_min(self.resets_old_detector),
             "uses_per_min": self.per_min(self.uses),
+            "demos_per_min": self.per_min(self.demos),
+            "demos_against_per_min": self.per_min(self.demoed),
             "episodes_with_reset_share": self.episodes_with_reset as f64 / self.episodes.max(1) as f64,
             "episodes_with_early_reset_share":
                 self.episodes_with_early_reset as f64 / self.episodes.max(1) as f64,
@@ -714,10 +722,12 @@ impl RateSlot {
             }
             self.reset_this_episode = true;
         }
-        c.resets_old_detector +=
-            u64::from(StepEvents::between(&self.prev, &view)[0].flip_reset_legacy);
+        let events = StepEvents::between(&self.prev, &view);
+        c.resets_old_detector += u64::from(events[0].flip_reset_legacy);
         c.uses += u64::from(self.uses.get_rewards(&view)[0] > 0.0);
         c.goals_after_reset += u64::from(self.goals.get_rewards(&view)[0] > 0.0);
+        c.demos += u64::from(events[0].demo);
+        c.demoed += u64::from(events[0].demoed);
         (self.state, self.obs, self.prev) = (res.state, res.obs, view);
         if res.is_terminal || res.truncated {
             let (state, obs, _) = self.env.reset();
@@ -1654,8 +1664,9 @@ fn snapshots(setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize, out
 /// Kickoff games of `a` against `b` in this process's team mode
 /// (`INDOCOCO_TEAM_SIZE`), greedy with 3% random actions; `a` plays blue in
 /// even envs and orange in odd ones. A game ends on a goal or after 300 s
-/// (draw). Also counts flip resets and their goalward uses per side (all cars).
-/// Prints one JSON line: wins, losses, draws, win_rate_decisive, resets.
+/// (draw). Also counts flip resets and their goalward uses per side (all cars),
+/// plus demos-for and demos-against.
+/// Prints one JSON line: wins, losses, draws, win_rate_decisive, resets, demos_against.
 fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
     init_from_default(true).expect("load collision meshes");
     let mix = vec![WeightedSetter {
@@ -1663,7 +1674,7 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
         kind: indococo_bot::setters::SetterKind::Kickoff,
     }];
     let per = games.div_ceil(threads);
-    let res: Vec<[u64; 7]> = std::thread::scope(|s| {
+    let res: Vec<[u64; 9]> = std::thread::scope(|s| {
         let hs: Vec<_> = (0..threads)
             .map(|t| {
                 let mix = &mix;
@@ -1672,28 +1683,29 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
             .collect();
         hs.into_iter().map(|h| h.join().expect("worker")).collect()
     });
-    let mut tot = [0u64; 7];
+    let mut tot = [0u64; 9];
     for r in &res {
-        for i in 0..7 {
+        for i in 0..9 {
             tot[i] += r[i];
         }
     }
-    let [w, l, d, ra, rb, ua, ub] = tot;
+    let [w, l, d, ra, rb, ua, ub, da, db] = tot;
     let out = serde_json::json!({
         "a": a, "b": b, "team_size": indococo_bot::obs::team_size(),
         "games": w + l + d, "wins": w, "losses": l, "draws": d,
         "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
         "resets_a": ra, "resets_b": rb, "uses_a": ua, "uses_b": ub,
+        "demos_against_a": da, "demos_against_b": db,
     });
     println!("{out}");
 }
 
-fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u64) -> [u64; 7] {
+fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u64) -> [u64; 9] {
     const ENVS: usize = 8;
     let dev = Device::flex();
     let (na, nb) = (load_actor(a, &dev), load_actor(b, &dev));
     let mut rng = SmallRng::seed_from_u64(seed);
-    let mut out = [0u64; 7];
+    let mut out = [0u64; 9];
     let mut started = 0usize;
     struct G {
         env: BotEnv,
@@ -1742,6 +1754,7 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
             let res = g.env.step(&g.state, &acts);
             let view = g.env.get_shared_info().view(&res.state);
             let used = g.uses.get_rewards(&view);
+            let events = StepEvents::between(&g.prev, &view);
             for (i, c) in view.cars.iter().enumerate() {
                 let side = usize::from(c.team != g.a_team);
                 if resets::is_flip_reset(&g.prev.cars[i], c, &view.ball) {
@@ -1749,6 +1762,9 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
                 }
                 if used[i] > 0.0 {
                     out[5 + side] += 1;
+                }
+                if events[i].demoed {
+                    out[7 + side] += 1;
                 }
             }
             let done = res.is_terminal || res.truncated;
