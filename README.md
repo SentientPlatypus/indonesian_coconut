@@ -3,17 +3,9 @@
 ![indonesian_coconut air dribbling past Ripple v1.0](assets/indococo_vs_ripple_v1.png)
 <p align="center"><img src="assets/highlight.webp" alt="indonesian_coconut highlights" width="100%"></p>
 
-Indonesian Coconut is a 1v1 Rocket League bot trained with PPO on a discrete
-90-action lookup table. On this branch it runs on
-[indococo-ppo](https://github.com/SentientPlatypus/indococo-ppo), a Rust stack
-built on RocketSim and Burn. Its reward set, observations and actions match
-the E8B2 Python policy (`1v1.pt`), which it warm-starts from.
-indococo-ppo trains about 1.7x faster than upstream rlgymppo_rs (40.8k → 70.1k
-steps/s on one L4 with TF32 + bf16 critic; see
-[its benchmark](https://github.com/SentientPlatypus/indococo-ppo#speedup-at-a-glance)).
+Indonesian Coconut is a 1v1 Rocket League bot trained with PPO on a discrete 90-action lookup table. On this branch it runs on [indococo-ppo](https://github.com/SentientPlatypus/indococo-ppo), a Rust stack built on RocketSim and Burn. It rewards goals, ball velocity toward goal, aerial touches/distance, flip resets, air dribble bumps, demos, boost management, and possession, and trains with self-play against a league of frozen past checkpoints and public bots (FR4, Galactus), 50M-step stages with mid-evals and keep-best promotion, and cosine LR decay. indococo-ppo trains about 1.7x faster than upstream rlgymppo_rs (40.8k → 70.1k steps/s on one L4 with TF32 + bf16 critic; see [its benchmark](https://github.com/SentientPlatypus/indococo-ppo#speedup-at-a-glance)).
 
-The Python policy beat Nexto 42–11 and Element 47–3 in RLBot matches
-([replay](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30)).
+See the following table for benchmark matches.
 
 ## Bots beaten
 
@@ -21,19 +13,11 @@ These are real RLBot matches (separate from sim eval numbers elsewhere in this R
 
 | Bot | Rank | Checkpoint that beat it | Date beaten | Score | Replay |
 |---|---|---|---|---|---|
-| Psyonix Allstar | TBD | pending | pending | pending | pending |
-| Element | Champion | V3 checkpoint (Python policy) | 2025-12-28 | 47-3 | [ballchasing](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b) |
-| Necto | Champion | pending | pending | pending | pending |
-| Nexto | Grand Champion | E2G1 (`PPO_POLICY_V4_E2G1.pt`, Python policy) | 2026-09-30 | 42-11 | [ballchasing](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30) |
-| Kira | TBD | pending | pending | pending | pending |
-| Dice | TBD | pending | pending | pending | pending |
-| Chronos | TBD | pending | pending | pending | pending |
 | Ripple v1.1 | Pro | ST8 (`checkpoints_to_test/st8_8666M.bpk`, 8666.3M steps) | 2026-11-05 | 17-1 | [ballchasing](https://ballchasing.com/replay/2fc5fa80-2a16-4905-84b4-c175f72743dc) |
 | Ripple v1.0 | SSL | ST8 (`checkpoints_to_test/st8_8666M.bpk`, 8666.3M steps) | 2026-11-06 | 16-3 | [ballchasing](https://ballchasing.com/replay/3be4d259-2550-4ea9-8b78-91c496f819dd) |
-| Megabyte | TBD | pending | pending | pending | pending |
-| GalactusV2 | TBD | pending | pending | pending | pending |
-
-Ranks are tentative and based on sim win rates. Ripple v1.1 match featured 23 shots, 42 aerial hits, 1 flip reset. Ripple v1.0 match featured 18 shots, 38 aerial hits, 4 saves, 8 demos.
+| Nexto | Grand Champion | E2G1 (`PPO_POLICY_V4_E2G1.pt`, Python policy) | 2026-09-30 | 42-11 | [ballchasing](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30) |
+| Necto | Champion | pending | pending | pending | pending |
+| Element | Diamond | V3 checkpoint (Python policy) | 2025-12-28 | 47-3 | [ballchasing](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b) |
 
 ## Repository layout
 
@@ -56,18 +40,6 @@ cargo build --release --features torch,cuda --bin indococo-train
 
 Training, warm start, critic warm-up, evals and deploy are covered in
 [`indococo_ppo_bot/README.md`](indococo_ppo_bot/README.md).
-
-## What lives on `master`
-
-This branch holds only the Rust bot. Everything else is still on `master`:
-
-- the Python training stack (rlgym-ppo trainer, curriculum, A/B checkpoints, old RLBot v4 bot);
-- the Python reference rewards and evaluator (`v4_env.py`, `loop_config.py`,
-  `eval_match.py`, `rewards/`, `rl_math/`), needed only to regenerate the
-  parity fixture or run h2h evals;
-- `rlbot_submission/`, the live Python submission. Its `policies/1v1.pt` is
-  the warm-start and h2h reference:
-  `git show master:rlbot_submission/policies/1v1.pt > 1v1.pt`.
 
 ## External tools
 
