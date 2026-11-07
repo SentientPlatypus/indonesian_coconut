@@ -1240,6 +1240,24 @@ Finals checkpoint = best mid chunk 10628.6M (`exp_ST10/checkpoints/1793988079`):
 `st_promote.py` initially set **promote=false** only on FR4 (−1.6 vs −1.0 tol). User approved a **manual override** at 1:36 PM ET Nov 6: FR4 noise on 500 games is ~±2 pt, and every other gate plus the gen panel improved (Kira +11.75, Chronos +1.75, 1v1.pt +5.0, Nexto +0.75, Galactus +2.6). Mid-run (200 g) peak Galactus 29.5% at 10089.5M; Megabyte mid mostly 0.65–0.75. **ST10 10628.6M is the new best** (manual) and is shipped as `checkpoints_to_test/st10_10629M.bpk`. ST11 (ST10 + ST8_final + Megabyte@2.0) auto-started from this chunk at 1:31 PM ET; after the override, ST11 mid/finals measure against ST10, and ST12 will inherit ST10 as BEST unless ST11 promotes.
 
 
+### 11.8o ST11 results: ST8_final + Megabyte@2.0 (old mega train), from ST10 10628.6M (→ 11628.8M). NEW BEST
+
+ST11 kept the ST10 recipe (OPPCH 0.55, ENT 0.016, Galactus weight 2.5, gamma 0.998, 300k/iter, LR 5e-5, flip_reset 70, prior EXTRA_OPPS) and added ST8_final at w1.0 plus Megabyte at weight 2.0. Trainer binary was still the **old** `indococo-train-mega` (pre-parity fix); mid/final Megabyte *evals* after ~2:54 PM ET Nov 6 used the fixed Python port. Trained ~1:31 PM ET to ~8:03 PM ET Nov 6; finals done 8:29 PM ET Nov 6.
+
+Finals checkpoint = best mid chunk 11089.7M (`exp_ST11/checkpoints/1794000457`):
+
+| Metric | ST11 11089.7M | ST10 10628.6M (prev best) |
+| --- | --- | --- |
+| vs BEST (500 g) | **54.8%** | — (vs ST9 54.6%) |
+| vs FR4 (500 g) | **73.6%** | 71.2% |
+| pool400 | **92.62** | 92.29 |
+| botpack5 | 65.83 | 66.75 |
+| Galactus (500 g) | **30.0%** | 24.4% |
+| Megabyte (500 g, report-only) | 70.4% (fixed Python; sim may be optimistic vs RLBot) | 71.0% INVALID (old port) / fixed baseline ST10 Rust 64.4% Python 64.8% |
+| gen panel min / mean | **30.0** / 79.25 | 24.4 / 79.43 |
+
+Auto `promote=true` vs ST10 on every gate (bp5 −0.92 within −1.0 tol; Galactus +5.6). Note: launch BESTF was still `st9_final` (ST11 started before the ST10 manual override); h2h already played ST10 via patched `opp_BEST.toml`. PROMOTE.json was re-scored vs `st10_final` and still promotes. bp5 gave back Kira (−8.5) and Dice (−6.25) while Chronos (+2.5), Galactus-in-bp5 (+4.25), and Ripple (+1.75) rose. Mid-run (200 g) peak Galactus 34.0% at 10889.3M (<40%). Shipped as `checkpoints_to_test/st11_11090M.bpk`. ST12 (ST9_final + mega2@2.0) auto-started from this chunk at 8:29 PM ET measuring against ST11; queue ST13 (ST10+ST11 in EXTRA_OPPS, mega2) then ST14 (OPPCH 0.50).
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):
