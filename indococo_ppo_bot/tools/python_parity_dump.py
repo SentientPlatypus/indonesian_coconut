@@ -150,6 +150,12 @@ def main():
         
         # Make decision (stochastic kickoffs)
         stochastic = bool(np.all(gs.ball.position[:2] == 0))
+        
+        # Get logits from both policy and base models
+        policy_logits = ripple.agent.model(obs_batch)[0]  # Get first element of batch (276 logits)
+        base_logits = ripple.agent.base(obs_batch)[0]
+        
+        # Get action using agent's act method
         chosen_action = ripple.agent.act(obs_batch, stochastic=stochastic)[0]  # Get first element of batch
         
         # Update actions
@@ -177,7 +183,10 @@ def main():
             'python_ball': ball_tensor,
             'python_actions': actions_tensor,
             'python_boosts': boosts_tensor,
+            'python_logits': policy_logits.tolist(),
+            'python_base_logits': base_logits.tolist(),
             'python_action': int(chosen_action),
+            'python_agent_mode': str(ripple.agent.mode),
             'python_controls': ripple.actions[0].tolist(),  # Actual 8-element control vector
             'python_on_ground': main_player.on_ground,
             'python_handbrake': handbrake_raw,

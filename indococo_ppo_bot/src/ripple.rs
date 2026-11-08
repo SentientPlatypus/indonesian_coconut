@@ -212,6 +212,74 @@ impl RipplePolicy {
         Err("Ripple requires the 'ripple' feature".into())
     }
 
+    #[cfg(feature = "ripple")]
+    pub fn get_logits_and_kl(&self, obs: &[f32]) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+        use ort::{inputs, value::TensorRef};
+        
+        // Reshape into 5 tensors
+        let mut offset = 0;
+        let main = &obs[offset..offset + 32];
+        offset += 32;
+        let others_vec: Vec<f32> = obs[offset..offset + 5 * 21].to_vec();
+        offset += 5 * 21;
+        let ball_vec: Vec<f32> = obs[offset..offset + 6 * 9].to_vec();
+        offset += 6 * 9;
+        let actions_vec: Vec<f32> = obs[offset..offset + 6 * 8].to_vec();
+        offset += 6 * 8;
+        let boosts_vec: Vec<f32> = obs[offset..offset + 34 * 5].to_vec();
+        
+        let main_vec = main.to_vec();
+        
+        let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice())).unwrap();
+        let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice())).unwrap();
+        let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice())).unwrap();
+        let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice())).unwrap();
+        let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice())).unwrap();
+        
+        let mut policy_session = self.policy.lock().unwrap();
+        let policy_outputs = policy_session.run(inputs![
+            "main" => main_input,
+            "others" => others_input,
+            "ball" => ball_input,
+            "actions" => actions_input,
+            "boosts" => boosts_input,
+        ]).unwrap();
+        
+        let (_, policy_logits) = policy_outputs["logits"].try_extract_tensor::<f32>().unwrap();
+        let policy_logits_vec = policy_logits.to_vec();
+        
+        // Recreate inputs for base model
+        let main_input2 = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice())).unwrap();
+        let others_input2 = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice())).unwrap();
+        let ball_input2 = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice())).unwrap();
+        let actions_input2 = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice())).unwrap();
+        let boosts_input2 = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice())).unwrap();
+        
+        // Get base logits
+        let mut base_session = self.base.lock().unwrap();
+        let base_outputs = base_session.run(inputs![
+            "main" => main_input2,
+            "others" => others_input2,
+            "ball" => ball_input2,
+            "actions" => actions_input2,
+            "boosts" => boosts_input2,
+        ]).unwrap();
+        
+        let (_, base_logits) = base_outputs["logits"].try_extract_tensor::<f32>().unwrap();
+        let base_logits_vec = base_logits.to_vec();
+        
+        // Compute KL scores
+        let log_policy = log_softmax(&policy_logits_vec);
+        let log_base = log_softmax(&base_logits_vec);
+        
+        let mut kl_scores = vec![0.0f32; N_ACTIONS];
+        for j in 0..N_ACTIONS {
+            kl_scores[j] = log_policy[j].exp() * (log_policy[j] - log_base[j]);
+        }
+        
+        (policy_logits_vec, base_logits_vec, kl_scores)
+    }
+
     fn detect_reset(&self, state: &GameState, car: usize) -> bool {
         let is_kickoff = state.ball.phys.pos.x.abs() < 10.0
             && state.ball.phys.pos.y.abs() < 10.0
