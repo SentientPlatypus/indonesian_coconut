@@ -1380,7 +1380,11 @@ bp5 vs ST15: Ripple 65.8 (61.8), Kira 68.0 (70.5), Dice 56.5 (56.5), Chronos 78.
 demos_against per 200 g: vs BEST 57 cand / 78 opp (ST15 44/97); vs FR4 12/142 (ST15 19/119). Mid-run peak Galactus 33.0% at 14685.8M (<40%). Auto `promote=true` on every gate. Shipped checkpoints_to_test/st16_14786M.bpk. ST17 (OPPCH 0.60) auto-started from this chunk measuring against ST16; queue ST18 (ST15_final@1.0).
 
 ## ST17 (generalization): OPPCH 0.50 -> 0.60
-One change on top of the ST16 recipe (ENT 0.016 + GAL_WEIGHT 3.0 + MEGA_WEIGHT 2.0 via mega2 + ST3..ST13 + HUNT@2.0): larger league fraction vs self-play. Hypothesis: more games vs diverse frozen styles help the weakest matchups (Galactus, and FR4 sitting on the gate) without cranking any single opponent weight. flip_reset 70. From ST16 best chunk.
 
-## ST18 (generalization): add ST15_final to EXTRA_OPPS at w1.0
-One change on top of ST17: fold the previous BEST (ST15 14024.3M, ckpt 1794111431) into the league at weight 1.0. Same OPPCH 0.60 / ENT 0.016 / GAL_WEIGHT 3.0 / MEGA_WEIGHT 2.0 / HUNT@2.0. Hypothesis: ST16 beat ST15 52.6% but slipped on Galactus (26.6→25.0) and FR4 (75.6→74.6, at the gate) while gaining on pool/bp5; keeping that previous-best style in-league follows the ST10/ST11/ST13 pattern and should protect those matchups without overweighting any one opponent.
+Ended early by user request on 2026-11-08 at 15046.7M (last saved checkpoint, about 260M of 1B); no finals, no promotion. Checkpoints and logs kept in exp_ST17. BEST stays ST16.
+
+## ST18 (Galactus focus): league pruned, Galactus ~20% of iterations
+
+Why: Galactus at finals was flat around 25% from ST2 to ST16 despite GAL_WEIGHT 2.5-6.0. Diagnostic (diag_gal, 200 g ST16 vs Galactus): 36% of conceded goals were aerial shots, 29% came within seconds of us being demoed (Galactus 93 demos vs our 9; win rate ~10% in games where we were demoed vs ~33% otherwise), 21% ground shots while out of position; kickoffs fine (112-25). Galactus was only ~4-6% of training iterations because every run added frozen extras that diluted its weight; mid-eval h2h vs BEST had no correlation with Galactus.
+
+Changes vs ST17: base league in train_st.toml pruned to FR4_final@1.0 (dropped FR7/FR8/FR9/FR9b/ST1/ST2/1v1.pt); extras pruned to ST13..ST16 finals @1.0 and HUNT@1.0 (was 2.0); GAL_WEIGHT 3.0 -> 4.5. Kept OPPCH 0.60, ENT 0.016, MEGA_WEIGHT 2.0 (indococo-train-mega2), flip_reset 70. Share = OPPCH * w / total, total = past versions 1 + FR4 1 + ST13..16 4 + HUNT 1 + Mega 2 + Galactus 4.5 = 13.5: Galactus 20.0%, Megabyte 8.9%, each other opponent 4.4%, self-play 40%. From BEST ST16 (14786.0M), 1B steps, measured vs ST16.

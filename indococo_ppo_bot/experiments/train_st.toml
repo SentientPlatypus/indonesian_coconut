@@ -37,34 +37,6 @@ past_versions_weight = 1.0
 name = "FR4_final"
 checkpoint = "@RUN@/opponents/FR4_final"
 weight = 1.0
-[[opponents.fixed]]
-name = "FR7_3492M"
-checkpoint = "@RUN@/opponents/FR7_3492M"
-weight = 1.0
-[[opponents.fixed]]
-name = "FR8_final"
-checkpoint = "@RUN@/opponents/FR8_final"
-weight = 2.0
-[[opponents.fixed]]
-name = "FR9_final"
-checkpoint = "@RUN@/opponents/FR9_final"
-weight = 1.0
-[[opponents.fixed]]
-name = "FR9b_final"
-checkpoint = "@RUN@/opponents/FR9b_final"
-weight = 1.0
-[[opponents.fixed]]
-name = "ST1_final"
-checkpoint = "@RUN@/opponents/ST1_final"
-weight = 1.0
-[[opponents.fixed]]
-name = "ST2_final"
-checkpoint = "@RUN@/opponents/ST2_final"
-weight = 2.0
-[[opponents.fixed]]
-name = "1v1.pt"
-checkpoint = "@RUN@/opponents/1v1"
-weight = 0.5
 
 [[state_setters]]
 kind = "kickoff"
