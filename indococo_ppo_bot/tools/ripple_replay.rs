@@ -283,7 +283,48 @@ fn main() {
         }
         
         // Print first few and any large divergences
-        if idx < 3 || main_diff > 1e-3 || others_diff > 1e-3 || ball_diff > 1e-3 || rust_action != record.python_action {
+        if idx == 0 {
+            // Detailed step 0 comparison
+            println!("\n{}", "=".repeat(80));
+            println!("STEP 0 DETAILED COMPARISON");
+            println!("{}", "=".repeat(80));
+            println!("\nMAIN tensor (32 elements):");
+            let labels = ["pos.x", "pos.y", "pos.z", "vel.x", "vel.y", "vel.z",
+                         "ang.x", "ang.y", "ang.z", "fwd.x", "fwd.y", "fwd.z",
+                         "rgt.x", "rgt.y", "rgt.z", "up.x", "up.y", "up.z",
+                         "team", "demo", "on_gnd", "has_j", "has_f", "boost",
+                         "bst_t", "jmp_t", "air_t", "flp_t", "hndbr", "flp_x",
+                         "flp_y", "is_rst"];
+            for i in 0..32 {
+                let diff = (rust_main[i] - python_main[i]).abs();
+                let marker = if diff > 1e-4 { "✗" } else { "✓" };
+                println!("  [{:2}] {:6} rust={:10.6} py={:10.6} diff={:.6e} {}", 
+                         i, labels[i], rust_main[i], python_main[i], diff, marker);
+            }
+            
+            println!("\nOTHERS[1] (ball - second in others array):");
+            let others_start = 21; // Second player
+            for i in 0..21 {
+                let rust_val = rust_others[others_start + i];
+                let py_val = python_others[others_start + i];
+                let diff = (rust_val - py_val).abs();
+                let marker = if diff > 1e-4 { "✗" } else { "✓" };
+                if i < 12 || diff > 1e-4 {
+                    println!("  [{:2}] rust={:10.6} py={:10.6} diff={:.6e} {}", 
+                             i, rust_val, py_val, diff, marker);
+                }
+            }
+            
+            println!("\nBALL[0] (first slice):");
+            for i in 0..9 {
+                let rust_val = rust_ball[i];
+                let py_val = python_ball[i];
+                let diff = (rust_val - py_val).abs();
+                let marker = if diff > 1e-4 { "✗" } else { "✓" };
+                println!("  [{:2}] rust={:10.6} py={:10.6} diff={:.6e} {}", 
+                         i, rust_val, py_val, diff, marker);
+            }
+        } else if idx < 3 || main_diff > 1e-3 || others_diff > 1e-3 || ball_diff > 1e-3 || rust_action != record.python_action {
             println!("\nStep {}", idx);
             println!("  main:    max_diff={:.6e} at [{}] rust={:.6} python={:.6}", 
                      main_diff, main_idx, rust_main[main_idx], python_main[main_idx]);
@@ -293,11 +334,6 @@ fn main() {
             println!("  boosts:  max_diff={:.6e} at [{},{}]", boosts_diff, boosts_i, boosts_j);
             println!("  action:  rust={} python={} {}", rust_action, record.python_action,
                      if rust_action == record.python_action { "✓" } else { "✗" });
-            
-            if idx < 2 {
-                println!("    rust_main[9..15]   = {:?}", &rust_main[9..15]);
-                println!("    python_main[9..15] = {:?}", &python_main[9..15]);
-            }
         }
         
         if (idx + 1) % 50 == 0 {

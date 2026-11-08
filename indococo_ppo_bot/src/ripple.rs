@@ -431,6 +431,12 @@ impl RipplePolicy {
         main[25] = st.handbrake;
         main[26..28].copy_from_slice(&st.flip_dir);
         main[28] = if st.queue[0][0].is_nan() { 1.0 } else { 0.0 };
+        // Python obs.py lines 233-236: is_kickoff/is_flipped/is_swapped  
+        // Kickoff detection: ball xy near zero (Python: position[0]==0 and position[1]==0)
+        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
+        main[29] = if is_kickoff { 1.0 } else { 0.0 };  // is_kickoff (becomes is_flipped later in Python)
+        main[30] = if st.was_flipped { 1.0 } else { 0.0 };  // is_flipped  
+        main[31] = 0.0;  // is_swapped (set during coordinate transform, 0 for main player)
 
         // Build other players (up to 5, sorted by distance to ball)
         let mut others = [[0.0f32; 21]; 5];
