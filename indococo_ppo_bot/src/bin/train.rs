@@ -1052,6 +1052,7 @@ fn main() {
             Path::new(arg(2)),
             arg(3).parse().expect("games"),
             args.get(4).map_or(8, |t| t.parse().expect("threads")),
+            args.get(5).map(|s| s == "--idle-opponent").unwrap_or(false),
         ),
         "ripple-dump" => ripple_dump(
             Path::new(arg(1)),
@@ -1803,16 +1804,17 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
 /// `ripple-h2h`: the candidate checkpoint (greedy, CPU) against the Rust Ripple port,
 /// first goal wins, kickoff starts, both sides. Ripple uses tick_skip=4 internally.
 #[cfg(feature = "ripple")]
-fn ripple_h2h(ckpt: &Path, rdir: &Path, games: usize, threads: usize) {
+fn ripple_h2h(ckpt: &Path, rdir: &Path, games: usize, threads: usize, idle_opponent: bool) {
     use indococo_bot::ripple as rx;
     init_from_default(true).expect("load collision meshes");
+    println!("Starting ripple_h2h: games={}, threads={}, idle={}", games, threads, idle_opponent);
     let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let per = games.div_ceil(threads);
     let t0 = std::time::Instant::now();
     let res: Vec<[u64; 4]> = std::thread::scope(|s| {
         let hs: Vec<_> = (0..threads).map(|t| {
             let mix = &mix;
-            s.spawn(move || ripple_worker(mix, ckpt, rdir, per))
+            s.spawn(move || ripple_worker(mix, ckpt, rdir, per, idle_opponent))
         }).collect();
         hs.into_iter().map(|h| h.join().expect("worker")).collect()
     });
@@ -1829,70 +1831,113 @@ fn ripple_h2h(ckpt: &Path, rdir: &Path, games: usize, threads: usize) {
 }
 
 #[cfg(not(feature = "ripple"))]
-fn ripple_h2h(_ckpt: &Path, _rdir: &Path, _games: usize, _threads: usize) {
+fn ripple_h2h(_ckpt: &Path, _rdir: &Path, _games: usize, _threads: usize, _idle_opponent: bool) {
     panic!("ripple-h2h requires --features ripple");
 }
 
 #[cfg(feature = "ripple")]
-fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize) -> [u64; 4] {
+fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize, idle_opponent: bool) -> [u64; 4] {
     use indococo_bot::ripple as rx;
     use rlgymppo::ExternalPolicy;
+    use std::io::{self, Write};
     const ENVS: usize = 8;
     let dev = Device::flex();
     let na = load_actor(ckpt, &dev);
     let ripple = rx::RipplePolicy::load(rdir).expect("ripple weights");
     let mut out = [0u64; 4];
     let mut started = 0usize;
+    println!("Worker starting: games={}, idle={}", games, idle_opponent);
+    io::stdout().flush().unwrap();
     struct G { env: BotEnv, state: GameState, obs: Vec<Vec<f32>>, a_team: u8, live: bool }
     let mut new_game = |k: usize, started: &mut usize| -> G {
         let mut env = create_env(&RewardConfig::default(), mix);
         let (state, obs, _) = env.reset();
         let live = *started < games;
         *started += 1;
+        println!("  New game k={}, started={}, live={}", k, *started, live);
+        io::stdout().flush().unwrap();
         G { env, state, obs, a_team: (k % 2) as u8, live }
     };
     let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
     let mut robs = vec![0.0f32; ripple.obs_width()];
     let mut rmask = vec![false; rx::N_ACTIONS];
+    println!("  Starting game loop, live games: {}", gs.iter().filter(|g| g.live).count());
+    io::stdout().flush().unwrap();
+    let mut step_count = 0;
     while gs.iter().any(|g| g.live) {
-        let mut oa = Vec::new();
-        for g in gs.iter().filter(|g| g.live) {
-            for (i, (info, _)) in g.state.cars.iter().enumerate() {
-                if info.team as u8 == g.a_team {
-                    oa.push(&g.obs[i]);
+        step_count += 1;
+        if step_count % 100 == 1 {
+            println!("  Step {}, live: {}", step_count, gs.iter().filter(|g| g.live).count());
+            io::stdout().flush().unwrap();
+        }
+        let aa = if idle_opponent {
+            Vec::new() // Not needed for idle opponent
+        } else {
+            let mut oa = Vec::new();
+            for g in gs.iter().filter(|g| g.live) {
+                for (i, (info, _)) in g.state.cars.iter().enumerate() {
+                    if info.team as u8 == g.a_team {
+                        oa.push(&g.obs[i]);
+                    }
                 }
             }
-        }
-        let aa = argmax_actions(&na, &oa, &dev);
+            argmax_actions(&na, &oa, &dev)
+        };
         let mut ia = 0;
         for k in 0..ENVS {
             if !gs[k].live { continue; }
+            if step_count == 1 && k == 0 {
+                println!("    Env 0 processing...");
+                io::stdout().flush().unwrap();
+            }
             let g = &mut gs[k];
             let mut acts = Vec::new();
             let mut ripple_car = None;
             for (i, (info, _)) in g.state.cars.iter().enumerate() {
                 if info.team as u8 == g.a_team {
-                    acts.push(aa[ia]);
-                    ia += 1;
+                    acts.push(if idle_opponent { 0 } else { aa[ia] });
+                    if !idle_opponent { ia += 1; }
                 } else {
                     acts.push(0); // Will be overridden by Ripple
                     ripple_car = Some(i);
                 }
             }
             
+            if step_count == 1 && k == 0 {
+                println!("    Pre-step...");
+                io::stdout().flush().unwrap();
+            }
             // Apply candidate actions
             g.env.pre_step(&g.state, &acts);
+            
+            if step_count == 1 && k == 0 {
+                println!("    Ripple decision...");
+                io::stdout().flush().unwrap();
+            }
             
             // Ripple makes 2 decisions per 8-tick step
             // Build once to get both decisions (Ripple tracks action history internally)
             if let Some(i) = ripple_car {
+                if step_count == 1 && k == 0 {
+                    println!("      Ripple.build...");
+                    io::stdout().flush().unwrap();
+                }
                 // Decision 1
                 ripple.build(&g.state, i, &mut robs, &mut rmask);
+                if step_count == 1 && k == 0 {
+                    println!("      Ripple.infer...");
+                    io::stdout().flush().unwrap();
+                }
                 let actions = ripple.infer(&robs, &rmask, 1);
                 let action1 = actions[0];
                 let controls1 = rx::controls_of(action1);
                 g.env.arena.set_car_controls(i, controls1);
-                if k == 0 { eprintln!("Ripple car={} action1={} throttle={}", i, action1, controls1.throttle); }
+                if started <= 2 { 
+                    println!("  Step: Ripple car={} action1={} throttle={:.2} steer={:.2} x={:.0} y={:.0}", 
+                        i, action1, controls1.throttle, controls1.steer, 
+                        g.state.cars[i].1.phys.pos.x, g.state.cars[i].1.phys.pos.y); 
+                    io::stdout().flush().unwrap();
+                }
             }
             g.env.step_physics(4);
             
@@ -1913,8 +1958,10 @@ fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize)
                 let view = g.env.get_shared_info().view(&res.state);
                 let scoring_team = view.scoring_team();
                 let ripple_team = 1 - g.a_team; // Ripple is on opposite team
-                eprintln!("[Game {}] Ripple team={}, Candidate team={}, Scorer={:?}", 
-                    started, ripple_team, g.a_team, scoring_team);
+                let ball_y = res.state.ball.phys.pos.y;
+                println!("[Game {}] Ripple team={}, Candidate team={}, Scorer={:?}, Ball Y={:.0}", 
+                    started, ripple_team, g.a_team, scoring_team, ball_y);
+                io::stdout().flush().unwrap();
                 match scoring_team {
                     Some(t) if t == g.a_team => out[0] += 1,
                     Some(_) => out[1] += 1,

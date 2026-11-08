@@ -140,6 +140,7 @@ struct RippleState {
     prev_action: [f32; 8],
     ball_preds: [[f32; 9]; 1 + BALL_PRED_STEPS],
     pad_timers: [f32; 34],
+    was_flipped: bool,
 }
 
 impl RippleState {
@@ -161,6 +162,7 @@ impl RippleState {
             prev_action: [0.0; 8],
             ball_preds: [[0.0; 9]; 6],
             pad_timers: [0.0; 34],
+            was_flipped: false,
         }
     }
 }
@@ -556,7 +558,8 @@ impl RipplePolicy {
         }
 
         // Apply side inversion (flip if on left side)
-        if main[0] < 0.0 {
+        let is_flipped = main[0] < 0.0;
+        if is_flipped {
             for idx in [1, 4, 7, 10, 13] {
                 main[idx] *= -1.0;
             }
@@ -579,6 +582,14 @@ impl RipplePolicy {
                 a[4] *= -1.0;
             }
             main[30] = 1.0; // is_flipped
+        }
+        
+        // Store flip state for later un-flipping of actions
+        {
+            let mut states = self.states.lock().unwrap();
+            if let Some(st) = states.get_mut(&car) {
+                st.was_flipped = is_flipped;
+            }
         }
 
         // Normalize
@@ -814,12 +825,20 @@ impl ExternalPolicy for RipplePolicy {
                     st.queue.rotate_left(1);
                     st.queue[QUEUE_LEN - 1] = new_action;
                 }
-                st.prev_action = st.queue[0];
                 
-                // Return the ACTION INDEX that should be APPLIED (from queue[0]), not the chosen action
-                // Need to find which action index corresponds to prev_action
+                // UN-FLIP the action if observation was flipped (side inversion)
+                // The action was chosen in flipped space, so steer/yaw/roll must be inverted back
+                let mut applied_action_controls = st.queue[0];
+                if st.was_flipped {
+                    applied_action_controls[1] *= -1.0; // steer
+                    applied_action_controls[3] *= -1.0; // yaw
+                    applied_action_controls[4] *= -1.0; // roll
+                }
+                st.prev_action = applied_action_controls;
+                
+                // Find which action index corresponds to the un-flipped controls
                 let applied_action = table.iter().position(|&a| {
-                    a.iter().zip(st.prev_action.iter()).all(|(x, y)| (x - y).abs() < 0.001)
+                    a.iter().zip(applied_action_controls.iter()).all(|(x, y)| (x - y).abs() < 0.001)
                 }).unwrap_or(action);
                 actions.push(applied_action);
             } else {
