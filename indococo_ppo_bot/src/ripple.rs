@@ -398,7 +398,7 @@ impl RipplePolicy {
         state: &GameState,
         car: usize,
         st: &RippleState,
-    ) -> ([f32; 32], [[f32; 21]; 5], [[f32; 9]; 6], [[f32; 8]; 6], [[f32; 5]; 34]) {
+    ) -> ([f32; 32], [[f32; 21]; 5], [[f32; 9]; 6], [[f32; 8]; 6], [[f32; 5]; 34], bool) {
         let (info, me) = &state.cars[car];
         let inv = info.team == Team::Orange;
 
@@ -583,14 +583,6 @@ impl RipplePolicy {
             }
             main[30] = 1.0; // is_flipped
         }
-        
-        // Store flip state for later un-flipping of actions
-        {
-            let mut states = self.states.lock().unwrap();
-            if let Some(st) = states.get_mut(&car) {
-                st.was_flipped = is_flipped;
-            }
-        }
 
         // Normalize
         for i in 0..32 {
@@ -624,22 +616,24 @@ impl RipplePolicy {
             boost[2] /= 5000.0;
         }
 
-        (main, others, ball, actions, boosts)
+        (main, others, ball, actions, boosts, is_flipped)
     }
 
+    /// Stub signature when ripple feature is disabled
     #[cfg(not(feature = "ripple"))]
     fn build_obs_internal(
         &self,
         _state: &GameState,
         _car: usize,
         _st: &RippleState,
-    ) -> ([f32; 32], [[f32; 21]; 5], [[f32; 9]; 6], [[f32; 8]; 6], [[f32; 5]; 34]) {
+    ) -> ([f32; 32], [[f32; 21]; 5], [[f32; 9]; 6], [[f32; 8]; 6], [[f32; 5]; 34], bool) {
         (
             [0.0; 32],
             [[0.0; 21]; 5],
             [[0.0; 9]; 6],
             [[0.0; 8]; 6],
             [[0.0; 5]; 34],
+            false,
         )
     }
 }
@@ -658,16 +652,30 @@ impl ExternalPolicy for RipplePolicy {
     }
 
     fn build(&self, state: &GameState, car: usize, obs: &mut [f32], mask: &mut [bool]) {
-        self.detect_reset(state, car);
-
+        // Lock states ONCE and keep it for the entire build
         let mut states = self.states.lock().unwrap();
-        let st = states.get_mut(&car).unwrap();
+        
+        // Inline detect_reset logic to avoid double-locking
+        let is_kickoff = state.ball.phys.pos.length() < 10.0
+            && state
+                .cars
+                .iter()
+                .all(|(_, c)| c.phys.vel.length() < 10.0);
+
+        let st = states.entry(car).or_insert_with(RippleState::new);
+        let needs_reset = is_kickoff || st.queue[0][0].is_nan();
+        if needs_reset {
+            *st = RippleState::new();
+        }
 
         // Ripple uses tick_skip=4; we're called every 8 ticks (trainer's tick_skip).
         // Update timers by 4 ticks per call to match Python adapter behavior.
         self.update_timers(state, car, st);
 
-        let (main, others, ball, actions, boosts) = self.build_obs_internal(state, car, st);
+        let (main, mut others, ball, mut actions, boosts, is_flipped) = self.build_obs_internal(state, car, st);
+        
+        // Store flip state for later un-flipping
+        st.was_flipped = is_flipped;
 
         // Flatten into obs
         let mut offset = 0;
