@@ -217,7 +217,10 @@ fn main() {
     
     // Initialize Ripple
     let main_car_id = records[0].main_car_id as usize;
-    let car_idx = main_car_id - 1;  // 0-indexed (first car is at index 0)
+    // Map car_id to arena index: Python uses 1-3 for blue, 4-6 for orange
+    // But arena has sequential indices 0,1,2... based on team
+    // For 1v1: blue=0, orange=1
+    let car_idx = if records[0].side == "blue" { 0 } else { 1 };
     
     let mut ripple = RipplePolicy::load(
         Path::new("/home/ubuntu/eval_bots/ripple/bots/v1.1")

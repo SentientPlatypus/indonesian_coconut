@@ -227,13 +227,9 @@ impl RipplePolicy {
 
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
-            if is_kickoff {
-                *st = RippleState::new();
-                // Python sets queue to 0 at kickoff, not NaN
-                st.queue = [[0.0; 8]; QUEUE_LEN];
-            } else {
-                st.queue = [[f32::NAN; 8]; QUEUE_LEN];
-            }
+            *st = RippleState::new();
+            // Leave queue as NaN (RippleState::new() initializes to NaN)
+            // infer() will fill it with the first selected action
 
             self.update_ball_pred(state, st);
 
@@ -707,10 +703,8 @@ impl ExternalPolicy for RipplePolicy {
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
             *st = RippleState::new();
-            // Python sets queue to 0 at kickoff, NaN at other resets
-            if is_kickoff {
-                st.queue = [[0.0; 8]; QUEUE_LEN];
-            }
+            // Leave queue as NaN (RippleState::new() initializes to NaN)
+            // infer() will fill it with the first selected action
             // Update ball predictions after reset
             self.update_ball_pred(state, st);
             // Initialize pad timers

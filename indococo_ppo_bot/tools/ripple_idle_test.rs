@@ -49,12 +49,19 @@ fn run_idle_test(rdir: &Path, games: usize) {
             let mut robs = vec![0.0f32; ripple.obs_width()];
             let mut rmask = vec![false; rx::N_ACTIONS];
             
+            // Find which car index is on the ripple team
+            let ripple_car = state.cars.iter().enumerate()
+                .find(|(_, (info, _))| info.team as usize == ripple_team)
+                .map(|(idx, _)| idx)
+                .expect("ripple team not found");
+            let idle_car = 1 - ripple_car;  // The other car
+            
             // First-goal game
             loop {
                 steps += 1;
                 
                 // Get Ripple controls
-                ripple.build(&state, ripple_team, &mut robs, &mut rmask);
+                ripple.build(&state, ripple_car, &mut robs, &mut rmask);
                 let actions = ripple.infer(&robs, &rmask, 1);
                 let action = actions[0];
                 let controls = rx::controls_of(action);
@@ -69,13 +76,8 @@ fn run_idle_test(rdir: &Path, games: usize) {
                 
                 // 2 decisions per 8-tick step
                 for _ in 0..2 {
-                    if ripple_team == 0 {
-                        env.arena.set_car_controls(0, controls);
-                        env.arena.set_car_controls(1, idle_controls);
-                    } else {
-                        env.arena.set_car_controls(0, idle_controls);
-                        env.arena.set_car_controls(1, controls);
-                    }
+                    env.arena.set_car_controls(ripple_car, controls);
+                    env.arena.set_car_controls(idle_car, idle_controls);
                     env.step_physics(4);
                 }
                 
