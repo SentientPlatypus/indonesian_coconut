@@ -2,10 +2,23 @@
 promote = >= 52% decisive vs BEST over the finals h2h (500 g since ST6, seed 424242) AND pool400 mean
 >= BEST's pool400 - 1.0 AND vs FR4 >= BEST's vs FR4 - 0.01 AND bp5 mean >= BEST's - 1.0
 (tolerances = noise allowance; bp5 skipped if either side is missing).
-Galactus (galactus_final.jsonl 500 g, or legacy galactus1000.jsonl; seed 424242) is reported, and only blocks on a
-regression beyond noise: >= BEST's - 0.04 (~2 SE of the difference); skipped if missing."""
+Galactus (galactus_final.jsonl 500 g, or legacy galactus1000.jsonl; seed 424242) blocks on:
+  1. Absolute floor: must be >= GALACTUS_FLOOR (default 0.27, env var ST_GALACTUS_FLOOR or --galactus-floor)
+  2. Relative guard: must be >= BEST's - 0.08 to prevent catastrophic regressions
+Both conditions must hold; either may skip if candidate/best Galactus is missing."""
 import json, sys, os
-F, BF = sys.argv[1], sys.argv[2]
+import argparse
+
+# Parse CLI args: positional dirs, optional Galactus floor
+parser = argparse.ArgumentParser(description='ST promotion rule')
+parser.add_argument('candidate_dir', metavar='F', help='Candidate final dir')
+parser.add_argument('best_dir', metavar='BF', help='Current best final dir')
+parser.add_argument('--galactus-floor', type=float, 
+                    default=float(os.environ.get('ST_GALACTUS_FLOOR', '0.27')),
+                    help='Absolute Galactus win-rate floor (default 0.27, or ST_GALACTUS_FLOOR env)')
+args = parser.parse_args()
+F, BF = args.candidate_dir, args.best_dir
+GALACTUS_FLOOR = args.galactus_floor
 def last(p):
     try: return json.loads(open(p).read().strip().splitlines()[-1])
     except Exception: return None
@@ -27,7 +40,9 @@ ok = ok and (f4 is not None and (bf4 is None or f4 >= bf4 - 0.01))
 ok = ok and (pc is None or pb is None or pc >= pb - 1.0)
 ok = ok and (bc is None or bb is None or bc >= bb - 1.0)
 gc, gb = wr(galf(F)), wr(galf(BF))
-ok = ok and (gc is None or gb is None or gc >= gb - 0.04)
+# Galactus gate: absolute floor AND relative guard (both must hold)
+galactus_ok = gc is None or gb is None or (gc >= GALACTUS_FLOOR and gc >= gb - 0.08)
+ok = ok and galactus_ok
 # Generalization panel (report only, not part of the gate): per-opponent win rates
 # across pool400 + bp5 + Galactus; min / mean / weakest matchup.
 def per_opp(p):
@@ -41,4 +56,7 @@ def panel(D):
     w = min(m, key=m.get)
     return {"n": len(m), "min": round(m[w], 4), "weakest": w, "mean": round(sum(m.values()) / len(m), 4)}
 gen, gen_best = panel(F), panel(BF)
-print(json.dumps({"promote": bool(ok), "vs_best": vb, "vs_fr4": f4, "best_vs_fr4": bf4, "pool": pc, "best_pool": pb, "bp5": bc, "best_bp5": bb, "galactus": gc, "best_galactus": gb, "gen_panel": gen, "best_gen_panel": gen_best}))
+print(json.dumps({"promote": bool(ok), "vs_best": vb, "vs_fr4": f4, "best_vs_fr4": bf4, 
+                  "pool": pc, "best_pool": pb, "bp5": bc, "best_bp5": bb, 
+                  "galactus": gc, "best_galactus": gb, "galactus_floor": GALACTUS_FLOOR,
+                  "gen_panel": gen, "best_gen_panel": gen_best}))
