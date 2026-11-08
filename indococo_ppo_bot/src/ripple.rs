@@ -155,9 +155,9 @@ impl RippleState {
 /// Ripple policy with ONNX inference.
 pub struct RipplePolicy {
     #[cfg(feature = "ripple")]
-    policy: ort::session::Session,
+    policy: Mutex<ort::session::Session>,
     #[cfg(feature = "ripple")]
-    base: ort::session::Session,
+    base: Mutex<ort::session::Session>,
     #[cfg(not(feature = "ripple"))]
     _policy: (),
     #[cfg(not(feature = "ripple"))]
@@ -171,19 +171,21 @@ impl RipplePolicy {
         let policy_path = path.join("ripple-v1.1.onnx");
         let base_path = path.join("ripple-v1.1-bcm.onnx");
 
-        let policy = ort::session::Session::builder()?
-            .with_optimization_level(ort::session::GraphOptimizationLevel::Level3)?
+        let env = ort::init().build()?;
+
+        let policy = ort::session::Session::builder(&env)?
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
             .with_intra_threads(1)?
             .commit_from_file(policy_path)?;
 
-        let base = ort::session::Session::builder()?
-            .with_optimization_level(ort::session::GraphOptimizationLevel::Level3)?
+        let base = ort::session::Session::builder(&env)?
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
             .with_intra_threads(1)?
             .commit_from_file(base_path)?;
 
         Ok(Self {
-            policy,
-            base,
+            policy: Mutex::new(policy),
+            base: Mutex::new(base),
             states: Mutex::new(HashMap::new()),
         })
     }
@@ -673,7 +675,7 @@ impl ExternalPolicy for RipplePolicy {
 
     #[cfg(feature = "ripple")]
     fn infer(&self, obs: &[f32], _masks: &[bool], rows: usize) -> Vec<usize> {
-        use ort::value::Value;
+        use ort::{inputs, value::TensorRef};
 
         let mut actions = Vec::with_capacity(rows);
 
@@ -684,46 +686,93 @@ impl ExternalPolicy for RipplePolicy {
             let mut offset = 0;
             let main = &obs_row[offset..offset + 32];
             offset += 32;
-            let others: Vec<f32> = obs_row[offset..offset + 5 * 21].to_vec();
+            let others_vec: Vec<f32> = obs_row[offset..offset + 5 * 21].to_vec();
             offset += 5 * 21;
-            let ball: Vec<f32> = obs_row[offset..offset + 6 * 9].to_vec();
+            let ball_vec: Vec<f32> = obs_row[offset..offset + 6 * 9].to_vec();
             offset += 6 * 9;
-            let act_queue: Vec<f32> = obs_row[offset..offset + 6 * 8].to_vec();
+            let actions_vec: Vec<f32> = obs_row[offset..offset + 6 * 8].to_vec();
             offset += 6 * 8;
-            let boosts: Vec<f32> = obs_row[offset..offset + 34 * 5].to_vec();
+            let boosts_vec: Vec<f32> = obs_row[offset..offset + 34 * 5].to_vec();
 
             // Run inference
-            let policy_inputs = ort::inputs![
-                "main" => Value::from_array(ndarray::Array2::from_shape_vec((1, 32), main.to_vec()).unwrap()).unwrap(),
-                "others" => Value::from_array(ndarray::Array3::from_shape_vec((1, 5, 21), others).unwrap()).unwrap(),
-                "ball" => Value::from_array(ndarray::Array3::from_shape_vec((1, 6, 9), ball.clone()).unwrap()).unwrap(),
-                "actions" => Value::from_array(ndarray::Array3::from_shape_vec((1, 6, 8), act_queue.clone()).unwrap()).unwrap(),
-                "boosts" => Value::from_array(ndarray::Array3::from_shape_vec((1, 34, 5), boosts.clone()).unwrap()).unwrap(),
-            ].unwrap();
+            let main_vec = main.to_vec();
+            
+            let main_input = match TensorRef::from_array_view((vec![1, 32], main_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
+            let others_input = match TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
+            let ball_input = match TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
+            let actions_input = match TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
+            let boosts_input = match TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
 
-            let policy_outputs = self.policy.run(policy_inputs).unwrap();
-            let policy_logits: Vec<f32> = policy_outputs[0]
-                .try_extract_tensor::<f32>()
-                .unwrap()
-                .as_slice()
-                .unwrap()
-                .to_vec();
+            let mut policy_session = self.policy.lock().unwrap();
+            let policy_outputs = match policy_session.run(inputs![
+                "main" => main_input,
+                "others" => others_input,
+                "ball" => ball_input,
+                "actions" => actions_input,
+                "boosts" => boosts_input,
+            ]) {
+                Ok(o) => o,
+                Err(_) => { actions.push(0); continue; }
+            };
+            
+            let (_, policy_logits) = match policy_outputs["output"].try_extract_tensor::<f32>() {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
 
-            let base_inputs = ort::inputs![
-                "main" => Value::from_array(ndarray::Array2::from_shape_vec((1, 32), main.to_vec()).unwrap()).unwrap(),
-                "others" => Value::from_array(ndarray::Array3::from_shape_vec((1, 5, 21), others).unwrap()).unwrap(),
-                "ball" => Value::from_array(ndarray::Array3::from_shape_vec((1, 6, 9), ball).unwrap()).unwrap(),
-                "actions" => Value::from_array(ndarray::Array3::from_shape_vec((1, 6, 8), act_queue).unwrap()).unwrap(),
-                "boosts" => Value::from_array(ndarray::Array3::from_shape_vec((1, 34, 5), boosts).unwrap()).unwrap(),
-            ].unwrap();
+            // Recreate inputs for base model
+            let main_input2 = match TensorRef::from_array_view((vec![1, 32], main_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
+            let others_input2 = match TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
+            let ball_input2 = match TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
+            let actions_input2 = match TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
+            let boosts_input2 = match TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice())) {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
 
-            let base_outputs = self.base.run(base_inputs).unwrap();
-            let base_logits: Vec<f32> = base_outputs[0]
-                .try_extract_tensor::<f32>()
-                .unwrap()
-                .as_slice()
-                .unwrap()
-                .to_vec();
+            let mut base_session = self.base.lock().unwrap();
+            let base_outputs = match base_session.run(inputs![
+                "main" => main_input2,
+                "others" => others_input2,
+                "ball" => ball_input2,
+                "actions" => actions_input2,
+                "boosts" => boosts_input2,
+            ]) {
+                Ok(o) => o,
+                Err(_) => { actions.push(0); continue; }
+            };
+            
+            let (_, base_logits) = match base_outputs["output"].try_extract_tensor::<f32>() {
+                Ok(t) => t,
+                Err(_) => { actions.push(0); continue; }
+            };
 
             // KL selection
             let log_policy = log_softmax(&policy_logits);

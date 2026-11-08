@@ -4966,8 +4966,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37c87aa7a90b7ff3e0fe36cccd475df8d67f15f07f4d6c370c4b38464232813c"
 dependencies = [
  "half",
+ "ndarray 0.17.2",
  "ort-sys",
  "smallvec",
+ "tracing",
  "ureq 3.5.0",
 ]
 

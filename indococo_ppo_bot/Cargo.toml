@@ -34,7 +34,7 @@ serde_json = { version = "1", optional = true }
 # Use the same tch version as burn-tch (0.22.0) to avoid links conflicts
 tch = { version = "0.22.0", optional = true, default-features = false }
 # Ripple ONNX inference  
-ort = { version = "2.0.0-rc.15", optional = true, default-features = false, features = ["download-binaries", "half", "tls-native-vendored"] }
+ort = { version = "2.0.0-rc.15", optional = true, default-features = false, features = ["std", "download-binaries", "half", "tls-native-vendored"] }
 ndarray = { version = "0.16", optional = true }
 
 # deploy
