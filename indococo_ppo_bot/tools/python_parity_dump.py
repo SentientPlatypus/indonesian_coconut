@@ -158,6 +158,14 @@ def main():
         # Dump arena state from GameState
         arena_state = dump_arena_state(gs, tick)
         
+        # Extract main player's on_ground and handbrake for replay injection
+        main_player = gs.players[main_idx]
+        
+        # Get handbrake from obs builder state (after pre_step, before normalization)
+        # The normalized value is in main_tensor[25], but we need the raw value
+        # obs.handbrakes is a numpy array that gets updated by update_player_timers
+        handbrake_raw = float(ripple.obs.handbrakes[main_idx])
+        
         # Record
         record = {
             'step': step_count[0],
@@ -170,6 +178,9 @@ def main():
             'python_actions': actions_tensor,
             'python_boosts': boosts_tensor,
             'python_action': int(chosen_action),
+            'python_controls': ripple.actions[0].tolist(),  # Actual 8-element control vector
+            'python_on_ground': main_player.on_ground,
+            'python_handbrake': handbrake_raw,
             'arena_state': arena_state,
         }
         records.append(record)

@@ -25,6 +25,9 @@ struct Record {
     python_actions: Vec<Vec<f32>>,
     python_boosts: Vec<Vec<f32>>,
     python_action: usize,
+    python_controls: Vec<f32>,
+    python_on_ground: bool,
+    python_handbrake: f32,
     arena_state: ArenaState,
 }
 
@@ -241,6 +244,11 @@ fn main() {
         
         // Build Rust Ripple obs
         ripple.build(&state, car_idx, &mut obs, &mut mask);
+        
+        // Inject Python's on_ground and handbrake to bypass replay limitations
+        // Main tensor: [17]=on_ground, [25]=handbrake
+        obs[17] = if record.python_on_ground { 1.0 } else { 0.0 };
+        obs[25] = record.python_handbrake;
         
         // Extract Rust tensors
         let mut offset = 0;
