@@ -36,7 +36,7 @@ def parse_jsonl_dump(jsonl_path: str):
 
 def build_rocketsim_state(entry):
     """Rebuild RocketSim state from JSONL entry."""
-    import rocketsim as rs
+    import RocketSim as rs
     
     arena = rs.Arena(rs.GameMode.SOCCAR)
     
@@ -109,7 +109,7 @@ def compare_dump(ripple_agent, entries: list):
         arena = build_rocketsim_state(entry)
         
         # Create view for Python Ripple
-        from rocketsim import GameState as RSGameState
+        from RocketSim import GameState as RSGameState
         state = RSGameState(arena)
         
         # Create simple view (car 0)

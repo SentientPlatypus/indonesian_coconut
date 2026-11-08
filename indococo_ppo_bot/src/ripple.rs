@@ -903,12 +903,19 @@ mod tests {
         let mut ripple_mask = vec![false; N_ACTIONS];
 
         for _ in 0..125 { // 125 * 8 = 1000 ticks
-            policy.build(&state, 0, &mut ripple_obs, &mut ripple_mask);
-            let actions = policy.infer(&ripple_obs, &ripple_mask, 1);
-            let action = actions[0];
-
-            let acts = vec![action];
-            let res = env.step(&state, &acts);
+            // Ripple makes 2 decisions per 8-tick step
+            let num_cars = state.cars.len();
+            let acts = vec![0; num_cars];
+            env.pre_step(&state, &acts);
+            for _ in 0..2 {
+                policy.build(&state, 0, &mut ripple_obs, &mut ripple_mask);
+                let actions = policy.infer(&ripple_obs, &ripple_mask, 1);
+                let action = actions[0];
+                let controls = controls_of(action);
+                env.arena.set_car_controls(0, controls);
+                env.step_physics(4);
+            }
+            let res = env.post_step();
             state = res.state;
             obs = res.obs;
         }

@@ -1869,20 +1869,32 @@ fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize)
             if !gs[k].live { continue; }
             let g = &mut gs[k];
             let mut acts = Vec::new();
+            let mut ripple_car = None;
             for (i, (info, _)) in g.state.cars.iter().enumerate() {
                 if info.team as u8 == g.a_team {
                     acts.push(aa[ia]);
                     ia += 1;
                 } else {
                     acts.push(0);
+                    ripple_car = Some(i);
+                }
+            }
+            
+            // Apply candidate actions to all cars
+            g.env.pre_step(&g.state, &acts);
+            
+            // Ripple makes 2 decisions per 8-tick step (every 4 ticks)
+            // Re-apply its controls each time to override pre_step
+            for _ in 0..2 {
+                if let Some(i) = ripple_car {
                     ripple.build(&g.state, i, &mut robs, &mut rmask);
                     let actions = ripple.infer(&robs, &rmask, 1);
                     let ripple_act = actions[0];
                     g.env.arena.set_car_controls(i, rx::controls_of(ripple_act));
                 }
+                g.env.step_physics(4);
             }
-            g.env.pre_step(&g.state, &acts);
-            g.env.step_physics(4);
+            
             let res = g.env.post_step();
             out[3] += 1;
             if res.is_terminal || res.truncated {
@@ -1975,8 +1987,16 @@ fn ripple_dump(rdir: &Path, steps: usize, out: &Path) {
         });
         writeln!(f, "{}", serde_json::to_string(&line).unwrap()).expect("write");
         
-        let acts = vec![action];
-        let res = env.step(&state, &acts);
+        // Apply Ripple's controls directly and step
+        let controls = rx::controls_of(action);
+        let num_cars = state.cars.len();
+        let acts = vec![0; num_cars]; // Placeholder actions for all cars
+        env.pre_step(&state, &acts);
+        for _ in 0..2 {
+            env.arena.set_car_controls(0, controls);
+            env.step_physics(4);
+        }
+        let res = env.post_step();
         state = res.state;
         obs = res.obs;
     }
