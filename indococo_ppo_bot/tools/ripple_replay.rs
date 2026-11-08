@@ -260,8 +260,7 @@ fn main() {
         }
         
         // Build Rust Ripple obs
-        // game_id=0 for replay (single game)
-        ripple.build(&state, car_idx, 0, &mut obs, &mut mask);
+        ripple.build(&state, car_idx, &mut obs, &mut mask);
         
         // Inject Python's on_ground and handbrake to bypass replay limitations
         // Main tensor: [17]=on_ground, [25]=handbrake

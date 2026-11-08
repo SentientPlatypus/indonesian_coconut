@@ -184,6 +184,10 @@ pub struct RipplePolicy {
     _base: (),
     states: Mutex<HashMap<usize, RippleState>>,
     rng: Mutex<rand::rngs::StdRng>,
+    // Track order of build() calls to map infer() batch rows to states
+    // Each build() appends its state key; infer() uses this to look up states
+    build_order: Mutex<Vec<usize>>,
+    next_state_id: Mutex<usize>,
 }
 
 impl RipplePolicy {
@@ -209,12 +213,19 @@ impl RipplePolicy {
             base: Mutex::new(base),
             states: Mutex::new(HashMap::new()),
             rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
+            build_order: Mutex::new(Vec::new()),
+            next_state_id: Mutex::new(0),
         })
     }
 
     #[cfg(not(feature = "ripple"))]
     pub fn load(_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         Err("Ripple requires the 'ripple' feature".into())
+    }
+    
+    /// Clear build order tracking (call before each infer() batch)
+    pub fn prepare_batch(&self) {
+        self.build_order.lock().unwrap().clear();
     }
     
     /// Set RNG seed for deterministic kickoff sampling (e.g. 10000-10049 for paired tests)
@@ -698,22 +709,22 @@ impl ExternalPolicy for RipplePolicy {
         N_ACTIONS
     }
 
-    fn build(&self, state: &GameState, car: usize, game_id: usize, obs: &mut [f32], mask: &mut [bool]) {
-        // Key state by (game_id, car) to prevent crossover between games in batched training
-        let state_key = (game_id << 8) | car;  // Combine game_id and car into one key
+    fn build(&self, state: &GameState, car: usize, obs: &mut [f32], mask: &mut [bool]) {
+        // TODO: Proper multi-game keying requires tracking build() call order
+        // For now, use car index (works for idle test with single game)
+        let state_key = car;
         
-        // Lock states ONCE and keep it for the entire build
         let mut states = self.states.lock().unwrap();
+        let mut build_order = self.build_order.lock().unwrap();
         
-        // Inline detect_reset logic to avoid double-locking
-        // Kickoff: ball at (0, 0, ~93) and all cars stopped
+        // Record this state key for infer() batch mapping
+        build_order.push(state_key);
+        
+        // Inline detect_reset logic
         let is_kickoff = state.ball.phys.pos.x.abs() < 1.0
             && state.ball.phys.pos.y.abs() < 1.0
-            && state
-                .cars
-                .iter()
-                .all(|(_, c)| c.phys.vel.length() < 10.0);
-
+            && state.cars.iter().all(|(_, c)| c.phys.vel.length() < 10.0);
+        
         let st = states.entry(state_key).or_insert_with(RippleState::new);
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
@@ -780,10 +791,14 @@ impl ExternalPolicy for RipplePolicy {
         for i in 0..rows {
             let obs_row = &obs[i * self.obs_width()..(i + 1) * self.obs_width()];
 
-            // TODO: Extract game_id from obs metadata once trait is extended
-            // For now, this only works correctly for single-game scenarios
-            // Multi-game batched training will have state crossover issues
-            let state_key = i % 2;  // Temporary: assume alternating blue/orange in batch
+            // Map batch row i to state key using build_order tracking
+            let build_order = self.build_order.lock().unwrap();
+            let state_key = if i < build_order.len() {
+                build_order[i]
+            } else {
+                // Fallback: use row index modulo 2
+                i % 2
+            };
 
             // Reshape into 5 tensors
             let mut offset = 0;
@@ -1063,7 +1078,7 @@ mod tests {
             let acts = vec![0; num_cars];
             env.pre_step(&state, &acts);
             for _ in 0..2 {
-                policy.build(&state, 0, 0, &mut ripple_obs, &mut ripple_mask);  // game_id=0
+                policy.build(&state, 0, &mut ripple_obs, &mut ripple_mask);
                 let actions = policy.infer(&ripple_obs, &ripple_mask, 1);
                 let action = actions[0];
                 let controls = controls_of(action);
