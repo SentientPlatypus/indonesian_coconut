@@ -411,7 +411,7 @@ impl RipplePolicy {
         let up = me.phys.rot_mat.z_axis;
         let f = flags(me);
 
-        main[0..3].copy_from_slice(&[vel.x, vel.y, vel.z]);
+        main[0..3].copy_from_slice(&[pos.x, pos.y, pos.z]);
         main[3..6].copy_from_slice(&[vel.x, vel.y, vel.z]);
         main[6..9].copy_from_slice(&[ang.x, ang.y, ang.z]);
         main[9..12].copy_from_slice(&[fwd.x, fwd.y, fwd.z]);
