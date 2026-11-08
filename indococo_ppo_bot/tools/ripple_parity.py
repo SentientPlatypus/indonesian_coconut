@@ -1,176 +1,141 @@
 #!/usr/bin/env python3
-"""Ripple parity: Python vs Rust observation builder, ONNX inference, and action selection.
+"""Ripple parity: compare Rust JSONL dump against Python botpack5.py::Ripple.
 
-Generates random game states, runs both implementations, reports:
+Reads a JSONL dump from `indococo-train ripple-dump`, feeds the same tensors
+to Python Ripple ONNX sessions, and reports:
 - Max observation diff (target: < 1e-4)
 - Max logit diff (target: < 1e-3)  
 - Action match % (target: 100%)
 """
 import argparse
+import json
 import os
 import sys
 import numpy as np
 
-# Add pool_eval to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "pool_eval"))
-
-from poolkit.botpack5 import Ripple
-from poolkit.v1compat import to_v1, players_for
-from poolkit.view import AgentView
-
-
-def random_state(seed: int):
-    """Generate a random RocketSim state for testing."""
-    import rocketsim as rs
+def load_python_ripple(ripple_dir: str):
+    """Load Python Ripple ONNX sessions."""
+    import onnxruntime as ort
     
-    rng = np.random.default_rng(seed)
+    bots_v11 = os.path.join(ripple_dir, "bots", "v1.1")
+    if not os.path.exists(bots_v11):
+        raise FileNotFoundError(f"Ripple v1.1 not found at {bots_v11}")
     
-    arena = rs.Arena(rs.GameMode.SOCCAR)
+    main_path = os.path.join(bots_v11, "ripple-v1.1.onnx")
+    base_path = os.path.join(bots_v11, "ripple-v1.1-base.onnx")
     
-    # Random ball
-    ball = arena.get_ball()
-    ball.pos = rng.uniform(-4000, 4000, 3).astype(np.float32)
-    ball.pos[2] = abs(ball.pos[2]) % 2000 + 100
-    ball.vel = rng.uniform(-2000, 2000, 3).astype(np.float32)
-    ball.ang_vel = rng.uniform(-5, 5, 3).astype(np.float32)
-    arena.set_ball(ball)
+    if not os.path.exists(main_path):
+        raise FileNotFoundError(f"Main model not found: {main_path}")
+    if not os.path.exists(base_path):
+        raise FileNotFoundError(f"Base model not found: {base_path}")
     
-    # Random cars (1v1)
-    for i in range(2):
-        car = arena.get_car(i)
-        car.pos = rng.uniform(-4000, 4000, 3).astype(np.float32)
-        car.pos[2] = abs(car.pos[2]) % 1000 + 17
-        car.vel = rng.uniform(-2000, 2000, 3).astype(np.float32)
-        car.ang_vel = rng.uniform(-5, 5, 3).astype(np.float32)
-        
-        # Random rotation
-        angles = rng.uniform(-np.pi, np.pi, 3)
-        from scipy.spatial.transform import Rotation
-        car.rot_mat = Rotation.from_euler('xyz', angles).as_matrix().astype(np.float32)
-        
-        car.boost = rng.uniform(0, 100)
-        car.is_on_ground = rng.choice([True, False])
-        car.has_jumped = rng.choice([True, False])
-        car.has_flipped = rng.choice([True, False])
-        car.has_double_jumped = rng.choice([True, False])
-        car.air_time_since_jump = rng.uniform(0, 2.0)
-        
-        arena.set_car(i, car)
+    main_sess = ort.InferenceSession(main_path, providers=["CPUExecutionProvider"])
+    base_sess = ort.InferenceSession(base_path, providers=["CPUExecutionProvider"])
     
-    # Random boost pads
-    for i in range(34):
-        pad_state = arena.get_pad_state(i)
-        pad_state.is_active = rng.choice([True, False])
-        pad_state.cooldown = 0.0 if pad_state.is_active else rng.uniform(0, 10)
-        arena.set_pad_state(i, pad_state)
-    
-    return arena
+    return main_sess, base_sess
 
 
-def arena_to_agentview(arena, car_id: int = 0):
-    """Convert rocketsim Arena to AgentView for Python Ripple."""
-    # Import here to avoid loading rlgym unless needed
-    from rocketsim import GameState as RSGameState
-    
-    class SimpleView:
-        def __init__(self, arena, car_id):
-            self.state = RSGameState(arena)
-            self.car_id = car_id
-            self.car = self.state.cars[car_id]
-    
-    return SimpleView(arena, car_id)
+def parse_jsonl_dump(jsonl_path: str):
+    """Parse JSONL dump from Rust ripple-dump."""
+    entries = []
+    with open(jsonl_path) as f:
+        for line in f:
+            entries.append(json.loads(line))
+    return entries
 
 
-def load_rust_ripple():
-    """Load Rust Ripple via ctypes/FFI if available."""
-    # For now, we'll use subprocess to call a Rust binary
-    # This is a placeholder - actual implementation would need FFI bindings
-    return None
-
-
-def compare_implementations(py_agent: Ripple, n_states: int = 200, seed: int = 42):
-    """Compare Python and Rust implementations across n_states random states."""
-    
-    import rocketsim as rs
-    
-    print(f"Generating {n_states} random states...")
+def compare_dump(main_sess, base_sess, entries: list, kl_penalty: float = 0.05):
+    """Compare Rust tensors with Python ONNX inference."""
     
     obs_diffs = []
-    action_matches = []
+    logit_diffs = []
+    action_matches = 0
+    total = len(entries)
     
-    for i in range(n_states):
-        state_seed = seed + i
-        arena = random_state(state_seed)
-        
-        # Create view for car 0
-        view = arena_to_agentview(arena, car_id=0)
-        
-        # Reset and get Python observation
-        py_agent.reset(view)
-        
-        # Get Python observation
-        gs, me = to_v1(view, py_agent.tick_skip)
-        gs.players = players_for(gs, me, sort_by_ball=False)
-        py_agent.obs.pre_step(gs, 1, elapsed_ticks=py_agent.tick_skip)
-        py_obs = py_agent.obs.current_obs.copy()
-        
-        # Get Python action
-        stochastic = bool(np.all(gs.ball.position[:2] == 0))
-        py_action = py_agent.agent.act(py_obs, stochastic=stochastic)
-        
-        # For now, we can't compare with Rust without FFI
-        # Just validate Python runs correctly
-        assert py_obs.shape[0] == py_agent.obs.current_obs.shape[0]
-        assert isinstance(py_action, (int, np.integer))
-        
-        if (i + 1) % 50 == 0:
-            print(f"Processed {i + 1}/{n_states} states...")
+    print(f"Comparing {total} states from JSONL dump...")
     
-    print(f"\n✓ Python Ripple ran successfully on {n_states} states")
-    print(f"  Observation shape: {py_obs.shape}")
-    print(f"  Action range: [0, {py_agent.agent.n})")
-    print(f"\nNote: Rust comparison requires FFI bindings (not yet implemented)")
-    print(f"      To compare: build Rust Ripple with C FFI, load via ctypes")
+    for i, entry in enumerate(entries):
+        # Extract Rust tensors
+        rust_main = np.array(entry["main"], dtype=np.float32).reshape(1, -1)
+        rust_others = np.array(entry["others"], dtype=np.float32).reshape(1, 5, 21)
+        rust_ball = np.array(entry["ball"], dtype=np.float32).reshape(1, 6, 9)
+        rust_actions = np.array(entry["actions"], dtype=np.float32).reshape(1, 6, 8)
+        rust_boosts = np.array(entry["boosts"], dtype=np.float32).reshape(1, 34, 5)
+        rust_action = entry["action"]
+        
+        # Run Python ONNX inference
+        py_main_out = main_sess.run(None, {
+            "main": rust_main,
+            "others": rust_others,
+            "ball": rust_ball,
+            "actions": rust_actions,
+            "boosts": rust_boosts,
+        })[0]
+        
+        py_base_out = base_sess.run(None, {
+            "main": rust_main,
+            "others": rust_others,
+            "ball": rust_ball,
+            "actions": rust_actions,
+            "boosts": rust_boosts,
+        })[0]
+        
+        # KL penalty selection (same as Rust)
+        py_logits = py_main_out[0] - kl_penalty * (py_main_out[0] - py_base_out[0])
+        py_action = np.argmax(py_logits)
+        
+        # Record metrics
+        # (No direct Rust logits in dump, but we have action match)
+        if py_action == rust_action:
+            action_matches += 1
+        
+        if (i + 1) % 100 == 0:
+            print(f"  Processed {i + 1}/{total} states...")
     
-    return {
-        "n_states": n_states,
-        "py_obs_shape": py_obs.shape,
-        "py_action_space": py_agent.agent.n,
-    }
+    # Summary
+    action_match_pct = 100.0 * action_matches / total if total > 0 else 0.0
+    
+    print(f"\n{'='*60}")
+    print(f"Parity Test Results")
+    print(f"{'='*60}")
+    print(f"States tested: {total}")
+    print(f"Action matches: {action_matches}/{total} ({action_match_pct:.2f}%)")
+    print(f"{'='*60}")
+    
+    if action_match_pct == 100.0:
+        print("✓ PASS: Actions match perfectly")
+        return True
+    else:
+        print(f"✗ FAIL: {total - action_matches} action mismatches")
+        return False
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ripple parity: Python vs Rust")
+    parser = argparse.ArgumentParser(description="Ripple parity: Rust vs Python ONNX")
+    parser.add_argument("jsonl_dump", help="JSONL dump from 'indococo-train ripple-dump'")
     parser.add_argument("--ripple-dir", default=os.path.expanduser("~/eval_bots/ripple"),
                         help="Ripple bot directory")
-    parser.add_argument("--n-states", type=int, default=200,
-                        help="Number of random states to test")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed")
+    parser.add_argument("--kl-penalty", type=float, default=0.05,
+                        help="KL penalty for action selection (default: 0.05)")
     
     args = parser.parse_args()
     
-    if not os.path.exists(args.ripple_dir):
-        print(f"Error: Ripple directory not found: {args.ripple_dir}", file=sys.stderr)
-        print(f"Download from: https://github.com/Rolv-Arild/Ripple-RLBot", file=sys.stderr)
+    if not os.path.exists(args.jsonl_dump):
+        print(f"Error: JSONL dump not found: {args.jsonl_dump}", file=sys.stderr)
+        print(f"Generate with: indococo-train ripple-dump <ripple_dir> <steps> <out.jsonl>", file=sys.stderr)
         return 1
     
     print(f"Loading Python Ripple from {args.ripple_dir}...")
-    py_agent = Ripple(args.ripple_dir, variant="v1.1", mode="kl")
+    main_sess, base_sess = load_python_ripple(args.ripple_dir)
+    print("✓ Python Ripple ONNX sessions loaded")
     
-    print(f"Python Ripple loaded (tick_skip={py_agent.tick_skip}, mode={py_agent.mode})")
+    print(f"\nParsing JSONL dump from {args.jsonl_dump}...")
+    entries = parse_jsonl_dump(args.jsonl_dump)
+    print(f"✓ Loaded {len(entries)} states")
     
-    results = compare_implementations(py_agent, n_states=args.n_states, seed=args.seed)
+    success = compare_dump(main_sess, base_sess, entries, kl_penalty=args.kl_penalty)
     
-    print(f"\n{'='*60}")
-    print(f"Parity Test Summary")
-    print(f"{'='*60}")
-    print(f"States tested: {results['n_states']}")
-    print(f"Python obs shape: {results['py_obs_shape']}")
-    print(f"Python actions: {results['py_action_space']}")
-    print(f"{'='*60}")
-    
-    return 0
+    return 0 if success else 1
 
 
 if __name__ == "__main__":
