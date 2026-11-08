@@ -212,74 +212,6 @@ impl RipplePolicy {
         Err("Ripple requires the 'ripple' feature".into())
     }
 
-    #[cfg(feature = "ripple")]
-    pub fn get_logits_and_kl(&self, obs: &[f32]) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-        use ort::{inputs, value::TensorRef};
-        
-        // Reshape into 5 tensors
-        let mut offset = 0;
-        let main = &obs[offset..offset + 32];
-        offset += 32;
-        let others_vec: Vec<f32> = obs[offset..offset + 5 * 21].to_vec();
-        offset += 5 * 21;
-        let ball_vec: Vec<f32> = obs[offset..offset + 6 * 9].to_vec();
-        offset += 6 * 9;
-        let actions_vec: Vec<f32> = obs[offset..offset + 6 * 8].to_vec();
-        offset += 6 * 8;
-        let boosts_vec: Vec<f32> = obs[offset..offset + 34 * 5].to_vec();
-        
-        let main_vec = main.to_vec();
-        
-        let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice())).unwrap();
-        let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice())).unwrap();
-        let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice())).unwrap();
-        let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice())).unwrap();
-        let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice())).unwrap();
-        
-        let mut policy_session = self.policy.lock().unwrap();
-        let policy_outputs = policy_session.run(inputs![
-            "main" => main_input,
-            "others" => others_input,
-            "ball" => ball_input,
-            "actions" => actions_input,
-            "boosts" => boosts_input,
-        ]).unwrap();
-        
-        let (_, policy_logits) = policy_outputs["logits"].try_extract_tensor::<f32>().unwrap();
-        let policy_logits_vec = policy_logits.to_vec();
-        
-        // Recreate inputs for base model
-        let main_input2 = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice())).unwrap();
-        let others_input2 = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice())).unwrap();
-        let ball_input2 = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice())).unwrap();
-        let actions_input2 = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice())).unwrap();
-        let boosts_input2 = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice())).unwrap();
-        
-        // Get base logits
-        let mut base_session = self.base.lock().unwrap();
-        let base_outputs = base_session.run(inputs![
-            "main" => main_input2,
-            "others" => others_input2,
-            "ball" => ball_input2,
-            "actions" => actions_input2,
-            "boosts" => boosts_input2,
-        ]).unwrap();
-        
-        let (_, base_logits) = base_outputs["logits"].try_extract_tensor::<f32>().unwrap();
-        let base_logits_vec = base_logits.to_vec();
-        
-        // Compute KL scores
-        let log_policy = log_softmax(&policy_logits_vec);
-        let log_base = log_softmax(&base_logits_vec);
-        
-        let mut kl_scores = vec![0.0f32; N_ACTIONS];
-        for j in 0..N_ACTIONS {
-            kl_scores[j] = log_policy[j].exp() * (log_policy[j] - log_base[j]);
-        }
-        
-        (policy_logits_vec, base_logits_vec, kl_scores)
-    }
-
     fn detect_reset(&self, state: &GameState, car: usize) -> bool {
         let is_kickoff = state.ball.phys.pos.x.abs() < 10.0
             && state.ball.phys.pos.y.abs() < 10.0
@@ -292,17 +224,14 @@ impl RipplePolicy {
         let st = states.entry(car).or_insert_with(RippleState::new);
 
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
-        
-        // DEBUG
-        if car == 0 && state.tick_count <= 10 {
-            eprintln!("DEBUG detect_reset: tick={}, is_kickoff={}, queue[0][0]={}, needs_reset={}", 
-                state.tick_count, is_kickoff, st.queue[0][0], needs_reset);
-        }
-        
         if needs_reset {
-            *st = RippleState::new();
-            // Leave queue as NaN so infer() fills it with the first selected action
-            // (RippleState::new() already initializes queue to NaN)
+            if is_kickoff {
+                *st = RippleState::new();
+                // Python sets queue to 0 at kickoff, not NaN
+                st.queue = [[0.0; 8]; QUEUE_LEN];
+            } else {
+                st.queue = [[f32::NAN; 8]; QUEUE_LEN];
+            }
 
             self.update_ball_pred(state, st);
 
@@ -504,11 +433,7 @@ impl RipplePolicy {
         main[25] = st.handbrake;
         main[26..28].copy_from_slice(&st.flip_dir);
         // is_reset: True if action queue contains NaN (indicates next action will fill queue)
-        // Python: is_reset = queue has NaN AND not kickoff
-        // At kickoff, Python fills queue with 0.0 before first obs, so is_reset=0.0
-        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
-        let has_nan = st.queue.iter().flatten().any(|&x| x.is_nan());
-        let is_reset = has_nan && !is_kickoff;
+        let is_reset = st.queue.iter().flatten().any(|&x| x.is_nan());
         main[28] = if is_reset { 1.0 } else { 0.0 };
         // is_kickoff: True if ball is at center (will be flipped to indicate side later)
         let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
@@ -780,8 +705,10 @@ impl ExternalPolicy for RipplePolicy {
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
             *st = RippleState::new();
-            // Leave queue as NaN so infer() fills it with the first selected action
-            // (RippleState::new() already initializes queue to NaN)
+            // Python sets queue to 0 at kickoff, NaN at other resets
+            if is_kickoff {
+                st.queue = [[0.0; 8]; QUEUE_LEN];
+            }
             // Update ball predictions after reset
             self.update_ball_pred(state, st);
             // Initialize pad timers
@@ -949,44 +876,42 @@ impl ExternalPolicy for RipplePolicy {
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
                 .map(|(idx, _)| idx)
                 .unwrap();
-            
-            // DEBUG: print KL selection for first car at step 0
-            let states_check = self.states.lock().unwrap();
-            if i == 0 && states_check.len() <= 1 {
-                eprintln!("\n  DEBUG infer() internal KL:");
-                eprintln!("    KL[38] = {:.6}", kl_scores[38]);
-                eprintln!("    KL[14] = {:.6}", kl_scores[14]);
-                eprintln!("    Selected action: {}", action);
-            }
-            drop(states_check);
 
             // Update delayed action queue
             let mut states = self.states.lock().unwrap();
-            
-            // DEBUG
-            if i == 0 && states.len() <= 2 {
-                eprintln!("    DEBUG before queue update:");
-                eprintln!("      i={}, states.len()={}, has state: {}", i, states.len(), states.contains_key(&i));
-            }
-            
             if let Some(st) = states.get_mut(&i) {
                 let table = action_table();
                 let new_action = table[action];
-                let was_first_fill = st.queue[0][0].is_nan();
-                if was_first_fill {
-                    // Fill entire queue on first decision
+                
+                // Python queue structure (act.py DelayedAction.parse_actions lines 109-117):
+                // - queue[0] = newest action (just decided)
+                // - queue[5] = oldest action (about to execute)
+                // Python logic:
+                //   1. If queue has NaN, fill entire queue with new_action
+                //   2. Save to_execute = queue[5]
+                //   3. Shift right: queue[1:6] = queue[0:5]
+                //   4. Put new_action at queue[0]
+                //   5. Return to_execute
+                
+                // Check for NaN and fill if needed
+                if st.queue[0][0].is_nan() {
                     for slot in &mut st.queue {
                         *slot = new_action;
                     }
-                } else {
-                    // Shift queue and append
-                    st.queue.rotate_left(1);
-                    st.queue[QUEUE_LEN - 1] = new_action;
                 }
+                
+                // Save action to execute (from queue[5])
+                let to_execute = st.queue[QUEUE_LEN - 1];
+                
+                // Shift right: move queue[0..5] to queue[1..6]
+                st.queue.rotate_right(1);
+                
+                // Put new action at front
+                st.queue[0] = new_action;
                 
                 // UN-FLIP the action if observation was flipped (side inversion)
                 // The action was chosen in flipped space, so steer/yaw/roll must be inverted back
-                let mut applied_action_controls = st.queue[0];
+                let mut applied_action_controls = to_execute;
                 if st.was_flipped {
                     applied_action_controls[1] *= -1.0; // steer
                     applied_action_controls[3] *= -1.0; // yaw
@@ -1000,17 +925,6 @@ impl ExternalPolicy for RipplePolicy {
                 let applied_action = table.iter().position(|&a| {
                     a.iter().zip(applied_action_controls.iter()).all(|(x, y)| (x - y).abs() < 0.001)
                 }).unwrap_or(action);
-                
-                // DEBUG
-                if i == 0 && was_first_fill {
-                    eprintln!("    DEBUG queue fill:");
-                    eprintln!("      Selected action index: {}", action);
-                    eprintln!("      new_action (table[{}]): {:?}", action, new_action);
-                    eprintln!("      applied_action_controls: {:?}", applied_action_controls);
-                    eprintln!("      was_flipped: {}", st.was_flipped);
-                    eprintln!("      applied_action (table search result): {}", applied_action);
-                }
-                
                 actions.push(applied_action);
             } else {
                 actions.push(action);
