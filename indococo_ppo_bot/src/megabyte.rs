@@ -536,7 +536,7 @@ impl ExternalPolicy for MegabytePolicy {
     fn num_actions(&self) -> usize {
         N_ACTIONS
     }
-    fn build(&self, state: &GameState, car: usize, obs: &mut [f32], mask: &mut [bool]) {
+    fn build(&self, state: &GameState, car: usize, _game_id: usize, obs: &mut [f32], mask: &mut [bool]) {
         obs.copy_from_slice(&build_obs(state, car, self.shuffle_slots));
         action_mask(&state.cars[car].1, mask);
     }

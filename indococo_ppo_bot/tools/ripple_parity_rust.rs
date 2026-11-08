@@ -38,7 +38,8 @@ fn ripple_dump(rdir: &Path, steps: usize, out: &Path) {
     let mut rmask = vec![false; rx::N_ACTIONS];
     
     for step in 0..steps {
-        ripple.build(&state, 0, &mut robs, &mut rmask);
+        // game_id=0 for parity test (single game)
+        ripple.build(&state, 0, 0, &mut robs, &mut rmask);
         let actions = ripple.infer(&robs, &rmask, 1);
         let action = actions[0];
         

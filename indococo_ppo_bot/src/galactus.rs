@@ -456,7 +456,7 @@ impl ExternalPolicy for GalactusPolicy {
     fn num_actions(&self) -> usize {
         N_ACTIONS
     }
-    fn build(&self, state: &GameState, car: usize, obs: &mut [f32], mask: &mut [bool]) {
+    fn build(&self, state: &GameState, car: usize, _game_id: usize, obs: &mut [f32], mask: &mut [bool]) {
         let pred = ball_prediction(&state.ball);
         obs.copy_from_slice(&build_obs_with_pred(state, car, &pred, self.shuffle_slots));
         action_mask(&state.cars[car].1, mask);
