@@ -6,7 +6,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use rand::prelude::*;
 
 use rlgymppo::ExternalPolicy;
@@ -200,12 +199,11 @@ pub struct RipplePolicy {
     // Key: (game_state_ptr, car_index) -> RippleState
     states: Mutex<HashMap<(usize, usize), RippleState>>,
     rng: Mutex<rand::rngs::StdRng>,
-    // Build records: maps obs row index -> key, filled during parallel build() calls
-    // Infer uses this to look up the correct state for each row
-    // Reset after each infer() call
-    build_records: Mutex<Vec<Option<(usize, usize)>>>,
-    // Atomic row counter: atomically allocates row indices during parallel build() calls
-    build_row_counter: AtomicUsize,
+    // Build records: maps obs slice pointer -> key (self-identifying rows)
+    // Per EC2 rip15: fetch_add used completion order (wrong under thread pool)
+    // Fix: batch_sim :1211-1219 allocates slices in game order before spawn
+    // Use obs slice start pointer as deterministic key regardless of execution order
+    build_records: Mutex<HashMap<usize, (usize, usize)>>,
     // Batch counter: increments after each infer() for edge-trigger reset detection
     batch_counter: Mutex<usize>,
 }
@@ -238,8 +236,7 @@ impl RipplePolicy {
             base: Mutex::new(base),
             states: Mutex::new(HashMap::new()),
             rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
-            build_records: Mutex::new(Vec::new()),
-            build_row_counter: AtomicUsize::new(0),
+            build_records: Mutex::new(HashMap::new()),
             batch_counter: Mutex::new(0),
         })
     }
@@ -767,19 +764,23 @@ impl ExternalPolicy for RipplePolicy {
         let mut states = self.states.lock().unwrap();
         let st = states.entry(key).or_insert_with(RippleState::new);
         
-        // Edge-triggered reset: only on genuine episode start (EC2 rip14 improvements)
-        // Prefer reliable episode signal (tick_count) over heuristics
-        let tick_reset = st.last_batch > 0 && state.tick_count < st.last_tick_count.saturating_sub(1000);
+        // Edge-triggered reset: only on genuine episode start
+        // Per EC2 rip15: tick_count does NOT rewind (Env::reset lib.rs:238-258 doesn't zero it)
+        // Use teleport detection: ball/car moved impossibly fast (not explained by demo)
         let kickoff_edge = !st.was_kickoff && is_kickoff_geometry;
-        let ball_teleported = (ball_pos - st.last_ball_pos).length() > 1000.0;
-        let car_teleported = (car_pos - st.last_car_pos).length() > 1000.0;
-        let batch_gap = st.last_batch > 0 && st.last_batch + 1 < current_batch;
+        
+        // Teleport detection: movement > physically possible in 8 ticks
+        // Ball max ~600uu/8ticks, car max ~400uu/8ticks (conservative estimates)
+        let ball_teleported = st.last_batch > 0 && (ball_pos - st.last_ball_pos).length() > 600.0;
+        let car_teleported = st.last_batch > 0 && (car_pos - st.last_car_pos).length() > 400.0;
         
         // Don't reset on demo respawn (car demoed but episode continues)
         let is_demo_respawn = me.demo_respawn_timer > 0.0;
+        let unexplained_car_teleport = car_teleported && !is_demo_respawn;
         
-        let needs_reset = (tick_reset || kickoff_edge || ball_teleported || car_teleported || batch_gap)
-                          && !is_demo_respawn;
+        let batch_gap = st.last_batch > 0 && st.last_batch + 1 < current_batch;
+        
+        let needs_reset = kickoff_edge || ball_teleported || unexplained_car_teleport || batch_gap;
         
         if needs_reset {
             // Reset semantics per EC2 rip14:
@@ -840,14 +841,12 @@ impl ExternalPolicy for RipplePolicy {
 
         mask.fill(true);
         
-        // Record which row this key wrote to (for parallel-safe infer lookup)
-        // Atomically allocate row index
-        let row_idx = self.build_row_counter.fetch_add(1, Ordering::SeqCst);
+        // Record key by obs slice pointer (self-identifying rows)
+        // Per EC2 rip15: batch_sim :1211-1219 pre-allocates slices in game order
+        // Obs pointer is deterministic regardless of parallel execution order
+        let obs_ptr = obs.as_ptr() as usize;
         let mut records = self.build_records.lock().unwrap();
-        if row_idx >= records.len() {
-            records.resize(row_idx + 1, None);
-        }
-        records[row_idx] = Some(key);
+        records.insert(obs_ptr, key);
     }
 
     #[cfg(feature = "ripple")]
@@ -859,10 +858,11 @@ impl ExternalPolicy for RipplePolicy {
         for i in 0..rows {
             let obs_row = &obs[i * self.obs_width()..(i + 1) * self.obs_width()];
 
-            // Look up which key wrote to row i (thread-safe mapping)
+            // Look up key by obs row pointer (self-identifying)
+            let obs_row_ptr = obs_row.as_ptr() as usize;
             let records = self.build_records.lock().unwrap();
-            let key = records.get(i).and_then(|x| *x).unwrap_or_else(|| {
-                panic!("infer() row {} has no recorded key - build() must be called first", i)
+            let key = *records.get(&obs_row_ptr).unwrap_or_else(|| {
+                panic!("infer() row {} (ptr {:x}) has no recorded key - build() must be called first", i, obs_row_ptr)
             });
             drop(records);
 
@@ -1051,17 +1051,20 @@ impl ExternalPolicy for RipplePolicy {
                 st.prev_prev_action = st.prev_action;
                 st.prev_action = applied_action_controls;
                 
-                // Return the SELECTED action (what model chose), not the executed one
-                // Per EC2 rip14: infer() should return selected, not queue[5] executed
-                // Replay tool can use get_selected_action() vs controls match for both comparisons
-                actions.push(action);
+                // Return the EXECUTED action (queue[5] with orange unflip)
+                // Per EC2 rip15: batch_sim :1261 applies controls() directly (action_delay 0)
+                // Must return executed to respect 6-decision delay, matching upstream act.py:106-117
+                // For replay selected-vs-selected: use get_selected_action() accessor
+                let applied_action = table.iter().position(|&a| {
+                    a.iter().zip(applied_action_controls.iter()).all(|(x, y)| (x - y).abs() < 0.001)
+                }).unwrap_or(action);
+                actions.push(applied_action);
             } else {
                 actions.push(action);
             }
         }
 
         // Reset build tracking and increment batch counter for next step
-        self.build_row_counter.store(0, Ordering::SeqCst);
         self.build_records.lock().unwrap().clear();
         *self.batch_counter.lock().unwrap() += 1;
 
@@ -1092,6 +1095,27 @@ impl ExternalPolicy for RipplePolicy {
 
 // Additional methods outside trait impl
 impl RipplePolicy {
+    /// Debug accessor: get the newly SELECTED action (queue[0]) for a given GameState+car
+    /// Used by replay tool to compare selected-vs-selected (what model chose, not executed)
+    /// Returns None if state doesn't exist or queue uninitialized
+    #[cfg(feature = "ripple")]
+    pub fn get_selected_action(&self, state: &GameState, car: usize) -> Option<usize> {
+        let state_ptr = state as *const GameState as usize;
+        let key = (state_ptr, car);
+        let states = self.states.lock().unwrap();
+        let st = states.get(&key)?;
+        
+        if st.queue[0][0].is_nan() {
+            return None;
+        }
+        
+        // Find action index that matches queue[0] (newest selected)
+        let table = action_table();
+        table.iter().position(|&a| {
+            a.iter().zip(st.queue[0].iter()).all(|(x, y)| (x - y).abs() < 0.001)
+        })
+    }
+    
     /// Debug accessor: get the EXECUTED controls (prev_action) for a given GameState+car
     /// Used by replay tool to compare executed-vs-executed controls
     /// Returns the 8-float control vector that was actually applied to the game
@@ -1272,12 +1296,167 @@ mod tests {
 
     #[test]
     #[cfg(feature = "ripple")]
+    fn test_no_deadlock_get_raw_logits() {
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            return;
+        }
+        let policy = RipplePolicy::load(&path).expect("Load Ripple");
+        let obs = vec![0.0f32; policy.obs_width()];
+        
+        // Multiple calls should not deadlock
+        let r1 = policy.get_raw_logits(&obs);
+        let r2 = policy.get_raw_logits(&obs);
+        assert!(r1.is_ok() && r2.is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_kickoff_queue_zeros_noop_delay() {
+        // Kickoff resets use zeros (6-decision no-op delay per obs.py:129-133)
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            return;
+        }
+        let policy = RipplePolicy::load(&path).expect("Load");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
+        let (state, _, _) = env.reset();
+        
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        
+        // First build/infer at kickoff
+        policy.build(&state, 0, &mut obs, &mut mask);
+        let action = policy.infer(&obs, &mask, 1)[0];
+        
+        // Executed action should be no-op (zeros) during initial delay
+        let executed_controls = policy.get_executed_controls(&state, 0).unwrap_or([1.0; 8]);
+        assert!(executed_controls.iter().all(|&x| x.abs() < 0.01),
+                "Kickoff should execute no-op zeros during delay, got {:?}", executed_controls);
+        
+        // Selected action is stored but not yet executed
+        let selected = policy.get_selected_action(&state, 0);
+        assert!(selected.is_some(), "Selected action should exist");
+        assert_ne!(selected.unwrap(), 0, "Selected shouldn't be no-op if model chose something");
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_consecutive_kickoffs_preserve_state() {
+        // Consecutive kickoff observations don't reset (edge-triggered)
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            return;
+        }
+        let policy = RipplePolicy::load(&path).expect("Load");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
+        let (state, _, _) = env.reset();
+        
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        
+        // First kickoff observation
+        policy.build(&state, 0, &mut obs, &mut mask);
+        policy.infer(&obs, &mask, 1);
+        
+        let initial_states = policy.states.lock().unwrap().len();
+        
+        // Second kickoff observation (consecutive, same geometry)
+        policy.build(&state, 0, &mut obs, &mut mask);
+        policy.infer(&obs, &mask, 1);
+        
+        let after_states = policy.states.lock().unwrap().len();
+        
+        // Should NOT create new state on consecutive kickoff
+        assert_eq!(initial_states, after_states,
+                   "Consecutive kickoffs should preserve state, not create new");
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_boost_timer_progression() {
+        // Boost hold timer: 0 -> 1/3 -> 2/3 -> 1 (normalized 0, 0.333, 0.667, 1.0)
+        // TICK_SKIP=4, max 12 frames: 0, 4/12, 8/12, 12/12
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            return;
+        }
+        let policy = RipplePolicy::load(&path).expect("Load");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
+        let (mut state, _, _) = env.reset();
+        
+        // Find a boost action
+        let boost_action = action_table().iter().position(|a| a[6] > 0.5).expect("Find boost");
+        
+        // Run several steps holding boost
+        for step in 0..4 {
+            let mut obs = vec![0.0f32; policy.obs_width()];
+            let mut mask = vec![false; N_ACTIONS];
+            policy.build(&state, 0, &mut obs, &mut mask);
+            
+            // Force boost action into queue
+            {
+                let state_ptr = &state as *const _ as usize;
+                let key = (state_ptr, 0);
+                let mut states = policy.states.lock().unwrap();
+                if let Some(st) = states.get_mut(&key) {
+                    st.queue[QUEUE_LEN - 1] = action_table()[boost_action];
+                }
+            }
+            
+            policy.infer(&obs, &mask, 1);
+            
+            // Check boost timer progression
+            let state_ptr = &state as *const _ as usize;
+            let key = (state_ptr, 0);
+            let states = policy.states.lock().unwrap();
+            if let Some(st) = states.get(&key) {
+                let normalized = st.boost_time / 12.0;
+                let expected = (step as f32 * 4.0 / 12.0).min(1.0);
+                assert!((normalized - expected).abs() < 0.1,
+                        "Step {}: boost_time/12 should be ~{:.2}, got {:.2}", step, expected, normalized);
+            }
+            
+            env.step_physics(8);
+            state = env.current_state();
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
     fn test_parallel_shuffled_build_4games_2cars_10steps() {
-        // Per EC2 rip14: test parallel builds with random order (4 games x 2 cars, 10 steps)
-        // Proves GameState pointer keying is thread-safe and deterministic
+        // Per EC2 rip15: test must mirror batch_sim architecture
+        // - persistent Vec<GameState> (not cloned into threads)
+        // - preallocated flat obs buffer with fixed per-game slices
+        // - threads call build(&states[g], car, slice) in shuffled order
+        // - infer(&flat) in game order
         use rlgymppo::rlgym::rocketsim::init_from_default;
         use std::thread;
-        use std::sync::{Arc, Barrier};
+        use std::sync::{Arc, Barrier, Mutex};
         
         init_from_default(true).expect("load collision meshes");
         
@@ -1298,77 +1477,84 @@ mod tests {
         const N_STEPS: usize = 10;
         
         let mut envs: Vec<_> = (0..N_GAMES).map(|_| create_env(&RewardConfig::default(), &default_mix())).collect();
-        let mut states: Vec<_> = envs.iter_mut().map(|e| e.reset().0).collect();
+        
+        // Persistent Vec<GameState> (mirrors batch_sim games vec)
+        let states = Arc::new(Mutex::new(
+            envs.iter_mut().map(|e| e.reset().0).collect::<Vec<_>>()
+        ));
         
         for step in 0..N_STEPS {
-            // Simulate parallel builds with RANDOM order via threads
-            let barrier = Arc::new(Barrier::new(N_GAMES * N_CARS));
-            let mut obs_slots: Vec<_> = (0..N_GAMES * N_CARS).map(|_| vec![0.0f32; policy.obs_width()]).collect();
-            let mut mask_slots: Vec<_> = (0..N_GAMES * N_CARS).map(|_| vec![false; N_ACTIONS]).collect();
+            // Preallocated flat obs buffer (mirrors batch_sim ext_obs)
+            let obs_width = policy.obs_width();
+            let flat_obs = Arc::new(Mutex::new(vec![0.0f32; N_GAMES * N_CARS * obs_width]));
+            let flat_mask = Arc::new(Mutex::new(vec![false; N_GAMES * N_CARS * N_ACTIONS]));
             
-            // Create shuffled indices to simulate rayon's random execution order
+            // Shuffled execution order
             let mut indices: Vec<usize> = (0..N_GAMES * N_CARS).collect();
             use rand::seq::SliceRandom;
             use rand::SeedableRng;
             let mut rng = rand::rngs::StdRng::seed_from_u64(step as u64);
             indices.shuffle(&mut rng);
             
+            let barrier = Arc::new(Barrier::new(N_GAMES * N_CARS));
+            
             // Spawn threads in shuffled order
             let handles: Vec<_> = indices.into_iter().map(|idx| {
                 let policy = Arc::clone(&policy);
+                let states = Arc::clone(&states);
+                let flat_obs = Arc::clone(&flat_obs);
+                let flat_mask = Arc::clone(&flat_mask);
                 let barrier = Arc::clone(&barrier);
                 let game = idx / N_CARS;
                 let car = idx % N_CARS;
                 
-                // Clone state for this thread
-                let state_clone = states[game].clone();
-                
                 thread::spawn(move || {
-                    let mut obs = vec![0.0f32; policy.obs_width()];
-                    let mut mask = vec![false; N_ACTIONS];
-                    
-                    // Wait for all threads to start (simulates rayon spawn)
                     barrier.wait();
                     
-                    // Build in random order
-                    policy.build(&state_clone, car, &mut obs, &mut mask);
+                    // Get slice of flat buffer (mirrors batch_sim :1213-1217)
+                    let mut obs_buf = flat_obs.lock().unwrap();
+                    let mut mask_buf = flat_mask.lock().unwrap();
+                    let row_start = idx * obs_width;
+                    let obs_slice = &mut obs_buf[row_start..row_start + obs_width];
+                    let mask_start = idx * N_ACTIONS;
+                    let mask_slice = &mut mask_buf[mask_start..mask_start + N_ACTIONS];
                     
-                    (idx, obs, mask)
+                    // Build with persistent state reference (not clone!)
+                    let states_lock = states.lock().unwrap();
+                    policy.build(&states_lock[game], car, obs_slice, mask_slice);
                 })
             }).collect();
             
-            // Collect results
             for handle in handles {
-                let (idx, obs, mask) = handle.join().unwrap();
-                obs_slots[idx] = obs;
-                mask_slots[idx] = mask;
+                handle.join().unwrap();
             }
             
-            // Infer in deterministic order (simulates batch_sim's row order)
-            let flat_obs: Vec<f32> = obs_slots.iter().flatten().copied().collect();
-            let flat_mask: Vec<bool> = mask_slots.iter().flatten().copied().collect();
-            let actions = policy.infer(&flat_obs, &flat_mask, N_GAMES * N_CARS);
+            // Infer in game order
+            let obs = flat_obs.lock().unwrap().clone();
+            let mask = flat_mask.lock().unwrap().clone();
+            let actions = policy.infer(&obs, &mask, N_GAMES * N_CARS);
             
-            // Apply actions and step
+            // Apply actions and update states
             for g in 0..N_GAMES {
                 for car in 0..N_CARS {
                     let action_idx = g * N_CARS + car;
                     envs[g].arena.set_car_controls(car, controls_of(actions[action_idx]));
                 }
                 envs[g].step_physics(8);
-                states[g] = envs[g].current_state();
+                let mut states_lock = states.lock().unwrap();
+                states_lock[g] = envs[g].current_state();
             }
             
-            // Verify: each (game, car) has persistent state
+            // Verify: exactly N_GAMES * N_CARS unique states across all steps
             let states_map = policy.states.lock().unwrap();
-            assert!(states_map.len() >= N_GAMES * N_CARS && states_map.len() <= N_GAMES * N_CARS + 2,
-                    "Step {}: Expected {} unique states, got {}", step, N_GAMES * N_CARS, states_map.len());
+            assert_eq!(states_map.len(), N_GAMES * N_CARS,
+                       "Step {}: Expected {} unique states, got {}", step, N_GAMES * N_CARS, states_map.len());
             
-            // Verify: each state has non-NaN queue after first step
+            // Verify: queue initialized after first step
             if step > 0 {
                 for st in states_map.values() {
                     assert!(!st.queue[0][0].is_nan(), 
-                            "Step {}: Queue should be initialized after first step", step);
+                            "Step {}: Queue should be initialized", step);
                 }
             }
         }

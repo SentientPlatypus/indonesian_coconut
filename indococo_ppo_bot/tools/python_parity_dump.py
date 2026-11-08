@@ -20,7 +20,7 @@ from pathlib import Path
 # Add poolkit to path
 sys.path.insert(0, str(Path(__file__).parent / "pool_eval"))
 
-def dump_arena_state(gs, tick):
+def dump_arena_state(gs, tick, ripple_obs):
     """Extract raw RocketSim physics state from V1GameState."""
     # Ball
     ball = {
@@ -69,12 +69,12 @@ def dump_arena_state(gs, tick):
         # Availability: boost_pads[i] == 1.0 means ACTIVE (upstream obs.py:352)
         pad_active = gs.boost_pads[i] == 1.0
         
-        # Timer: try to access observer internal state (inverted_boost_timers if available)
+        # Timer: try to access observer internal state (EC2 rip15: boost_timers, not inverted)
         # If not accessible, use 0.0 placeholder
         try:
-            # Ripple observer stores inverted_boost_timers (normalized 0-1)
+            # Upstream stores boost_timers (normalized 0-1)
             # Denormalize by *10 to get raw timer value
-            timer_normalized = ripple.obs.inverted_boost_timers[i]
+            timer_normalized = ripple_obs.boost_timers[i]
             timer_raw = timer_normalized * 10.0
         except (AttributeError, IndexError):
             timer_raw = 0.0  # Fallback if not accessible
@@ -193,7 +193,7 @@ def main():
         ripple.actions = ripple.parser.parse_actions(np.array([chosen_action]), gs)
         
         # Dump arena state from GameState
-        arena_state = dump_arena_state(gs, tick)
+        arena_state = dump_arena_state(gs, tick, ripple.obs)
         
         # Extract main player's on_ground and handbrake for replay injection
         main_player = gs.players[main_idx]

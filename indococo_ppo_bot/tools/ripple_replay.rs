@@ -128,33 +128,10 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
             })
             .collect(),
         boost_pads: {
-            // Build boost_pads from dump data (EC2 rip14: was empty, caused crash)
-            // Use BOOST_LOCATIONS for positions, dump data for states
-            use rlgymppo::rlgym::rocketsim::{BoostPadInfo, BoostPadState};
-            use indococo_bot::obs::BOOST_LOCATIONS;
-            
-            arena_state.pads.iter().enumerate().map(|(i, pad)| {
-                // Get canonical position from BOOST_LOCATIONS
-                let (x, y) = if i < BOOST_LOCATIONS.len() {
-                    BOOST_LOCATIONS[i]
-                } else {
-                    (0.0, 0.0)  // Fallback
-                };
-                
-                let info = BoostPadInfo {
-                    pos: Vec3A::new(x, y, 73.0),  // Standard height
-                    is_big: pad.timer > 5.0,  // Big pads have longer respawn
-                };
-                
-                let state = BoostPadState {
-                    is_active: pad.is_active,
-                    cooldown: pad.timer,
-                    prev_locked_car_id: 0,
-                    cur_locked_car_id: 0,
-                };
-                
-                (info, state)
-            }).collect()
+            // EC2 rip15: BoostPadConfig and BoostPadState fields don't match dump format
+            // Ripple tracks pad timers internally, not from arena
+            // Leave empty - pad_order() is now robust to empty pads (:139-158 obs.rs)
+            vec![]
         },
         events: Vec::new(),
     }
@@ -499,8 +476,9 @@ fn main() {
         }
         
         // Compare SELECTED action (what the model chose this step)
-        // Per EC2 rip14 fix: infer() now returns SELECTED (was returning executed queue[5])
-        let selected_match = rust_action == record.python_action;
+        // Per EC2 rip15: infer() returns executed; use get_selected_action() for selected
+        let rust_selected = ripple.get_selected_action(&state, car_idx).unwrap_or(rust_action);
+        let selected_match = rust_selected == record.python_action;
         if selected_match {
             action_selected_matches += 1;
         }
