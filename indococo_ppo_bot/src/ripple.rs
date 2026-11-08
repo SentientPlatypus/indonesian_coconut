@@ -915,22 +915,28 @@ impl ExternalPolicy for RipplePolicy {
             let log_policy = log_softmax(&policy_logits);
             
             let action = if is_kickoff {
-                // Stochastic sampling using inverse CDF (Python's method)
+                // Stochastic sampling using Python's method:
+                // cdf = np.cumsum(np.exp(log_policy))
+                // return min((random >= cdf).sum(), N-1)
                 let mut rng = self.rng.lock().unwrap();
-                // Generate random u64, convert to f32 in [0,1)
                 let u: f32 = (rng.next_u64() as f64 / std::u64::MAX as f64) as f32;
                 
-                // Compute CDF from policy distribution
-                let mut cdf = 0.0f32;
-                let mut selected = N_ACTIONS - 1;
+                // Compute cumulative distribution
+                let mut cdf = vec![0.0f32; N_ACTIONS];
+                let mut sum = 0.0f32;
                 for j in 0..N_ACTIONS {
-                    cdf += log_policy[j].exp();
-                    if u <= cdf {
-                        selected = j;
-                        break;
+                    sum += log_policy[j].exp();
+                    cdf[j] = sum;
+                }
+                
+                // Count how many cdf values are < u (Python: u >= cdf)
+                let mut count = 0;
+                for j in 0..N_ACTIONS {
+                    if u >= cdf[j] {
+                        count += 1;
                     }
                 }
-                selected
+                count.min(N_ACTIONS - 1)
             } else {
                 // KL selection (argmax)
                 let log_base = log_softmax(&base_logits);

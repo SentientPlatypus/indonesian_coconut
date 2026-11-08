@@ -73,8 +73,6 @@ fn run_idle_test(rdir: &Path, games: usize) {
                 let idle_controls = CarControls::default();
                 
                 // 2 Ripple decisions per 8-tick step (4-tick cadence)
-                // Check termination after each 4-tick sub-step
-                let mut terminated = false;
                 for _ in 0..2 {
                     // Query Ripple at this 4-tick boundary
                     ripple.build(&state, ripple_car, &mut robs, &mut rmask);
@@ -87,20 +85,13 @@ fn run_idle_test(rdir: &Path, games: usize) {
                     env.arena.set_car_controls(idle_car, idle_controls);
                     env.step_physics(4);
                     
-                    // Update state and check termination every 4 ticks (Python behavior)
+                    // Update state for next Ripple query
                     state = env.current_state();
-                    
-                    // Check if goal scored after this 4-tick step
-                    let ball = &state.ball.phys.pos;
-                    if ball.y.abs() >= 5120.0 {
-                        terminated = true;
-                        break;
-                    }
                 }
                 
                 let res = env.post_step();
                 
-                if terminated || res.is_terminal || res.truncated {
+                if res.is_terminal || res.truncated {
                     // Check who scored
                     let view = env.get_shared_info().view(&res.state);
                     match view.scoring_team() {
