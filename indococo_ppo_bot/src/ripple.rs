@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use rand::prelude::*;
 
 use rlgymppo::ExternalPolicy;
@@ -191,16 +192,18 @@ pub struct RipplePolicy {
     _policy: (),
     #[cfg(not(feature = "ripple"))]
     _base: (),
-    states: Mutex<HashMap<usize, RippleState>>,
+    // State keying by GameState pointer + car index (thread-safe for parallel builds)
+    // rlgymppo 22c3575 batch_sim.rs:529 stores games in a stable Vec<GameInstance>
+    // GameInstance.last_state (sim.rs:379) is persistent, so &GameState address is stable
+    // Key: (game_state_ptr, car_index) -> RippleState
+    states: Mutex<HashMap<(usize, usize), RippleState>>,
     rng: Mutex<rand::rngs::StdRng>,
-    // Map batch position -> state_id for multi-game support
-    // batch_position is the order of build() calls (0, 1, 2, ...)
-    // state_id uniquely identifies a (game, car) across steps
-    position_to_state: Mutex<HashMap<usize, usize>>,
-    next_state_id: Mutex<usize>,
-    // Build counter: increments on each build() call, reset after infer()
-    // Provides stable batch_position across steps since batch_sim calls in fixed order
-    build_counter: Mutex<usize>,
+    // Build records: maps obs row index -> key, filled during parallel build() calls
+    // Infer uses this to look up the correct state for each row
+    // Reset after each infer() call
+    build_records: Mutex<Vec<Option<(usize, usize)>>>,
+    // Atomic row counter: atomically allocates row indices during parallel build() calls
+    build_row_counter: AtomicUsize,
     // Batch counter: increments after each infer() for edge-trigger reset detection
     batch_counter: Mutex<usize>,
 }
@@ -233,9 +236,8 @@ impl RipplePolicy {
             base: Mutex::new(base),
             states: Mutex::new(HashMap::new()),
             rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
-            position_to_state: Mutex::new(HashMap::new()),
-            next_state_id: Mutex::new(0),
-            build_counter: Mutex::new(0),
+            build_records: Mutex::new(Vec::new()),
+            build_row_counter: AtomicUsize::new(0),
             batch_counter: Mutex::new(0),
         })
     }
@@ -250,40 +252,8 @@ impl RipplePolicy {
         *self.rng.lock().unwrap() = rand::rngs::StdRng::seed_from_u64(seed);
     }
 
-    fn detect_reset(&self, state: &GameState, car: usize) -> bool {
-        let is_kickoff = state.ball.phys.pos.x.abs() < 10.0
-            && state.ball.phys.pos.y.abs() < 10.0
-            && state
-                .cars
-                .iter()
-                .all(|(_, c)| c.phys.vel.length() < 10.0);
-
-        let mut states = self.states.lock().unwrap();
-        let st = states.entry(car).or_insert_with(RippleState::new);
-
-        let needs_reset = is_kickoff || st.queue[0][0].is_nan();
-        if needs_reset {
-            *st = RippleState::new();
-            // Leave queue as NaN (RippleState::new() initializes to NaN)
-            // infer() will fill it with the first selected action
-
-            self.update_ball_pred(state, st);
-
-            // Initialize pad timers with position remapping like update_timers()
-            let pad_indices = crate::obs::pad_order(state);
-            for (ui_idx, &rs_idx) in pad_indices.iter().enumerate() {
-                let (_, pad_state) = &state.boost_pads[rs_idx];
-                st.pad_timers[ui_idx] = if pad_state.is_active() {
-                    0.0
-                } else if BIG_PADS.contains(&ui_idx) {
-                    10.0
-                } else {
-                    4.0
-                };
-            }
-        }
-        needs_reset
-    }
+    // detect_reset() removed - dead code, was only used in old eval_player path
+    // Reset detection is now handled in build() with edge-triggered logic
 
     fn update_ball_pred(&self, state: &GameState, st: &mut RippleState) {
         // Use thread-local arena
@@ -759,14 +729,12 @@ impl ExternalPolicy for RipplePolicy {
     }
 
     fn build(&self, state: &GameState, car: usize, obs: &mut [f32], mask: &mut [bool]) {
-        // Increment build counter to get stable batch_position
-        // batch_sim iterates games and cars in fixed order, so position k = same (game, car)
-        let batch_position = {
-            let mut counter = self.build_counter.lock().unwrap();
-            let pos = *counter;
-            *counter += 1;
-            pos
-        };
+        // Thread-safe keying by GameState pointer + car index
+        // rlgymppo 22c3575 batch_sim.rs:529 stores games in Vec<GameInstance<...>>
+        // GameInstance.last_state (sim.rs:379) is persistent across steps
+        // Vec is never reallocated during collection, so &GameState addresses are stable
+        let state_ptr = state as *const GameState as usize;
+        let key = (state_ptr, car);
         
         let current_batch = *self.batch_counter.lock().unwrap();
         
@@ -780,19 +748,9 @@ impl ExternalPolicy for RipplePolicy {
         let ball_pos = state.ball.phys.pos;
         let car_pos = me.phys.pos;
         
+        // Get or create state for this key
         let mut states = self.states.lock().unwrap();
-        let mut position_to_state = self.position_to_state.lock().unwrap();
-        let mut next_id = self.next_state_id.lock().unwrap();
-        
-        // Get or create state for this position
-        let state_id = *position_to_state.entry(batch_position).or_insert_with(|| {
-            let new_id = *next_id;
-            *next_id += 1;
-            states.insert(new_id, RippleState::new());
-            new_id
-        });
-        
-        let st = states.get_mut(&state_id).unwrap();
+        let st = states.entry(key).or_insert_with(RippleState::new);
         
         // Edge-triggered reset: only on genuine episode start, not consecutive kickoffs
         // 1. Kickoff edge: transition from non-kickoff to kickoff
@@ -853,6 +811,15 @@ impl ExternalPolicy for RipplePolicy {
         }
 
         mask.fill(true);
+        
+        // Record which row this key wrote to (for parallel-safe infer lookup)
+        // Atomically allocate row index
+        let row_idx = self.build_row_counter.fetch_add(1, Ordering::SeqCst);
+        let mut records = self.build_records.lock().unwrap();
+        if row_idx >= records.len() {
+            records.resize(row_idx + 1, None);
+        }
+        records[row_idx] = Some(key);
     }
 
     #[cfg(feature = "ripple")]
@@ -864,11 +831,12 @@ impl ExternalPolicy for RipplePolicy {
         for i in 0..rows {
             let obs_row = &obs[i * self.obs_width()..(i + 1) * self.obs_width()];
 
-            // Map batch row i to state_id: row i = batch_position i (from build counter)
-            let position_to_state = self.position_to_state.lock().unwrap();
-            let state_id = *position_to_state.get(&i).unwrap_or_else(|| {
-                panic!("infer() row {} has no state - build() must be called first", i)
+            // Look up which key wrote to row i (thread-safe mapping)
+            let records = self.build_records.lock().unwrap();
+            let key = records.get(i).and_then(|x| *x).unwrap_or_else(|| {
+                panic!("infer() row {} has no recorded key - build() must be called first", i)
             });
+            drop(records);
 
             // Reshape into 5 tensors
             let mut offset = 0;
@@ -1013,7 +981,7 @@ impl ExternalPolicy for RipplePolicy {
 
             // Update delayed action queue
             let mut states = self.states.lock().unwrap();
-            if let Some(st) = states.get_mut(&state_id) {
+            if let Some(st) = states.get_mut(&key) {
                 let table = action_table();
                 let new_action = table[action];
                 
@@ -1065,8 +1033,9 @@ impl ExternalPolicy for RipplePolicy {
             }
         }
 
-        // Reset build counter and increment batch counter for next step
-        *self.build_counter.lock().unwrap() = 0;
+        // Reset build tracking and increment batch counter for next step
+        self.build_row_counter.store(0, Ordering::SeqCst);
+        self.build_records.lock().unwrap().clear();
         *self.batch_counter.lock().unwrap() += 1;
 
         actions
