@@ -410,6 +410,7 @@ impl RipplePolicy {
         let vel = me.phys.vel;
         let ang = me.phys.ang_vel;
         let fwd = me.phys.rot_mat.x_axis;
+        let right = me.phys.rot_mat.y_axis;
         let up = me.phys.rot_mat.z_axis;
         let f = flags(me);
 
@@ -417,26 +418,21 @@ impl RipplePolicy {
         main[3..6].copy_from_slice(&[vel.x, vel.y, vel.z]);
         main[6..9].copy_from_slice(&[ang.x, ang.y, ang.z]);
         main[9..12].copy_from_slice(&[fwd.x, fwd.y, fwd.z]);
-        main[12..15].copy_from_slice(&[up.x, up.y, up.z]);
-        main[15] = if info.team == Team::Blue { -1.0 } else { 1.0 };
-        main[16] = st.demo_timer;
-        main[17] = if f.on_ground { 1.0 } else { 0.0 };
-        main[18] = if !me.has_jumped { 1.0 } else { 0.0 };
-        main[19] = if f.has_flip { 1.0 } else { 0.0 };
-        main[20] = (me.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
-        main[21] = st.boost_time;
-        main[22] = st.jump_time;
-        main[23] = st.air_time;
-        main[24] = st.flip_time;
-        main[25] = st.handbrake;
-        main[26..28].copy_from_slice(&st.flip_dir);
-        main[28] = if st.queue[0][0].is_nan() { 1.0 } else { 0.0 };
-        // Python obs.py lines 233-236: is_kickoff/is_flipped/is_swapped  
-        // Kickoff detection: ball xy near zero (Python: position[0]==0 and position[1]==0)
-        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
-        main[29] = if is_kickoff { 1.0 } else { 0.0 };  // is_kickoff (becomes is_flipped later in Python)
-        main[30] = if st.was_flipped { 1.0 } else { 0.0 };  // is_flipped  
-        main[31] = 0.0;  // is_swapped (set during coordinate transform, 0 for main player)
+        main[12..15].copy_from_slice(&[right.x, right.y, right.z]);
+        main[15..18].copy_from_slice(&[up.x, up.y, up.z]);
+        main[18] = if info.team == Team::Blue { -1.0 } else { 1.0 };
+        main[19] = st.demo_timer;
+        main[20] = if f.on_ground { 1.0 } else { 0.0 };
+        main[21] = if !me.has_jumped { 1.0 } else { 0.0 };
+        main[22] = if f.has_flip { 1.0 } else { 0.0 };
+        main[23] = (me.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
+        main[24] = st.boost_time;
+        main[25] = st.jump_time;
+        main[26] = st.air_time;
+        main[27] = st.flip_time;
+        main[28] = st.handbrake;
+        main[29..31].copy_from_slice(&st.flip_dir);
+        main[31] = if st.queue[0][0].is_nan() { 1.0 } else { 0.0 };
 
         // Build other players (up to 5, sorted by distance to ball)
         let mut others = [[0.0f32; 21]; 5];
