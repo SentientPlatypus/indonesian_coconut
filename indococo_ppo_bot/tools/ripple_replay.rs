@@ -291,10 +291,10 @@ fn main() {
             println!("\nMAIN tensor (32 elements):");
             let labels = ["pos.x", "pos.y", "pos.z", "vel.x", "vel.y", "vel.z",
                          "ang.x", "ang.y", "ang.z", "fwd.x", "fwd.y", "fwd.z",
-                         "rgt.x", "rgt.y", "rgt.z", "up.x", "up.y", "up.z",
-                         "team", "demo", "on_gnd", "has_j", "has_f", "boost",
-                         "bst_t", "jmp_t", "air_t", "flp_t", "hndbr", "flp_x",
-                         "flp_y", "is_rst"];
+                         "up.x", "up.y", "up.z", "team", "demo", "on_gnd",
+                         "has_j", "has_f", "boost", "bst_t", "jmp_t", "air_t",
+                         "flp_t", "hndbr", "flp_x", "flp_y", "is_rst", "is_ko",
+                         "is_flp", "is_swp"];
             for i in 0..32 {
                 let diff = (rust_main[i] - python_main[i]).abs();
                 let marker = if diff > 1e-4 { "✗" } else { "✓" };

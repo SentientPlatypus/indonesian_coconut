@@ -227,6 +227,8 @@ impl RipplePolicy {
         if needs_reset {
             if is_kickoff {
                 *st = RippleState::new();
+                // Python sets queue to 0 at kickoff, not NaN
+                st.queue = [[0.0; 8]; QUEUE_LEN];
             } else {
                 st.queue = [[f32::NAN; 8]; QUEUE_LEN];
             }
@@ -410,7 +412,6 @@ impl RipplePolicy {
         let vel = me.phys.vel;
         let ang = me.phys.ang_vel;
         let fwd = me.phys.rot_mat.x_axis;
-        let right = me.phys.rot_mat.y_axis;
         let up = me.phys.rot_mat.z_axis;
         let f = flags(me);
 
@@ -418,21 +419,29 @@ impl RipplePolicy {
         main[3..6].copy_from_slice(&[vel.x, vel.y, vel.z]);
         main[6..9].copy_from_slice(&[ang.x, ang.y, ang.z]);
         main[9..12].copy_from_slice(&[fwd.x, fwd.y, fwd.z]);
-        main[12..15].copy_from_slice(&[right.x, right.y, right.z]);
-        main[15..18].copy_from_slice(&[up.x, up.y, up.z]);
-        main[18] = if info.team == Team::Blue { -1.0 } else { 1.0 };
-        main[19] = st.demo_timer;
-        main[20] = if f.on_ground { 1.0 } else { 0.0 };
-        main[21] = if !me.has_jumped { 1.0 } else { 0.0 };
-        main[22] = if f.has_flip { 1.0 } else { 0.0 };
-        main[23] = (me.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
-        main[24] = st.boost_time;
-        main[25] = st.jump_time;
-        main[26] = st.air_time;
-        main[27] = st.flip_time;
-        main[28] = st.handbrake;
-        main[29..31].copy_from_slice(&st.flip_dir);
-        main[31] = if st.queue[0][0].is_nan() { 1.0 } else { 0.0 };
+        main[12..15].copy_from_slice(&[up.x, up.y, up.z]);
+        main[15] = if info.team == Team::Blue { -1.0 } else { 1.0 };
+        main[16] = st.demo_timer;
+        main[17] = if f.on_ground { 1.0 } else { 0.0 };
+        main[18] = if !me.has_jumped { 1.0 } else { 0.0 };
+        main[19] = if f.has_flip { 1.0 } else { 0.0 };
+        main[20] = (me.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
+        main[21] = st.boost_time;
+        main[22] = st.jump_time;
+        main[23] = st.air_time;
+        main[24] = st.flip_time;
+        main[25] = st.handbrake;
+        main[26..28].copy_from_slice(&st.flip_dir);
+        // is_reset: True if action queue contains NaN (indicates next action will fill queue)
+        let is_reset = st.queue.iter().flatten().any(|&x| x.is_nan());
+        main[28] = if is_reset { 1.0 } else { 0.0 };
+        // is_kickoff: True if ball is at center (will be flipped to indicate side later)
+        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
+        main[29] = if is_kickoff { 1.0 } else { 0.0 };
+        // [30] is_flipped and [31] is_swapped are set by coordinate transform in Python
+        // For now, set to 0 (TODO: implement coordinate transform)
+        main[30] = 0.0;
+        main[31] = 0.0;
 
         // Build other players (up to 5, sorted by distance to ball)
         let mut others = [[0.0f32; 21]; 5];
@@ -683,7 +692,9 @@ impl ExternalPolicy for RipplePolicy {
         let mut states = self.states.lock().unwrap();
         
         // Inline detect_reset logic to avoid double-locking
-        let is_kickoff = state.ball.phys.pos.length() < 10.0
+        // Kickoff: ball at (0, 0, ~93) and all cars stopped
+        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0
+            && state.ball.phys.pos.y.abs() < 1.0
             && state
                 .cars
                 .iter()
@@ -693,6 +704,10 @@ impl ExternalPolicy for RipplePolicy {
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
             *st = RippleState::new();
+            // Python sets queue to 0 at kickoff, NaN at other resets
+            if is_kickoff {
+                st.queue = [[0.0; 8]; QUEUE_LEN];
+            }
             // Update ball predictions after reset
             self.update_ball_pred(state, st);
             // Initialize pad timers
