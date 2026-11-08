@@ -146,7 +146,7 @@ struct RippleState {
 impl RippleState {
     fn new() -> Self {
         Self {
-            queue: [[0.0; 8]; QUEUE_LEN],
+            queue: [[f32::NAN; 8]; QUEUE_LEN],
             demo_timer: 0.0,
             boost_time: 0.0,
             jump_time: 0.0,
@@ -472,9 +472,13 @@ impl RipplePolicy {
         let mut ball = [[0.0f32; 9]; 6];
         ball.copy_from_slice(&st.ball_preds);
 
-        // Action queue
+        // Action queue (replace NaNs with zeros for ONNX)
         let mut actions = [[0.0f32; 8]; 6];
-        actions.copy_from_slice(&st.queue);
+        for (i, src) in st.queue.iter().enumerate() {
+            for (j, &val) in src.iter().enumerate() {
+                actions[i][j] = if val.is_nan() { 0.0 } else { val };
+            }
+        }
 
         // Boosts
         let mut boosts = [[0.0f32; 5]; 34];
@@ -685,11 +689,27 @@ impl ExternalPolicy for RipplePolicy {
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
             *st = RippleState::new();
+            // Update ball predictions after reset
+            self.update_ball_pred(state, st);
+            // Initialize pad timers
+            for (i, (_, pad_state)) in state.boost_pads.iter().enumerate() {
+                st.pad_timers[i] = if pad_state.is_active() {
+                    0.0
+                } else if BIG_PADS.contains(&i) {
+                    10.0
+                } else {
+                    4.0
+                };
+            }
         }
 
         // Ripple uses tick_skip=4; we're called every 8 ticks (trainer's tick_skip).
         // Update timers by 4 ticks per call to match Python adapter behavior.
+        // Also update ball predictions each step
         self.update_timers(state, car, st);
+        if !needs_reset {
+            self.update_ball_pred(state, st);
+        }
 
         let (main, mut others, ball, mut actions, boosts, is_flipped) = self.build_obs_internal(state, car, st);
         

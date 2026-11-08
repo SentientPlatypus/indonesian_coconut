@@ -19,6 +19,16 @@ name = "indococo-rlbot"
 path = "src/bin/rlbot.rs"
 required-features = ["rlbot"]
 
+[[bin]]
+name = "ripple-parity"
+path = "tools/ripple_parity_rust.rs"
+required-features = ["ripple"]
+
+[[bin]]
+name = "ripple-idle-test"
+path = "tools/ripple_idle_test.rs"
+required-features = ["ripple"]
+
 [dependencies]
 glam = { version = "0.34", features = ["serde"] }
 rand = "0.10.1"

@@ -1,27 +1,20 @@
-# Python
-__pycache__/
-*.pyc
-
-# Virtual environments
+# Python virtual environment
+.venv/
 venv/
-wslvenv/
+*.pyc
+__pycache__/
 
-# Local-only environment pins
-requirements-wsl.txt
-
-# Training data & checkpoints (large; kept out of git)
-data/
-
-# Weights & Biases run logs
-wandb/
-
-# Secrets — never commit private keys
-*.pem
-
-# Stray Windows %APPDATA% dump (created by accident on WSL)
-%APPDATA%/
-
-# Rust build output
+# Rust build artifacts
 target/
-indococo_ppo_bot/checkpoints/
-indococo_ppo_bot/runs/
+Cargo.lock
+
+# ONNX models and eval bots (too large)
+*.onnx
+*.pt
+*.safetensors
+eval_bots/
+
+# Temp files
+*.log
+*.jsonl
+/tmp/
