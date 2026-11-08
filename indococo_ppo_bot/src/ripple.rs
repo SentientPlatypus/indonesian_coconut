@@ -17,7 +17,22 @@ use crate::obs::{flags, BOOST_LOCATIONS};
 const BIG_PADS: [usize; 6] = [3, 4, 15, 18, 29, 30];
 
 pub const TICK_SKIP: u8 = 4;
-const N_ACTIONS: usize = 276;
+pub const N_ACTIONS: usize = 276;
+
+pub fn controls_of(action: usize) -> CarControls {
+    let table = action_table();
+    let a = table[action];
+    CarControls {
+        throttle: a[0],
+        steer: a[1],
+        pitch: a[2],
+        yaw: a[3],
+        roll: a[4],
+        jump: a[5] > 0.5,
+        boost: a[6] > 0.5,
+        handbrake: a[7] > 0.5,
+    }
+}
 const QUEUE_LEN: usize = 6;
 const BALL_PRED_STEPS: usize = 5;
 const BALL_STEP_TICKS: usize = 30; // 1 sec at 120 Hz / tick_skip 4

@@ -1874,20 +1874,22 @@ fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize)
                     acts.push(aa[ia]);
                     ia += 1;
                 } else {
+                    acts.push(0);
                     ripple.build(&g.state, i, &mut robs, &mut rmask);
                     let actions = ripple.infer(&robs, &rmask, 1);
-                    acts.push(actions[0]);
+                    let ripple_act = actions[0];
+                    g.env.arena.set_car_controls(i, rx::controls_of(ripple_act));
                 }
             }
-            let actions_map: std::collections::HashMap<_, _> =
-                acts.into_iter().enumerate().map(|(i, a)| (i, ripple.controls(a))).collect();
-            let res = g.env.step(actions_map);
+            g.env.pre_step(&g.state, &acts);
+            g.env.step_physics(4);
+            let res = g.env.post_step();
             out[3] += 1;
-            if res.done {
-                match res.result {
-                    Some(0) => if g.a_team == 0 { out[0] += 1 } else { out[1] += 1 },
-                    Some(1) => if g.a_team == 1 { out[0] += 1 } else { out[1] += 1 },
-                    Some(_) => out[2] += 1,
+            if res.is_terminal || res.truncated {
+                let view = g.env.get_shared_info().view(&res.state);
+                match view.scoring_team() {
+                    Some(t) if t == g.a_team => out[0] += 1,
+                    Some(_) => out[1] += 1,
                     None => out[2] += 1,
                 }
                 *g = new_game(k, &mut started);
@@ -1909,7 +1911,7 @@ fn ripple_dump(rdir: &Path, steps: usize, out: &Path) {
     init_from_default(true).expect("load collision meshes");
     let mix = indococo_bot::setters::default_mix();
     let ripple = rx::RipplePolicy::load(rdir).expect("ripple weights");
-    let mut env = create_env(&RewardConfig::default(), mix);
+    let mut env = create_env(&RewardConfig::default(), &mix);
     let (mut state, mut obs, _) = env.reset();
     let mut f = std::io::BufWriter::new(std::fs::File::create(out).expect("open dump"));
     let mut robs = vec![0.0f32; ripple.obs_width()];
@@ -1939,10 +1941,8 @@ fn ripple_dump(rdir: &Path, steps: usize, out: &Path) {
         });
         writeln!(f, "{}", serde_json::to_string(&line).unwrap()).expect("write");
         
-        let controls = ripple.controls(action);
-        let mut actions_map = std::collections::HashMap::new();
-        actions_map.insert(0, controls);
-        let res = env.step(actions_map);
+        let acts = vec![action];
+        let res = env.step(&state, &acts);
         state = res.state;
         obs = res.obs;
     }
