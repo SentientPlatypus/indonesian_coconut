@@ -26,6 +26,8 @@ struct Record {
     python_boosts: Vec<Vec<f32>>,
     python_logits: Vec<f32>,
     python_base_logits: Vec<f32>,
+    python_probs: Option<Vec<f32>>,
+    python_uniform_u: Option<f32>,
     python_action: usize,
     python_agent_mode: String,
     python_controls: Vec<f32>,
@@ -262,10 +264,17 @@ fn main() {
         // Build Rust Ripple obs
         ripple.build(&state, car_idx, &mut obs, &mut mask);
         
-        // Inject Python's on_ground and handbrake to bypass replay limitations
+        // Inject Python's main on_ground and handbrake to bypass replay limitations
         // Main tensor: [17]=on_ground, [25]=handbrake
         obs[17] = if record.python_on_ground { 1.0 } else { 0.0 };
         obs[25] = record.python_handbrake;
+        
+        // Inject opponent's on_ground (others[0] index 17)
+        // Others tensor layout: each player is 21 floats, on_ground is at index 17
+        if record.python_others.len() > 0 && record.python_others[0].len() > 17 {
+            let opponent_on_ground = record.python_others[0][17];
+            obs[32 + 17] = opponent_on_ground;  // 32 for main, then others starts
+        }
         
         // At step 0, also test with Python's exact tensors to isolate policy path
         if idx == 0 {
@@ -335,9 +344,57 @@ fn main() {
         actions_diffs.push(actions_diff);
         boosts_diffs.push(boosts_diff);
         
-        // Get Rust action
-        let actions_out = ripple.infer(&obs, &mask, 1);
-        let rust_action = actions_out[0];
+        // Get Rust logits for deterministic comparison
+        let (rust_policy_logits, rust_base_logits) = ripple.get_raw_logits(&obs)
+            .expect("Failed to get logits");
+        
+        // Compare logits
+        let policy_logits_diff = record.python_logits.iter().zip(&rust_policy_logits)
+            .map(|(p, r)| (p - r).abs())
+            .fold(0.0f32, f32::max);
+        
+        let base_logits_diff = record.python_base_logits.iter().zip(&rust_base_logits)
+            .map(|(p, r)| (p - r).abs())
+            .fold(0.0f32, f32::max);
+        
+        // Compute action deterministically from logits
+        let is_kickoff = obs[137].abs() < 1.0 && obs[138].abs() < 1.0;
+        let rust_action = if is_kickoff && record.python_uniform_u.is_some() {
+            // Use Python's uniform draw for deterministic comparison
+            let u = record.python_uniform_u.unwrap();
+            let log_policy: Vec<f32> = {
+                let max_l = rust_policy_logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let shifted: Vec<f32> = rust_policy_logits.iter().map(|&x| x - max_l).collect();
+                let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
+                let log_sum_exp = sum_exp.ln();
+                shifted.iter().map(|&x| x - log_sum_exp).collect()
+            };
+            let mut cdf = vec![0.0f32; rust_policy_logits.len()];
+            let mut sum = 0.0f32;
+            for j in 0..rust_policy_logits.len() {
+                sum += log_policy[j].exp();
+                cdf[j] = sum;
+            }
+            let mut count = 0;
+            for j in 0..rust_policy_logits.len() {
+                if u >= cdf[j] {
+                    count += 1;
+                }
+            }
+            count.min(rust_policy_logits.len() - 1)
+        } else {
+            // KL mode: argmax(policy - base)
+            let mut best_idx = 0;
+            let mut best_kl = f32::NEG_INFINITY;
+            for j in 0..rust_policy_logits.len() {
+                let kl = rust_policy_logits[j] - rust_base_logits[j];
+                if kl > best_kl {
+                    best_kl = kl;
+                    best_idx = j;
+                }
+            }
+            best_idx
+        };
         
         let action_match = rust_action == record.python_action;
         if action_match {
@@ -354,11 +411,14 @@ fn main() {
             
             // Find first tensor element that differs significantly
             println!("\nTensor diffs at this step:");
-            println!("  main:    {:.6e} at index {}", main_diff, main_diffs.len() - 1);
+            println!("  main:    {:.6e}", main_diff);
             println!("  others:  {:.6e}", others_diff);
             println!("  ball:    {:.6e}", ball_diff);
             println!("  actions: {:.6e}", actions_diff);
             println!("  boosts:  {:.6e}", boosts_diff);
+            println!("\nLogits diffs:");
+            println!("  policy:  {:.6e}", policy_logits_diff);
+            println!("  base:    {:.6e}", base_logits_diff);
             
             // Show main tensor comparison
             if main_diff > 1e-6 {

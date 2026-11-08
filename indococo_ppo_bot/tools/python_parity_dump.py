@@ -155,8 +155,23 @@ def main():
         policy_logits = ripple.agent.model(obs_batch)[0]  # Get first element of batch (276 logits)
         base_logits = ripple.agent.base(obs_batch)[0]
         
-        # Get action using agent's act method
-        chosen_action = ripple.agent.act(obs_batch, stochastic=stochastic)[0]  # Get first element of batch
+        # For deterministic replay: record the random draw
+        if stochastic:
+            # Sample u ~ Uniform(0, 1) and compute action from it
+            uniform_u = np.random.uniform(0.0, 1.0)
+            log_probs = policy_logits - np.logaddexp.reduce(policy_logits)
+            probs = np.exp(log_probs)
+            cdf = np.cumsum(probs)
+            chosen_action = int((uniform_u >= cdf).sum())
+            chosen_action = min(chosen_action, len(probs) - 1)
+        else:
+            uniform_u = None
+            # KL mode: mix policy and base logits
+            kl_logits = policy_logits - base_logits
+            chosen_action = int(np.argmax(kl_logits))
+        
+        # Store action for next step (don't call agent.act since we already computed it)
+        # chosen_action = ripple.agent.act(obs_batch, stochastic=stochastic)[0]  # Get first element of batch
         
         # Update actions
         ripple.actions = ripple.parser.parse_actions(np.array([chosen_action]), gs)
@@ -172,6 +187,10 @@ def main():
         # obs.handbrakes is a numpy array that gets updated by update_player_timers
         handbrake_raw = float(ripple.obs.handbrakes[main_idx])
         
+        # Compute probabilities for deterministic comparison
+        log_probs = policy_logits - np.logaddexp.reduce(policy_logits)
+        probs = np.exp(log_probs)
+        
         # Record
         record = {
             'step': step_count[0],
@@ -185,6 +204,8 @@ def main():
             'python_boosts': boosts_tensor,
             'python_logits': policy_logits.tolist(),
             'python_base_logits': base_logits.tolist(),
+            'python_probs': probs.tolist(),
+            'python_uniform_u': float(uniform_u) if uniform_u is not None else None,
             'python_action': int(chosen_action),
             'python_agent_mode': str(ripple.agent.mode),
             'python_controls': ripple.actions[0].tolist(),  # Actual 8-element control vector

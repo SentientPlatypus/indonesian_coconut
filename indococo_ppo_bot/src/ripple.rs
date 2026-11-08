@@ -196,10 +196,15 @@ pub struct RipplePolicy {
 impl RipplePolicy {
     #[cfg(feature = "ripple")]
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        use std::sync::OnceLock;
+        static ORT_ENV: OnceLock<ort::environment::Environment> = OnceLock::new();
+        
         let policy_path = path.join("ripple-v1.1.onnx");
         let base_path = path.join("ripple-v1.1-bcm.onnx");
 
-        let env = ort::init().build()?;
+        let env = ORT_ENV.get_or_init(|| {
+            ort::init().build().expect("Failed to initialize ORT environment")
+        });
 
         let policy = ort::session::Session::builder(&env)?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
@@ -1039,6 +1044,54 @@ fn log_softmax(logits: &[f32]) -> Vec<f32> {
     let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
     let log_sum_exp = sum_exp.ln();
     shifted.iter().map(|&x| x - log_sum_exp).collect()
+}
+
+impl RipplePolicy {
+    /// Get raw logits from both models without sampling (for deterministic replay comparison)
+    #[cfg(feature = "ripple")]
+    pub fn get_raw_logits(&self, obs: &[f32]) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
+        use ort::{inputs, value::TensorRef};
+        
+        // Parse obs into 5 tensors (same as infer does)
+        let main_vec = obs[0..32].to_vec();
+        let others_vec = obs[32..137].to_vec();
+        let ball_vec = obs[137..191].to_vec();
+        let actions_vec = obs[191..239].to_vec();
+        let boosts_vec = obs[239..409].to_vec();
+        
+        let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice()))?;
+        let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice()))?;
+        let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice()))?;
+        let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice()))?;
+        let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice()))?;
+        
+        let mut policy = self.policy.lock().unwrap();
+        let policy_outputs = policy.run(inputs![
+            "main" => main_input.clone(),
+            "others" => others_input.clone(),
+            "ball" => ball_input.clone(),
+            "actions" => actions_input.clone(),
+            "boosts" => boosts_input.clone(),
+        ])?;
+        let (_, policy_logits) = policy_outputs["logits"].try_extract_tensor::<f32>()?;
+        
+        let mut base = self.base.lock().unwrap();
+        let base_outputs = base.run(inputs![
+            "main" => main_input,
+            "others" => others_input,
+            "ball" => ball_input,
+            "actions" => actions_input,
+            "boosts" => boosts_input,
+        ])?;
+        let (_, base_logits) = base_outputs["logits"].try_extract_tensor::<f32>()?;
+        
+        Ok((policy_logits.to_vec(), base_logits.to_vec()))
+    }
+    
+    #[cfg(not(feature = "ripple"))]
+    pub fn get_raw_logits(&self, _obs: &[f32]) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
+        Ok((vec![], vec![]))
+    }
 }
 
 #[cfg(test)]
