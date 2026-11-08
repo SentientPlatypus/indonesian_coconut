@@ -873,27 +873,27 @@ mod tests {
 
         let policy = RipplePolicy::load(&path).expect("Failed to load Ripple");
 
-        use rlgymppo::rlgym::gamestates::GameConfig;
-        let config = GameConfig {
-            team_size: 1,
-            tick_skip: 8, // Trainer tick_skip, not Ripple's internal 4
-            ..Default::default()
-        };
-        let mut game = rlgymppo::rlgym::make(config).unwrap();
-        let mut state = game.reset(None, None);
+        use crate::env::{BotEnv, create_env};
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+
+        let mut env = create_env(&RewardConfig::default(), default_mix());
+        let (mut state, mut obs, _) = env.reset();
 
         let obs_width = policy.obs_width();
-        let mut obs = vec![0.0f32; obs_width];
-        let mut mask = vec![false; N_ACTIONS];
+        let mut ripple_obs = vec![0.0f32; obs_width];
+        let mut ripple_mask = vec![false; N_ACTIONS];
 
         for _ in 0..125 { // 125 * 8 = 1000 ticks
-            policy.build(&state, 0, &mut obs, &mut mask);
-            let actions = policy.infer(&obs, &mask, 1);
+            policy.build(&state, 0, &mut ripple_obs, &mut ripple_mask);
+            let actions = policy.infer(&ripple_obs, &ripple_mask, 1);
             let controls = policy.controls(actions[0]);
 
             let mut actions_map = std::collections::HashMap::new();
             actions_map.insert(0, controls);
-            state = game.step(actions_map);
+            let res = env.step(actions_map);
+            state = res.state;
+            obs = res.obs;
         }
 
         // If we got here without panicking, test passed

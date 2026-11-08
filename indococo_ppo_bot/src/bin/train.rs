@@ -14,6 +14,8 @@
 //! indococo-train megabyte-obs <megabyte_dir> <states.jsonl>    # Dump Megabyte obs for validation
 //! indococo-train megabyte-h2h <ckpt> <megabyte_dir> <games> [threads]  # Rust Megabyte h2h
 //! indococo-train megabyte-logits <megabyte_dir> <obs.jsonl>    # Rust Megabyte logits for parity check
+//! indococo-train ripple-h2h <ckpt> <ripple_dir> <games> [threads]  # Rust Ripple h2h (CPU)
+//! indococo-train ripple-dump <ripple_dir> <steps> <out.jsonl>  # Dump Ripple tensors for Python parity
 //! ```
 
 use std::collections::BTreeMap;
@@ -1045,6 +1047,17 @@ fn main() {
             args.get(4).map_or(8, |t| t.parse().expect("threads")),
         ),
         "megabyte-logits" => megabyte_logits(Path::new(arg(1)), Path::new(arg(2))),
+        "ripple-h2h" => ripple_h2h(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3).parse().expect("games"),
+            args.get(4).map_or(8, |t| t.parse().expect("threads")),
+        ),
+        "ripple-dump" => ripple_dump(
+            Path::new(arg(1)),
+            arg(2).parse().expect("steps"),
+            Path::new(arg(3)),
+        ),
         other => panic!("unknown mode {other:?}"),
     }
 }
@@ -1785,4 +1798,158 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
         }
     }
     out
+}
+
+/// `ripple-h2h`: the candidate checkpoint (greedy, CPU) against the Rust Ripple port,
+/// first goal wins, kickoff starts, both sides. Ripple uses tick_skip=4 internally.
+#[cfg(feature = "ripple")]
+fn ripple_h2h(ckpt: &Path, rdir: &Path, games: usize, threads: usize) {
+    use indococo_bot::ripple as rx;
+    init_from_default(true).expect("load collision meshes");
+    let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let per = games.div_ceil(threads);
+    let t0 = std::time::Instant::now();
+    let res: Vec<[u64; 4]> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..threads).map(|t| {
+            let mix = &mix;
+            s.spawn(move || ripple_worker(mix, ckpt, rdir, per))
+        }).collect();
+        hs.into_iter().map(|h| h.join().expect("worker")).collect()
+    });
+    let mut tot = [0u64; 4];
+    for r in &res { for i in 0..4 { tot[i] += r[i]; } }
+    let [w, l, d, steps] = tot;
+    let out = serde_json::json!({
+        "a": ckpt, "b": "ripple(rust)", "games": w + l + d, "wins": w, "losses": l, "draws": d,
+        "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
+        "steps": steps, "seconds": t0.elapsed().as_secs_f64(),
+        "steps_per_second": steps as f64 / t0.elapsed().as_secs_f64(),
+    });
+    println!("{out}");
+}
+
+#[cfg(not(feature = "ripple"))]
+fn ripple_h2h(_ckpt: &Path, _rdir: &Path, _games: usize, _threads: usize) {
+    panic!("ripple-h2h requires --features ripple");
+}
+
+#[cfg(feature = "ripple")]
+fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize) -> [u64; 4] {
+    use indococo_bot::ripple as rx;
+    use rlgymppo::ExternalPolicy;
+    const ENVS: usize = 8;
+    let dev = Device::flex();
+    let na = load_actor(ckpt, &dev);
+    let ripple = rx::RipplePolicy::load(rdir).expect("ripple weights");
+    let mut out = [0u64; 4];
+    let mut started = 0usize;
+    struct G { env: BotEnv, state: GameState, obs: Vec<Vec<f32>>, a_team: u8, live: bool }
+    let mut new_game = |k: usize, started: &mut usize| -> G {
+        let mut env = create_env(&RewardConfig::default(), mix);
+        let (state, obs, _) = env.reset();
+        let live = *started < games;
+        *started += 1;
+        G { env, state, obs, a_team: (k % 2) as u8, live }
+    };
+    let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
+    let mut robs = vec![0.0f32; ripple.obs_width()];
+    let mut rmask = vec![false; rx::N_ACTIONS];
+    while gs.iter().any(|g| g.live) {
+        let mut oa = Vec::new();
+        for g in gs.iter().filter(|g| g.live) {
+            for (i, (info, _)) in g.state.cars.iter().enumerate() {
+                if info.team as u8 == g.a_team {
+                    oa.push(&g.obs[i]);
+                }
+            }
+        }
+        let aa = argmax_actions(&na, &oa, &dev);
+        let mut ia = 0;
+        for k in 0..ENVS {
+            if !gs[k].live { continue; }
+            let g = &mut gs[k];
+            let mut acts = Vec::new();
+            for (i, (info, _)) in g.state.cars.iter().enumerate() {
+                if info.team as u8 == g.a_team {
+                    acts.push(aa[ia]);
+                    ia += 1;
+                } else {
+                    ripple.build(&g.state, i, &mut robs, &mut rmask);
+                    let actions = ripple.infer(&robs, &rmask, 1);
+                    acts.push(actions[0]);
+                }
+            }
+            let actions_map: std::collections::HashMap<_, _> =
+                acts.into_iter().enumerate().map(|(i, a)| (i, ripple.controls(a))).collect();
+            let res = g.env.step(actions_map);
+            out[3] += 1;
+            if res.done {
+                match res.result {
+                    Some(0) => if g.a_team == 0 { out[0] += 1 } else { out[1] += 1 },
+                    Some(1) => if g.a_team == 1 { out[0] += 1 } else { out[1] += 1 },
+                    Some(_) => out[2] += 1,
+                    None => out[2] += 1,
+                }
+                *g = new_game(k, &mut started);
+            } else {
+                (g.state, g.obs) = (res.state, res.obs);
+            }
+        }
+    }
+    out
+}
+
+/// `ripple-dump`: writes Ripple's 5 ONNX input tensors (main, others, ball, actions, boosts)
+/// plus the chosen action as JSONL, for a sequence of random states. Python parity tool can
+/// feed these to botpack5.py::Ripple without FFI.
+#[cfg(feature = "ripple")]
+fn ripple_dump(rdir: &Path, steps: usize, out: &Path) {
+    use indococo_bot::ripple as rx;
+    use rlgymppo::ExternalPolicy;
+    init_from_default(true).expect("load collision meshes");
+    let mix = indococo_bot::setters::default_mix();
+    let ripple = rx::RipplePolicy::load(rdir).expect("ripple weights");
+    let mut env = create_env(&RewardConfig::default(), mix);
+    let (mut state, mut obs, _) = env.reset();
+    let mut f = std::io::BufWriter::new(std::fs::File::create(out).expect("open dump"));
+    let mut robs = vec![0.0f32; ripple.obs_width()];
+    let mut rmask = vec![false; rx::N_ACTIONS];
+    use std::io::Write;
+    for step in 0..steps {
+        ripple.build(&state, 0, &mut robs, &mut rmask);
+        let actions = ripple.infer(&robs, &rmask, 1);
+        let action = actions[0];
+        
+        // Extract the 5 tensors from flat obs
+        let mut offset = 0;
+        let main: Vec<f32> = robs[offset..offset+32].to_vec(); offset += 32;
+        let others: Vec<f32> = robs[offset..offset+5*21].to_vec(); offset += 5*21;
+        let ball: Vec<f32> = robs[offset..offset+6*9].to_vec(); offset += 6*9;
+        let action_queue: Vec<f32> = robs[offset..offset+6*8].to_vec(); offset += 6*8;
+        let boosts: Vec<f32> = robs[offset..offset+34*5].to_vec();
+        
+        let line = serde_json::json!({
+            "step": step,
+            "main": main,
+            "others": others,
+            "ball": ball,
+            "actions": action_queue,
+            "boosts": boosts,
+            "action": action,
+        });
+        writeln!(f, "{}", serde_json::to_string(&line).unwrap()).expect("write");
+        
+        let controls = ripple.controls(action);
+        let mut actions_map = std::collections::HashMap::new();
+        actions_map.insert(0, controls);
+        let res = env.step(actions_map);
+        state = res.state;
+        obs = res.obs;
+    }
+    println!("Wrote {steps} steps to {}", out.display());
+}
+
+#[cfg(not(feature = "ripple"))]
+fn ripple_dump(_rdir: &Path, _steps: usize, _out: &Path) {
+    panic!("ripple-dump requires --features ripple");
 }
