@@ -125,7 +125,6 @@ struct RippleState {
     prev_action: [f32; 8],
     ball_preds: [[f32; 9]; 1 + BALL_PRED_STEPS],
     pad_timers: [f32; 34],
-    ticks_until_next_decision: u8,
 }
 
 impl RippleState {
@@ -147,7 +146,6 @@ impl RippleState {
             prev_action: [0.0; 8],
             ball_preds: [[0.0; 9]; 6],
             pad_timers: [0.0; 34],
-            ticks_until_next_decision: 0,
         }
     }
 }
@@ -639,13 +637,9 @@ impl ExternalPolicy for RipplePolicy {
         let mut states = self.states.lock().unwrap();
         let st = states.get_mut(&car).unwrap();
 
-        // Ripple decides every 4 ticks, we're called every 8.
-        // Run decision step twice per call.
-        if st.ticks_until_next_decision == 0 {
-            self.update_timers(state, car, st);
-            st.ticks_until_next_decision = TICK_SKIP;
-        }
-        st.ticks_until_next_decision = st.ticks_until_next_decision.saturating_sub(TICK_SKIP);
+        // Ripple uses tick_skip=4; we're called every 8 ticks (trainer's tick_skip).
+        // Update timers by 4 ticks per call to match Python adapter behavior.
+        self.update_timers(state, car, st);
 
         let (main, others, ball, actions, boosts) = self.build_obs_internal(state, car, st);
 
@@ -879,20 +873,20 @@ mod tests {
 
         let policy = RipplePolicy::load(&path).expect("Failed to load Ripple");
 
-        use rlgym::gamestates::GameConfig;
+        use rlgymppo::rlgym::gamestates::GameConfig;
         let config = GameConfig {
             team_size: 1,
-            tick_skip: TICK_SKIP as u32,
+            tick_skip: 8, // Trainer tick_skip, not Ripple's internal 4
             ..Default::default()
         };
-        let mut game = rlgym::make(config).unwrap();
+        let mut game = rlgymppo::rlgym::make(config).unwrap();
         let mut state = game.reset(None, None);
 
         let obs_width = policy.obs_width();
         let mut obs = vec![0.0f32; obs_width];
         let mut mask = vec![false; N_ACTIONS];
 
-        for _ in 0..1000 / TICK_SKIP as usize {
+        for _ in 0..125 { // 125 * 8 = 1000 ticks
             policy.build(&state, 0, &mut obs, &mut mask);
             let actions = policy.infer(&obs, &mask, 1);
             let controls = policy.controls(actions[0]);
