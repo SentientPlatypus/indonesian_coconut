@@ -1063,7 +1063,7 @@ mod tests {
             let acts = vec![0; num_cars];
             env.pre_step(&state, &acts);
             for _ in 0..2 {
-                policy.build(&state, 0, &mut ripple_obs, &mut ripple_mask);
+                policy.build(&state, 0, 0, &mut ripple_obs, &mut ripple_mask);  // game_id=0
                 let actions = policy.infer(&ripple_obs, &ripple_mask, 1);
                 let action = actions[0];
                 let controls = controls_of(action);
