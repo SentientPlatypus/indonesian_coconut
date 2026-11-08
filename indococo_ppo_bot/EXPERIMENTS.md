@@ -1371,3 +1371,16 @@ EXTRA_OPPS="... demo_hunter:checkpoints_to_test/demo_hunter_<N>M.bpk:1.0"
 * Its aggressive style makes it an effective sparring partner for learning evasion
 * Do NOT replace the main bot's reward weights—those stay unchanged (demo 50, air_dribble_bump 40, flip_reset 70)
 * The hunter's .bpk joins the frozen league; the main bot trains against it like any other opponent
+
+## ST16 results (Nov 8, 2026, ~7:37 AM ET): PROMOTED, new best ST16 14786.0M
+Finals ckpt = best mid 14786.0M (exp_ST16/checkpoints/1794133863; training reached 15024.5M). Recipe: ST15 + ST13_final@1.0 + HUNT@2.0, mega2, MEGA_WEIGHT 2.0, GAL_WEIGHT 3.0, OPPCH 0.50, ENT 0.016.
+Panel vs ST15 BEST: 52.6% vs ST15 (263-237 / 500 g, pass ≥52), FR4 74.6% (373-127; ST15 75.6%, exactly at the −1.0 gate), pool400 92.04 (ST15 91.67), bp5 65.83 (ST15 65.12), Galactus 25.0% (125-375 / 500 g; ST15 26.6%, within −4), Megabyte 71.6% (358-142 / 500 g, fixed mega2, report-only; ST15 75.4%; sim may still be optimistic vs real RLBot). Gen panel min 25.0 (Galactus) mean 78.83 (ST15 26.6 / 78.3).
+Pool vs ST15: 1v1.pt 81.5 (79.2), ppo_430M 81.2 (82.0), Nexto 93.2 (93.5), Necto 99.2 (97.5), Element 99.5 (99.2), Immortal 97.5 (98.5).
+bp5 vs ST15: Ripple 65.8 (61.8), Kira 68.0 (70.5), Dice 56.5 (56.5), Chronos 78.8 (74.8), Galactus-in-bp5 26.2 (27.8), Seer 99.8 (99.5).
+demos_against per 200 g: vs BEST 57 cand / 78 opp (ST15 44/97); vs FR4 12/142 (ST15 19/119). Mid-run peak Galactus 33.0% at 14685.8M (<40%). Auto `promote=true` on every gate. Shipped checkpoints_to_test/st16_14786M.bpk. ST17 (OPPCH 0.60) auto-started from this chunk measuring against ST16; queue ST18 (ST15_final@1.0).
+
+## ST17 (generalization): OPPCH 0.50 -> 0.60
+One change on top of the ST16 recipe (ENT 0.016 + GAL_WEIGHT 3.0 + MEGA_WEIGHT 2.0 via mega2 + ST3..ST13 + HUNT@2.0): larger league fraction vs self-play. Hypothesis: more games vs diverse frozen styles help the weakest matchups (Galactus, and FR4 sitting on the gate) without cranking any single opponent weight. flip_reset 70. From ST16 best chunk.
+
+## ST18 (generalization): add ST15_final to EXTRA_OPPS at w1.0
+One change on top of ST17: fold the previous BEST (ST15 14024.3M, ckpt 1794111431) into the league at weight 1.0. Same OPPCH 0.60 / ENT 0.016 / GAL_WEIGHT 3.0 / MEGA_WEIGHT 2.0 / HUNT@2.0. Hypothesis: ST16 beat ST15 52.6% but slipped on Galactus (26.6→25.0) and FR4 (75.6→74.6, at the gate) while gaining on pool/bp5; keeping that previous-best style in-league follows the ST10/ST11/ST13 pattern and should protect those matchups without overweighting any one opponent.
