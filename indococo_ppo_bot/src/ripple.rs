@@ -504,7 +504,11 @@ impl RipplePolicy {
         main[25] = st.handbrake;
         main[26..28].copy_from_slice(&st.flip_dir);
         // is_reset: True if action queue contains NaN (indicates next action will fill queue)
-        let is_reset = st.queue.iter().flatten().any(|&x| x.is_nan());
+        // Python: is_reset = queue has NaN AND not kickoff
+        // At kickoff, Python fills queue with 0.0 before first obs, so is_reset=0.0
+        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
+        let has_nan = st.queue.iter().flatten().any(|&x| x.is_nan());
+        let is_reset = has_nan && !is_kickoff;
         main[28] = if is_reset { 1.0 } else { 0.0 };
         // is_kickoff: True if ball is at center (will be flipped to indicate side later)
         let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;

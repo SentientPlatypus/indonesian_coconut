@@ -384,8 +384,44 @@ fn main() {
         let actions_out = ripple.infer(&obs, &mask, 1);
         let rust_action = actions_out[0];
         
-        if rust_action == record.python_action {
+        let action_match = rust_action == record.python_action;
+        if action_match {
             action_matches += 1;
+        }
+        
+        // Report first divergence in detail
+        if !action_match && action_matches == 1 {  // First mismatch after initial match
+            println!("\n{}", "!".repeat(80));
+            println!("FIRST ACTION DIVERGENCE AT STEP {}", idx);
+            println!("{}", "!".repeat(80));
+            println!("Python action: {}", record.python_action);
+            println!("Rust action:   {}", rust_action);
+            
+            // Find first tensor element that differs significantly
+            println!("\nTensor diffs at this step:");
+            println!("  main:    {:.6e} at index {}", main_diff, main_diffs.len() - 1);
+            println!("  others:  {:.6e}", others_diff);
+            println!("  ball:    {:.6e}", ball_diff);
+            println!("  actions: {:.6e}", actions_diff);
+            println!("  boosts:  {:.6e}", boosts_diff);
+            
+            // Show main tensor comparison
+            if main_diff > 1e-6 {
+                println!("\nMAIN tensor differences:");
+                let labels = ["pos.x", "pos.y", "pos.z", "vel.x", "vel.y", "vel.z",
+                             "ang.x", "ang.y", "ang.z", "fwd.x", "fwd.y", "fwd.z",
+                             "up.x", "up.y", "up.z", "team", "demo", "on_gnd",
+                             "has_j", "has_f", "boost", "bst_t", "jmp_t", "air_t",
+                             "flp_t", "hndbr", "flp_x", "flp_y", "is_rst", "is_ko",
+                             "is_flp", "is_swp"];
+                for i in 0..32 {
+                    let diff = (rust_main[i] - record.python_main[i]).abs();
+                    if diff > 1e-6 {
+                        println!("  [{:2}] {:6} rust={:10.6} py={:10.6} diff={:.6e}",
+                                 i, labels[i], rust_main[i], record.python_main[i], diff);
+                    }
+                }
+            }
         }
         
         // Print first few and any large divergences
