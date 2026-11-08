@@ -499,23 +499,32 @@ pub(crate) fn ground_car(rng: &mut impl RngExt) -> CarState {
     car
 }
 
-/// Aerial defense drill: ball airborne moving toward blue goal, orange car
-/// positioned to shoot/contest, blue car at varied defensive positions (some
+/// Clamp a car position to valid field bounds and height (on ground or airborne).
+pub(crate) fn clamp_car_pos(pos: Vec3A) -> Vec3A {
+    Vec3A::new(
+        pos.x.clamp(-4096.0 + 100.0, 4096.0 - 100.0),
+        pos.y.clamp(-5120.0 + 100.0, 5120.0 - 100.0),
+        pos.z.max(CAR_REST_HEIGHT),
+    )
+}
+
+/// Aerial defense drill: ball airborne moving toward one goal, attacker
+/// positioned to shoot/contest, defender at varied defensive positions (some
 /// goal-side, some badly positioned). Trains aerial defense and positioning
-/// against aerial threats.
+/// against aerial threats. Randomizes which team defends so both agents learn.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AerialDefense {
     pub ball_height: [f32; 2],
-    /// Ball's distance from blue goal when spawned.
+    /// Ball's distance from the defended goal when spawned.
     pub ball_dist_from_goal: [f32; 2],
     /// Ball speed toward goal.
     pub ball_speed: [f32; 2],
     /// Lateral offset from centerline (x direction).
     pub ball_lateral: [f32; 2],
-    /// Attacker (orange) distance from ball.
+    /// Attacker distance from ball.
     pub attacker_dist: [f32; 2],
-    /// Defender (blue) positioning: fraction that spawn goal-side (rest spawn out of position).
+    /// Defender positioning: fraction that spawn goal-side (rest spawn out of position).
     pub defender_goal_side_frac: f32,
     /// Defender distance from goal when goal-side.
     pub defender_goal_dist: [f32; 2],
@@ -545,33 +554,42 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AerialDefense {
         arena.reset_to_random_kickoff(None);
         let rng = shared_info.rng();
         
-        // Blue goal is at (0, -5120, 0), ball moving toward it
-        let goal_y = -5120.0;
-        let ball_y = goal_y + range(rng, self.ball_dist_from_goal);
+        // Pick which car defends (randomize for symmetric training)
+        let defender_idx = rng.random_range(0..arena.num_cars());
+        let attacker_idx = 1 - defender_idx;
+        
+        // Defended goal: blue goal at (0, -5120, 0) or orange goal at (0, 5120, 0)
+        let goal_y = if defender_idx == 0 { -5120.0 } else { 5120.0 };
+        let goal_sign = goal_y.signum();
+        
+        // Ball positioned away from defended goal, moving toward it
+        let ball_y = goal_y + goal_sign * range(rng, self.ball_dist_from_goal);
         let ball_x = range(rng, self.ball_lateral);
         let ball_z = range(rng, self.ball_height);
         let ball_pos = Vec3A::new(ball_x, ball_y, ball_z);
         
-        // Ball velocity toward goal with some variation
+        // Ball velocity toward defended goal with some variation
         let to_goal = Vec3A::new(-ball_x * 0.3, goal_y - ball_y, -ball_z * 0.2).normalize();
         let speed = range(rng, self.ball_speed);
         let ball_vel = to_goal * speed;
         arena.set_ball_state(ball_at(ball_pos, ball_vel));
         
-        // Attacker (orange, car idx 1 in 1v1): positioned to contest/shoot
-        let attacker_to_ball = tilted_toward(rng, -to_goal, 0.7);
-        let attacker_pos = ball_pos - attacker_to_ball * range(rng, self.attacker_dist);
+        // Attacker: positioned behind ball (far side from defended goal) to shoot toward it
+        // from_goal points away from defended goal; attacker placed in that direction
+        let from_goal = -to_goal;
+        let attacker_offset = tilted_toward(rng, from_goal, 0.7);
+        let attacker_pos = ball_pos + attacker_offset * range(rng, self.attacker_dist);
         let mut attacker = CarState::DEFAULT;
-        attacker.phys.pos = attacker_pos;
+        attacker.phys.pos = clamp_car_pos(attacker_pos);
         attacker.phys.vel = to_goal * (speed * 0.7);
         attacker.phys.rot_mat = orientation(rng, Vec3A::Z);
         attacker.boost = range(rng, self.boost);
         
-        // Defender (blue, car idx 0 in 1v1): varied positioning
+        // Defender: varied positioning (goal-side or out of position)
         let goal_side = rng.random_bool(self.defender_goal_side_frac as f64);
         let defender = if goal_side {
             // Goal-side: between ball and goal
-            let def_y = goal_y + range(rng, self.defender_goal_dist);
+            let def_y = goal_y + goal_sign * range(rng, self.defender_goal_dist);
             let def_x = ball_x * rng.random_range(0.3..0.8);
             let mut car = CarState::DEFAULT;
             car.phys.pos = Vec3A::new(def_x, def_y, CAR_REST_HEIGHT);
@@ -586,34 +604,41 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AerialDefense {
             let offset = Vec3A::new(angle.cos(), angle.sin(), 0.0) * dist;
             let def_pos = ball_pos + offset;
             let mut car = CarState::DEFAULT;
-            car.phys.pos = Vec3A::new(
-                def_pos.x.clamp(-3500.0, 3500.0),
-                def_pos.y.clamp(-4500.0, -500.0),
-                CAR_REST_HEIGHT,
-            );
+            car.phys.pos = clamp_car_pos(def_pos);
             car.phys.vel = Vec3A::ZERO;
             car.phys.rot_mat = orientation(rng, Vec3A::Z);
             car.boost = range(rng, self.boost) * 0.5;
             car
         };
         
-        // Set cars (blue first, then orange in 1v1)
-        arena.set_car_state(0, defender.core());
-        arena.set_car_state(1, attacker.core());
+        // Set cars by role
+        arena.set_car_state(defender_idx, defender.core());
+        arena.set_car_state(attacker_idx, attacker.core());
+        
+        // Debug assertions
+        debug_assert!(ball_pos.z >= 300.0 && ball_pos.z <= 1500.0, "ball z out of range");
+        debug_assert!(
+            (ball_vel.y * goal_sign) < 0.0,
+            "ball not moving toward defended goal"
+        );
+        let attacker_dist_from_goal = (attacker_pos.y - goal_y).abs();
+        let ball_dist_from_goal = (ball_pos.y - goal_y).abs();
+        debug_assert!(
+            attacker_dist_from_goal > ball_dist_from_goal,
+            "attacker not farther from goal than ball"
+        );
     }
 }
 
 /// Demo threat drill: opponent supersonic heading toward our car. Trains demo
-/// awareness and evasion.
+/// awareness and evasion. Randomizes which team is targeted so both agents learn.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DemoThreat {
     /// Distance between cars at start.
     pub distance: [f32; 2],
-    /// Attacker (orange) speed toward defender.
+    /// Attacker speed toward target (clamped to at least 2200 for supersonic).
     pub attacker_speed: [f32; 2],
-    /// Whether attacker starts with supersonic speed (2200+).
-    pub supersonic: bool,
     /// Ball positioning: distance from midfield.
     pub ball_dist: [f32; 2],
     pub boost: [f32; 2],
@@ -624,7 +649,6 @@ impl Default for DemoThreat {
         Self {
             distance: [800.0, 1500.0],
             attacker_speed: [2250.0, 2300.0],
-            supersonic: true,
             ball_dist: [1000.0, 3000.0],
             boost: [30.0, 100.0],
         }
@@ -636,6 +660,10 @@ impl<SI: SharedInfoRng> StateSetter<SI> for DemoThreat {
         arena.reset_to_random_kickoff(None);
         let rng = shared_info.rng();
         
+        // Pick which car is targeted (randomize for symmetric training)
+        let target_idx = rng.random_range(0..arena.num_cars());
+        let attacker_idx = 1 - target_idx;
+        
         // Place ball randomly in the field
         let ball_y_side = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
         let ball_pos = Vec3A::new(
@@ -645,34 +673,45 @@ impl<SI: SharedInfoRng> StateSetter<SI> for DemoThreat {
         );
         arena.set_ball_state(ball_at(ball_pos, Vec3A::ZERO));
         
-        // Defender (blue, car 0): random position on their half
-        let defender_pos = Vec3A::new(
+        // Target: random position on their defensive half
+        let target_y_side = if target_idx == 0 { -1.0 } else { 1.0 };
+        let target_pos = Vec3A::new(
             rng.random_range(-2500.0..2500.0),
-            rng.random_range(-4000.0..-1000.0),
+            target_y_side * rng.random_range(1000.0..4000.0),
             CAR_REST_HEIGHT,
         );
         
-        // Attacker (orange, car 1): positioned to demo the defender
-        let to_defender = (defender_pos - Vec3A::new(0.0, 0.0, CAR_REST_HEIGHT)).normalize();
-        let to_defender_2d = Vec3A::new(to_defender.x, to_defender.y, 0.0).normalize();
+        // Attacker: positioned to demo the target, supersonic speed
+        let to_target_2d = Vec3A::new(
+            target_pos.x - 0.0,
+            target_pos.y - 0.0,
+            0.0,
+        )
+        .normalize();
         let dist = range(rng, self.distance);
-        let attacker_pos = defender_pos - to_defender_2d * dist;
+        let attacker_pos = target_pos - to_target_2d * dist;
         
-        let speed = range(rng, self.attacker_speed);
+        // Ensure supersonic speed (>= 2200 uu/s)
+        let speed = range(rng, self.attacker_speed).max(2200.0);
         let mut attacker = CarState::DEFAULT;
-        attacker.phys.pos = attacker_pos;
-        attacker.phys.vel = to_defender_2d * speed;
+        attacker.phys.pos = clamp_car_pos(attacker_pos);
+        attacker.phys.vel = to_target_2d * speed;
         attacker.phys.rot_mat = orientation(rng, Vec3A::Z);
         attacker.boost = 100.0;
         
-        let mut defender = CarState::DEFAULT;
-        defender.phys.pos = defender_pos;
-        defender.phys.vel = Vec3A::ZERO;
-        defender.phys.rot_mat = orientation(rng, Vec3A::Z);
-        defender.boost = range(rng, self.boost);
+        let mut target = CarState::DEFAULT;
+        target.phys.pos = target_pos;
+        target.phys.vel = Vec3A::ZERO;
+        target.phys.rot_mat = orientation(rng, Vec3A::Z);
+        target.boost = range(rng, self.boost);
         
-        arena.set_car_state(0, defender.core());
-        arena.set_car_state(1, attacker.core());
+        arena.set_car_state(target_idx, target.core());
+        arena.set_car_state(attacker_idx, attacker.core());
+        
+        // Debug assertions
+        debug_assert!(attacker.phys.pos.z >= 0.0, "attacker z below 0");
+        debug_assert!(target.phys.pos.z >= 0.0, "target z below 0");
+        debug_assert!(speed >= 2200.0, "attacker not supersonic");
     }
 }
 
