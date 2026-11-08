@@ -1,7 +1,7 @@
 # Ripple v1.1 Python→Rust Parity Status
 
 **Baseline**: 601f91e8  
-**Current**: 71286b39 (16 commits)  
+**Current**: e7f38ea (17 commits)  
 **Date**: 2026-11-08
 
 ---
@@ -26,6 +26,7 @@
 3. **Fixed normalization** - 2300 not 5000 for pos/vel (LIVE CODE ✓)
 4. **Fixed padding slots** - removed ghost cars from 6-car arena init
 5. **FIXED ACTION QUEUE BUG** - queue was pre-filled with zeros at kickoff, causing first action to always be [0,0,0,0,0,0,0,0] (action 14) instead of KL-selected action (38)
+6. **FIXED ACTION QUEUE ORDER** (e7f38ea) - queue was in REVERSE order: Rust had [old→new] but Python has [new→old], causing actions tensor to be backwards and wrong ONNX inputs
 
 ---
 
@@ -92,15 +93,20 @@ Max diffs:
 - Policy and base models produce IDENTICAL logits in both
 - Action selection now matches perfectly at step 0
 
-### Delayed Action Queue
+### Delayed Action Queue (FIXED e7f38ea)
 - Queue holds QUEUE_LEN (6) past actions
+- Python queue structure (act.py DelayedAction.parse_actions):
+  - queue[0] = newest action (just decided)
+  - queue[5] = oldest action (executed next)
 - At each step:
   1. Select action via KL
   2. Lookup controls from action_table[action]
-  3. Rotate queue left, append new controls
-  4. Apply queue[0] (oldest) with 6-tick delay
-  5. Find which action index matches applied controls
-- Bug was: queue pre-filled with zeros instead of NaN, so first action used zeros
+  3. Execute queue[5] (oldest)
+  4. Rotate queue RIGHT: move queue[0..4] to queue[1..5]
+  5. Put new action at queue[0]
+- Bugs fixed:
+  - Queue pre-filled with zeros instead of NaN (71286b3)
+  - Queue order reversed: was using rotate_left + queue[0] instead of rotate_right + queue[5] (e7f38ea)
 
 ### Coordinate Transforms
 - Relative: `rot.transpose() * (world_pos - main_pos)` in Rust
@@ -150,15 +156,13 @@ RIPPLE_OBS_LAYOUT.md                    - Documented exact Python layout
 
 ## 🎯 NEXT STEPS TO COMPLETION
 
-### Critical: Action Queue Evolution Mismatch
-**Problem**: At step 1+, Rust selects different actions (79 vs Python's 38) because the action history tensor differs  
-**Root cause**: Queue evolution diverges when Rust picks different actions  
-**Solution**: Need to apply Python's recorded controls in replay to keep states synchronized  
+### ✅ FIXED: Action Queue Order (e7f38ea)
+**Problem**: At step 1+, Rust selected different actions (79 vs Python's 38) even though main tensor matched  
+**Root cause**: Queue order was REVERSED - Rust had [old, ..., new] but Python has [new, ..., old]  
+**Fix**: Changed from `rotate_left()` + put at queue[5] to `rotate_right()` + put at queue[0], execute from queue[5]  
+**Expected impact**: Actions tensor now matches Python's order, should fix step 1+ divergence
 
-**Implementation path**:
-1. In `ripple_replay.rs`, skip `infer()` after step 0
-2. Apply `record.python_controls` directly to Rust's state
-3. This requires exposing RipplePolicy state mutation OR
-4. Manually constructing the action queue tensor from Python's controls
-
-**Alternative**: Check if there's a systematic bug causing action 79 vs 38 at step 1 with identical observations
+### Testing Needed
+1. Regenerate Python dump or use existing one
+2. Run `ripple_replay` to verify actions tensor now matches
+3. Check if action match improves from 12% to ~100%
