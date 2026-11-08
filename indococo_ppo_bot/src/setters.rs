@@ -559,8 +559,8 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AerialDefense {
         let attacker_idx = 1 - defender_idx;
         
         // Defended goal: blue goal at (0, -5120, 0) or orange goal at (0, 5120, 0)
-        let goal_y = if defender_idx == 0 { -5120.0 } else { 5120.0 };
-        let goal_sign = goal_y.signum();
+        let goal_y: f32 = if defender_idx == 0 { -5120.0 } else { 5120.0 };
+        let goal_sign: f32 = goal_y.signum();
         
         // Ball positioned away from defended goal, moving toward it
         let ball_y = goal_y + goal_sign * range(rng, self.ball_dist_from_goal);
