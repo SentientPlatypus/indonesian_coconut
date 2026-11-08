@@ -35,9 +35,9 @@ fn run_idle_test(rdir: &Path, games: usize) {
     let ripple = rx::RipplePolicy::load(rdir).expect("ripple weights");
     let mut env = create_env(&RewardConfig::default(), &mix);
     
-    let mut wins = 0;
-    let mut losses = 0;
-    let mut draws = 0;
+    let mut wins = [0, 0];  // wins[0] = blue, wins[1] = orange
+    let mut losses = [0, 0];
+    let mut draws = [0, 0];
     let mut steps = 0u64;
     
     let t0 = std::time::Instant::now();
@@ -97,12 +97,12 @@ fn run_idle_test(rdir: &Path, games: usize) {
                     match view.scoring_team() {
                         Some(team) => {
                             if team as usize == ripple_team {
-                                wins += 1;
+                                wins[ripple_team] += 1;
                             } else {
-                                losses += 1;
+                                losses[ripple_team] += 1;
                             }
                         }
-                        None => draws += 1,
+                        None => draws[ripple_team] += 1,
                     }
                     break;
                 }
@@ -116,29 +116,51 @@ fn run_idle_test(rdir: &Path, games: usize) {
         }
     }
     
-    let total = wins + losses + draws;
+    let total = [
+        wins[0] + losses[0] + draws[0],
+        wins[1] + losses[1] + draws[1],
+    ];
     let elapsed = t0.elapsed().as_secs_f64();
-    let win_rate = if wins + losses > 0 {
-        wins as f64 / (wins + losses) as f64
-    } else {
-        0.0
-    };
     
     println!("\n=== Ripple vs Idle Results ===");
-    println!("Games: {}", total);
-    println!("Wins: {}", wins);
-    println!("Losses: {}", losses);
-    println!("Draws: {}", draws);
-    println!("Win rate (decisive): {:.2}%", win_rate * 100.0);
+    println!("Total games: {}", total[0] + total[1]);
+    println!();
+    println!("Blue side:");
+    println!("  Wins:   {}", wins[0]);
+    println!("  Losses: {}", losses[0]);
+    println!("  Draws:  {}", draws[0]);
+    let blue_rate = if total[0] > 0 { wins[0] as f64 / total[0] as f64 } else { 0.0 };
+    println!("  Win rate: {:.2}% ({}/{})", blue_rate * 100.0, wins[0], total[0]);
+    
+    println!();
+    println!("Orange side:");
+    println!("  Wins:   {}", wins[1]);
+    println!("  Losses: {}", losses[1]);
+    println!("  Draws:  {}", draws[1]);
+    let orange_rate = if total[1] > 0 { wins[1] as f64 / total[1] as f64 } else { 0.0 };
+    println!("  Win rate: {:.2}% ({}/{})", orange_rate * 100.0, wins[1], total[1]);
+    
+    println!();
     println!("Steps: {}", steps);
     println!("Time: {:.1}s", elapsed);
     println!("Steps/sec: {:.0}", steps as f64 / elapsed);
     
-    if win_rate < 0.90 {
-        println!("\n❌ FAIL: Win rate {:.2}% < 90%", win_rate * 100.0);
+    // PASS requires wins/total_games >= 0.9 per side
+    let blue_pass = blue_rate >= 0.9;
+    let orange_pass = orange_rate >= 0.9;
+    
+    if !blue_pass || !orange_pass {
+        println!();
+        if !blue_pass {
+            println!("❌ Blue FAIL: Win rate {:.2}% < 90%", blue_rate * 100.0);
+        }
+        if !orange_pass {
+            println!("❌ Orange FAIL: Win rate {:.2}% < 90%", orange_rate * 100.0);
+        }
         std::process::exit(1);
     } else {
-        println!("\n✓ PASS: Win rate {:.2}% >= 90%", win_rate * 100.0);
+        println!("\n✓ PASS: Both sides >= 90% (Blue {:.2}%, Orange {:.2}%)", 
+                 blue_rate * 100.0, orange_rate * 100.0);
     }
 }
 

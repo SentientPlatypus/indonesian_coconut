@@ -506,8 +506,10 @@ impl RipplePolicy {
             others[i][15] = if cinfo.team == Team::Blue { -1.0 } else { 1.0 };
             others[i][16] = 0.0; // demo_timer not tracked for others
             others[i][17] = if f.on_ground { 1.0 } else { 0.0 };
-            others[i][18] = 0.0; // has_jump
-            others[i][19] = 0.0; // has_flip
+            // Python obs.py line 222: has_jump = not player.has_jumped
+            others[i][18] = if !c.has_jumped { 1.0 } else { 0.0 };
+            // Python obs.py line 223: has_flip (computed from RocketSim state)
+            others[i][19] = if f.has_flip { 1.0 } else { 0.0 };
             others[i][20] = (c.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
         }
 
@@ -916,9 +918,10 @@ impl ExternalPolicy for RipplePolicy {
                 Err(_) => { actions.push(0); continue; }
             };
 
-            // Action selection: stochastic at kickoff (ball at 0,0), KL argmax otherwise
-            // Ball position is at obs_row[137..140] (first slice of ball tensor)
-            let is_kickoff = obs_row[137].abs() < 1.0 && obs_row[138].abs() < 1.0;
+            // Action selection: stochastic at kickoff (ball at world 0,0), KL argmax otherwise
+            // Python upstream tests WORLD ball x/y, not car-relative coords
+            // Use is_kickoff flag from main[29] (obs[29]), which was set in build() from world ball coords
+            let is_kickoff = obs_row[29].abs() > 0.5;
             
             let log_policy = log_softmax(&policy_logits);
             
@@ -1051,6 +1054,61 @@ fn log_softmax(logits: &[f32]) -> Vec<f32> {
 }
 
 impl RipplePolicy {
+    /// Get raw logits from both models given the 5 separate tensors (for Python tensor comparison)
+    #[cfg(feature = "ripple")]
+    pub fn get_raw_logits_from_tensors(
+        &self,
+        main_vec: &[f32],
+        others_vec: &[f32],
+        ball_vec: &[f32],
+        actions_vec: &[f32],
+        boosts_vec: &[f32],
+    ) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
+        use ort::{inputs, value::TensorRef};
+        
+        // Run policy model
+        let policy_logits = {
+            let main_input = TensorRef::from_array_view((vec![1, 32], main_vec))?;
+            let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec))?;
+            let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec))?;
+            let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec))?;
+            let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec))?;
+            
+            let mut policy = self.policy.lock().unwrap();
+            let policy_outputs = policy.run(inputs![
+                "main" => main_input,
+                "others" => others_input,
+                "ball" => ball_input,
+                "actions" => actions_input,
+                "boosts" => boosts_input,
+            ])?;
+            let (_, logits) = policy_outputs["logits"].try_extract_tensor::<f32>()?;
+            logits.to_vec()
+        };
+        
+        // Run base model
+        let base_logits = {
+            let main_input = TensorRef::from_array_view((vec![1, 32], main_vec))?;
+            let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec))?;
+            let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec))?;
+            let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec))?;
+            let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec))?;
+            
+            let mut base = self.base.lock().unwrap();
+            let base_outputs = base.run(inputs![
+                "main" => main_input,
+                "others" => others_input,
+                "ball" => ball_input,
+                "actions" => actions_input,
+                "boosts" => boosts_input,
+            ])?;
+            let (_, logits) = base_outputs["logits"].try_extract_tensor::<f32>()?;
+            logits.to_vec()
+        };
+        
+        Ok((policy_logits, base_logits))
+    }
+
     /// Get raw logits from both models without sampling (for deterministic replay comparison)
     #[cfg(feature = "ripple")]
     pub fn get_raw_logits(&self, obs: &[f32]) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
@@ -1106,6 +1164,18 @@ impl RipplePolicy {
         };
         
         Ok((policy_logits, base_logits))
+    }
+    
+    #[cfg(not(feature = "ripple"))]
+    pub fn get_raw_logits_from_tensors(
+        &self,
+        _main_vec: &[f32],
+        _others_vec: &[f32],
+        _ball_vec: &[f32],
+        _actions_vec: &[f32],
+        _boosts_vec: &[f32],
+    ) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
+        Ok((vec![], vec![]))
     }
     
     #[cfg(not(feature = "ripple"))]

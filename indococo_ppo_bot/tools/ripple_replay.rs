@@ -171,12 +171,99 @@ fn compare_tensor_2d(_name: &str, rust: &[f32], python: &[Vec<f32>]) -> (f32, us
     (max_diff, worst_i, worst_j)
 }
 
+fn run_python_tensor_mode(records: &[Record], ripple: &RipplePolicy) {
+    use ort::{inputs, value::TensorRef};
+    
+    println!("\nFeeding Python tensors into Rust ONNX models...\n");
+    
+    let mut policy_diffs = Vec::new();
+    let mut base_diffs = Vec::new();
+    
+    for (idx, record) in records.iter().enumerate() {
+        // Build inputs from Python tensors
+        let main_vec = record.python_main.clone();
+        let others_flat: Vec<f32> = record.python_others.iter().flatten().copied().collect();
+        let ball_flat: Vec<f32> = record.python_ball.iter().flatten().copied().collect();
+        let actions_flat: Vec<f32> = record.python_actions.iter().flatten().copied().collect();
+        let boosts_flat: Vec<f32> = record.python_boosts.iter().flatten().copied().collect();
+        
+        // Create tensor inputs
+        let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice()))
+            .expect("main tensor");
+        let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_flat.as_slice()))
+            .expect("others tensor");
+        let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_flat.as_slice()))
+            .expect("ball tensor");
+        let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_flat.as_slice()))
+            .expect("actions tensor");
+        let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_flat.as_slice()))
+            .expect("boosts tensor");
+        
+        // Get raw logits from Rust ONNX models
+        let (rust_policy_logits, rust_base_logits) = ripple.get_raw_logits_from_tensors(
+            &main_vec, &others_flat, &ball_flat, &actions_flat, &boosts_flat
+        ).expect("ONNX inference");
+        
+        // Compare
+        let policy_diff = rust_policy_logits.iter().zip(&record.python_logits)
+            .map(|(r, p)| (r - p).abs())
+            .fold(0.0f32, f32::max);
+        let base_diff = rust_base_logits.iter().zip(&record.python_base_logits)
+            .map(|(r, p)| (r - p).abs())
+            .fold(0.0f32, f32::max);
+        
+        policy_diffs.push(policy_diff);
+        base_diffs.push(base_diff);
+        
+        if idx == 0 || policy_diff > 1e-5 || base_diff > 1e-5 {
+            println!("Step {}:", idx);
+            println!("  Policy logits max diff: {:.6e}", policy_diff);
+            println!("  Base logits max diff:   {:.6e}", base_diff);
+            if policy_diff > 1e-5 || base_diff > 1e-5 {
+                println!("  ⚠ Diff exceeds 1e-5!");
+            }
+        }
+        
+        if (idx + 1) % 50 == 0 {
+            println!("\nProcessed {} / {} steps", idx + 1, records.len());
+        }
+    }
+    
+    // Summary
+    let max_policy_diff = policy_diffs.iter().copied().fold(0.0f32, f32::max);
+    let max_base_diff = base_diffs.iter().copied().fold(0.0f32, f32::max);
+    
+    println!("\n{}", "=".repeat(80));
+    println!("PYTHON TENSORS → RUST ONNX SUMMARY");
+    println!("{}", "=".repeat(80));
+    println!("Steps: {}", records.len());
+    println!();
+    println!("Max logits diff:");
+    println!("  Policy: {:.6e}", max_policy_diff);
+    println!("  Base:   {:.6e}", max_base_diff);
+    println!();
+    
+    if max_policy_diff < 1e-5 && max_base_diff < 1e-5 {
+        println!("✓ PASS: Model I/O matches (max_diff < 1e-5)");
+    } else {
+        println!("✗ FAIL: Model I/O does not match");
+        println!("  Target: max_diff < 1e-5");
+        println!("  Actual: policy={:.6e}, base={:.6e}", max_policy_diff, max_base_diff);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <dump.jsonl>", args[0]);
+        eprintln!("Usage: {} <dump.jsonl> [--python-tensors]", args[0]);
+        eprintln!();
+        eprintln!("Modes:");
+        eprintln!("  Default:           Compare Rust-built obs against Python tensors");
+        eprintln!("  --python-tensors:  Feed Python tensors into Rust ONNX to test model I/O");
         std::process::exit(1);
     }
+    
+    let python_tensors_mode = args.len() > 2 && args[2] == "--python-tensors";
     
     // Initialize RocketSim
     let meshes = concat!(env!("CARGO_MANIFEST_DIR"), "/../collision_meshes");
@@ -228,6 +315,15 @@ fn main() {
         Path::new("/home/ubuntu/eval_bots/ripple/bots/v1.1")
     ).expect("Failed to load Ripple");
     
+    if python_tensors_mode {
+        println!("MODE: Python tensors → Rust ONNX model I/O test");
+        println!("Replaying car {} ({})", main_car_id, records[0].side);
+        println!("{}", "=".repeat(80));
+        run_python_tensor_mode(&records, &ripple);
+        return;
+    }
+    
+    println!("MODE: Rust-built obs vs Python tensors");
     println!("Replaying car {} ({})", main_car_id, records[0].side);
     println!("{}", "=".repeat(80));
     
@@ -238,6 +334,13 @@ fn main() {
     let mut actions_diffs = Vec::new();
     let mut boosts_diffs = Vec::new();
     let mut action_matches = 0;
+    
+    // Track first divergence per tensor (step, index)
+    let mut main_first_div: Option<(usize, usize)> = None;
+    let mut others_first_div: Option<(usize, (usize, usize))> = None;
+    let mut ball_first_div: Option<(usize, (usize, usize))> = None;
+    let mut actions_first_div: Option<(usize, (usize, usize))> = None;
+    let mut boosts_first_div: Option<(usize, (usize, usize))> = None;
     
     // Allocate obs buffer
     let mut obs = vec![0.0f32; ripple.obs_width()];
@@ -344,6 +447,23 @@ fn main() {
         actions_diffs.push(actions_diff);
         boosts_diffs.push(boosts_diff);
         
+        // Track first divergence (threshold 1e-4)
+        if main_first_div.is_none() && main_diff > 1e-4 {
+            main_first_div = Some((idx, main_idx));
+        }
+        if others_first_div.is_none() && others_diff > 1e-4 {
+            others_first_div = Some((idx, (others_i, others_j)));
+        }
+        if ball_first_div.is_none() && ball_diff > 1e-4 {
+            ball_first_div = Some((idx, (ball_i, ball_j)));
+        }
+        if actions_first_div.is_none() && actions_diff > 1e-4 {
+            actions_first_div = Some((idx, (actions_i, actions_j)));
+        }
+        if boosts_first_div.is_none() && boosts_diff > 1e-4 {
+            boosts_first_div = Some((idx, (boosts_i, boosts_j)));
+        }
+        
         // Get Rust logits for deterministic comparison
         let (rust_policy_logits, rust_base_logits) = ripple.get_raw_logits(&obs)
             .expect("Failed to get logits");
@@ -358,7 +478,9 @@ fn main() {
             .fold(0.0f32, f32::max);
         
         // Compute action deterministically from logits
-        let is_kickoff = obs[137].abs() < 1.0 && obs[138].abs() < 1.0;
+        // Python upstream tests WORLD ball x/y for kickoff, not car-relative
+        // Use is_kickoff flag from main[29] (obs[29])
+        let is_kickoff = obs[29].abs() > 0.5;
         let rust_action = if is_kickoff && record.python_uniform_u.is_some() {
             // Use Python's uniform draw for deterministic comparison
             let u = record.python_uniform_u.unwrap();
@@ -527,6 +649,29 @@ fn main() {
     println!("  ball:    {:.6e}", ball_diffs.iter().copied().fold(0.0f32, f32::max));
     println!("  actions: {:.6e}", actions_diffs.iter().copied().fold(0.0f32, f32::max));
     println!("  boosts:  {:.6e}", boosts_diffs.iter().copied().fold(0.0f32, f32::max));
+    println!();
+    
+    println!("First divergence > 1e-4:");
+    match main_first_div {
+        Some((step, idx)) => println!("  main:    step {} index {}", step, idx),
+        None => println!("  main:    none"),
+    }
+    match others_first_div {
+        Some((step, (i, j))) => println!("  others:  step {} index [{},{}]", step, i, j),
+        None => println!("  others:  none"),
+    }
+    match ball_first_div {
+        Some((step, (i, j))) => println!("  ball:    step {} index [{},{}]", step, i, j),
+        None => println!("  ball:    none"),
+    }
+    match actions_first_div {
+        Some((step, (i, j))) => println!("  actions: step {} index [{},{}]", step, i, j),
+        None => println!("  actions: none"),
+    }
+    match boosts_first_div {
+        Some((step, (i, j))) => println!("  boosts:  step {} index [{},{}]", step, i, j),
+        None => println!("  boosts:  none"),
+    }
     println!();
     println!("Action match: {} / {} ({:.1}%)", action_matches, records.len(),
              100.0 * action_matches as f32 / records.len() as f32);
