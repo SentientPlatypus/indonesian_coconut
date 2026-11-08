@@ -60,25 +60,29 @@ fn run_idle_test(rdir: &Path, games: usize) {
             loop {
                 steps += 1;
                 
-                // Get Ripple controls
-                ripple.build(&state, ripple_car, &mut robs, &mut rmask);
-                let actions = ripple.infer(&robs, &rmask, 1);
-                let action = actions[0];
-                let controls = rx::controls_of(action);
-                
-                // Idle opponent
-                let idle_controls = CarControls::default();
-                
                 // Apply controls
                 let num_cars = state.cars.len();
                 let acts = vec![0; num_cars];
                 env.pre_step(&state, &acts);
                 
-                // 2 decisions per 8-tick step
+                // Idle opponent
+                let idle_controls = CarControls::default();
+                
+                // 2 Ripple decisions per 8-tick step (4-tick cadence)
                 for _ in 0..2 {
+                    // Query Ripple at this 4-tick boundary
+                    ripple.build(&state, ripple_car, &mut robs, &mut rmask);
+                    let actions = ripple.infer(&robs, &rmask, 1);
+                    let action = actions[0];
+                    let controls = rx::controls_of(action);
+                    
+                    // Apply for 4 ticks
                     env.arena.set_car_controls(ripple_car, controls);
                     env.arena.set_car_controls(idle_car, idle_controls);
                     env.step_physics(4);
+                    
+                    // Update state for next Ripple query
+                    state = env.current_state();
                 }
                 
                 let res = env.post_step();
