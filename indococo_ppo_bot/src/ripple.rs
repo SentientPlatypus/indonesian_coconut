@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
+use rand::prelude::*;
 
 use rlgymppo::ExternalPolicy;
 use rlgymppo::rlgym::GameState;
@@ -182,6 +183,7 @@ pub struct RipplePolicy {
     #[cfg(not(feature = "ripple"))]
     _base: (),
     states: Mutex<HashMap<usize, RippleState>>,
+    rng: Mutex<rand::rngs::StdRng>,
 }
 
 impl RipplePolicy {
@@ -206,12 +208,18 @@ impl RipplePolicy {
             policy: Mutex::new(policy),
             base: Mutex::new(base),
             states: Mutex::new(HashMap::new()),
+            rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
         })
     }
 
     #[cfg(not(feature = "ripple"))]
     pub fn load(_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         Err("Ripple requires the 'ripple' feature".into())
+    }
+    
+    /// Set RNG seed for deterministic kickoff sampling (e.g. 10000-10049 for paired tests)
+    pub fn set_seed(&self, seed: u64) {
+        *self.rng.lock().unwrap() = rand::rngs::StdRng::seed_from_u64(seed);
     }
 
     fn detect_reset(&self, state: &GameState, car: usize) -> bool {
@@ -431,7 +439,11 @@ impl RipplePolicy {
         main[25] = st.handbrake;
         main[26..28].copy_from_slice(&st.flip_dir);
         // is_reset: True if action queue contains NaN (indicates next action will fill queue)
-        let is_reset = st.queue.iter().flatten().any(|&x| x.is_nan());
+        // Python: is_reset = queue has NaN AND not kickoff
+        // At kickoff, Python fills queue with 0.0 before first obs, so is_reset=0.0
+        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
+        let has_nan = st.queue.iter().flatten().any(|&x| x.is_nan());
+        let is_reset = has_nan && !is_kickoff;
         main[28] = if is_reset { 1.0 } else { 0.0 };
         // is_kickoff: True if ball is at center (will be flipped to indicate side later)
         let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
@@ -687,6 +699,23 @@ impl ExternalPolicy for RipplePolicy {
     }
 
     fn build(&self, state: &GameState, car: usize, obs: &mut [f32], mask: &mut [bool]) {
+        // Create unique key per (game, car) by hashing car + ball positions
+        // This prevents state crossover between different games in batched training
+        let (_, car_phys) = &state.cars[car];
+        let state_key = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            use std::hash::{Hash, Hasher};
+            // Hash ball position (uniquely identifies game state)
+            state.ball.phys.pos.x.to_bits().hash(&mut hasher);
+            state.ball.phys.pos.y.to_bits().hash(&mut hasher);
+            state.ball.phys.pos.z.to_bits().hash(&mut hasher);
+            // Hash car position (uniquely identifies which car in the game)
+            car_phys.phys.pos.x.to_bits().hash(&mut hasher);
+            car_phys.phys.pos.y.to_bits().hash(&mut hasher);
+            car_phys.phys.pos.z.to_bits().hash(&mut hasher);
+            hasher.finish() as usize
+        };
+        
         // Lock states ONCE and keep it for the entire build
         let mut states = self.states.lock().unwrap();
         
@@ -699,7 +728,12 @@ impl ExternalPolicy for RipplePolicy {
                 .iter()
                 .all(|(_, c)| c.phys.vel.length() < 10.0);
 
-        let st = states.entry(car).or_insert_with(RippleState::new);
+        // At kickoff, clear all states to prevent crossover between games in training
+        if is_kickoff {
+            states.clear();
+        }
+        
+        let st = states.entry(state_key).or_insert_with(RippleState::new);
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
             *st = RippleState::new();
@@ -764,6 +798,23 @@ impl ExternalPolicy for RipplePolicy {
 
         for i in 0..rows {
             let obs_row = &obs[i * self.obs_width()..(i + 1) * self.obs_width()];
+
+            // Compute state key from car + ball positions (matches build() hash)
+            // Obs layout: main (32) + others (105) + ball (54) + actions (48) + boosts (170)
+            // Ball slice 0 starts at index 137 (32+105), first 3 are pos
+            let state_key = {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                use std::hash::{Hash, Hasher};
+                // Hash ball position (obs_row[137..140])
+                obs_row[137].to_bits().hash(&mut hasher);
+                obs_row[138].to_bits().hash(&mut hasher);
+                obs_row[139].to_bits().hash(&mut hasher);
+                // Hash car position (main[0..3])
+                obs_row[0].to_bits().hash(&mut hasher);
+                obs_row[1].to_bits().hash(&mut hasher);
+                obs_row[2].to_bits().hash(&mut hasher);
+                hasher.finish() as usize
+            };
 
             // Reshape into 5 tensors
             let mut offset = 0;
@@ -857,25 +908,47 @@ impl ExternalPolicy for RipplePolicy {
                 Err(_) => { actions.push(0); continue; }
             };
 
-            // KL selection
+            // Action selection: stochastic at kickoff (ball at 0,0), KL argmax otherwise
+            // Ball position is at obs_row[137..140] (first slice of ball tensor)
+            let is_kickoff = obs_row[137].abs() < 1.0 && obs_row[138].abs() < 1.0;
+            
             let log_policy = log_softmax(&policy_logits);
-            let log_base = log_softmax(&base_logits);
-
-            let mut kl_scores = vec![0.0f32; N_ACTIONS];
-            for j in 0..N_ACTIONS {
-                kl_scores[j] = log_policy[j].exp() * (log_policy[j] - log_base[j]);
-            }
-
-            let action = kl_scores
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                .map(|(idx, _)| idx)
-                .unwrap();
+            
+            let action = if is_kickoff {
+                // Stochastic sampling using inverse CDF (Python's method)
+                let mut rng = self.rng.lock().unwrap();
+                // Generate random u64, convert to f32 in [0,1)
+                let u: f32 = (rng.next_u64() as f64 / std::u64::MAX as f64) as f32;
+                
+                // Compute CDF from policy distribution
+                let mut cdf = 0.0f32;
+                let mut selected = N_ACTIONS - 1;
+                for j in 0..N_ACTIONS {
+                    cdf += log_policy[j].exp();
+                    if u <= cdf {
+                        selected = j;
+                        break;
+                    }
+                }
+                selected
+            } else {
+                // KL selection (argmax)
+                let log_base = log_softmax(&base_logits);
+                let mut kl_scores = vec![0.0f32; N_ACTIONS];
+                for j in 0..N_ACTIONS {
+                    kl_scores[j] = log_policy[j].exp() * (log_policy[j] - log_base[j]);
+                }
+                kl_scores
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                    .map(|(idx, _)| idx)
+                    .unwrap()
+            };
 
             // Update delayed action queue
             let mut states = self.states.lock().unwrap();
-            if let Some(st) = states.get_mut(&i) {
+            if let Some(st) = states.get_mut(&state_key) {
                 let table = action_table();
                 let new_action = table[action];
                 
