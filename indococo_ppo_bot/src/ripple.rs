@@ -1,27 +1,20 @@
 //! Ripple v1.1 (Rolv-Arild/Ripple-RLBot @7ca4273a, CC BY-NC-SA 4.0) as a frozen training opponent.
-//!
-//! **Status:** Implementation scaffold. Core structure complete, observation builder and ONNX
-//! inference marked with TODOs. Compile and complete on GPU box where ONNX Runtime is available.
-//!
-//! **Architecture:**
-//! - Observation: 5 tensors - main(32), others(5×21), ball(6×9), actions(6×8), boosts(34×5)
-//! - Ball includes 5 RocketSim prediction slices at +1/2/3/4/5 seconds
-//! - 276-action lookup: throttle[-1,0,0.5,1], steer/torque 5 bins, flip 16 dirs + jump
-//! - Delayed 6-decision action queue (tick skip 4)
-//! - KL selection: argmax(exp(log_policy) * (log_policy − log_base)), stochastic kickoffs
-//!
-//! **License:** CC BY-NC-SA 4.0 (private training use). Assets load from runtime path.
+
+#![cfg(feature = "train")]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use rlgymppo::ExternalPolicy;
 use rlgymppo::rlgym::GameState;
 use rlgymppo::rlgym::rocketsim::{Arena, BallState, CarControls, GameMode, Team, Vec3A};
 
-use crate::obs::BOOST_LOCATIONS;
+use crate::obs::{flags, BOOST_LOCATIONS};
+
+// Big pad indices (z > 72)
+const BIG_PADS: [usize; 6] = [3, 4, 15, 18, 29, 30];
 
 pub const TICK_SKIP: u8 = 4;
 const N_ACTIONS: usize = 276;
@@ -30,8 +23,9 @@ const BALL_PRED_STEPS: usize = 5;
 const BALL_STEP_TICKS: usize = 30; // 1 sec at 120 Hz / tick_skip 4
 const DOUBLEJUMP_MAX_DELAY: f32 = 1.25;
 const GOAL_Y: f32 = 5215.5;
+const DEFAULT_DODGE_DEADZONE: f32 = 0.5;
 
-// Normalization divisors (from obs.py NORM array)
+// Normalization (obs.py NORM array)
 const NORM: [f32; 32] = [
     2300.0, 2300.0, 2300.0, 2300.0, 2300.0, 2300.0, // vel (0:6)
     6.0, 6.0, 6.0, // ang_vel (6:9)
@@ -43,10 +37,10 @@ const NORM: [f32; 32] = [
     12.0, 24.0, 150.0, 120.0, // boost_time, jump_time, air_time, flip_time (21:25)
     1.0, // handbrake (25)
     1.0, 1.0, // flip_dir (26:28)
-    1.0, 1.0, 1.0, 1.0, // flags: is_reset, is_flipped_kickoff, is_flipped, is_swapped (28:32)
+    1.0, 1.0, 1.0, 1.0, // flags (28:32)
 ];
 
-/// Ripple 276-action lookup table (from act.py `make_lookup_table`).
+/// Ripple 276-action lookup table (act.py make_lookup_table).
 pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
     use std::sync::OnceLock;
     static T: OnceLock<[[f32; 8]; N_ACTIONS]> = OnceLock::new();
@@ -56,7 +50,7 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
         let steer = [-1.0f32, -0.5, 0.0, 0.5, 1.0];
         let torque = steer;
 
-        // Ground actions
+        // Ground
         for &th in &throttle {
             for &st in &steer {
                 for &bo in &[0.0, 1.0] {
@@ -70,17 +64,16 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
             }
         }
 
-        // Aerial actions
+        // Aerial
         for &pi in &torque {
             for &ya in &torque {
                 for &ro in &torque {
-                    // Skip duplicates with ground
                     if pi == 0.0 && ro == 0.0 && steer.iter().any(|&s| (ya - s).abs() < 0.01) {
                         continue;
                     }
                     let mag = pi.abs().max(ya.abs()).max(ro.abs());
                     if mag < 1.0 {
-                        continue; // Only keep max magnitude
+                        continue;
                     }
                     for &bo in &[0.0, 1.0] {
                         rows.push([bo, ya, pi, ya, ro, 0.0, bo, 0.0]);
@@ -89,8 +82,8 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
             }
         }
 
-        // Flips and jumps
-        let mut angles = vec![f32::NAN]; // Empty jump
+        // Flips + jumps
+        let mut angles = vec![f32::NAN];
         for i in 0..16 {
             angles.push((i as f32 / 16.0 + 1.0 / 16.0) * std::f32::consts::TAU);
         }
@@ -98,8 +91,8 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
             let (pi, ro) = if ang.is_nan() {
                 (0.0, 0.0)
             } else {
-                let mut p = ang.sin();
-                let mut r = ang.cos();
+                let p = ang.sin();
+                let r = ang.cos();
                 let m = p.abs().max(r.abs());
                 (p / m, r / m)
             };
@@ -113,11 +106,9 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
     })
 }
 
-/// Per-car state: action queue, timers, ball prediction cache, boost pad timers.
+/// Per-car state: action queue, timers, ball prediction cache.
 #[derive(Clone)]
 struct RippleState {
-    /// 6-decision action queue: queue[0] is next to apply, queue[5] most recent decision.
-    /// Initialized to NaN on non-kickoff reset; first decision fills entire queue.
     queue: [[f32; 8]; QUEUE_LEN],
     demo_timer: f32,
     boost_time: f32,
@@ -132,10 +123,9 @@ struct RippleState {
     has_double_jumped: bool,
     has_flipped: bool,
     prev_action: [f32; 8],
-    /// Ball prediction: [0] current, [1..=5] future at +1/2/3/4/5 seconds.
     ball_preds: [[f32; 9]; 1 + BALL_PRED_STEPS],
-    /// Boost pad timers (countdown, 0 = active).
     pad_timers: [f32; 34],
+    ticks_until_next_decision: u8,
 }
 
 impl RippleState {
@@ -157,43 +147,59 @@ impl RippleState {
             prev_action: [0.0; 8],
             ball_preds: [[0.0; 9]; 6],
             pad_timers: [0.0; 34],
+            ticks_until_next_decision: 0,
         }
     }
 }
 
-/// Ripple policy with ONNX inference (policy + BC base, KL mode).
+/// Ripple policy with ONNX inference.
 pub struct RipplePolicy {
-    _policy: (), // TODO: ort::Session when ort crate is added
+    #[cfg(feature = "ripple")]
+    policy: ort::session::Session,
+    #[cfg(feature = "ripple")]
+    base: ort::session::Session,
+    #[cfg(not(feature = "ripple"))]
+    _policy: (),
+    #[cfg(not(feature = "ripple"))]
     _base: (),
     states: Mutex<HashMap<usize, RippleState>>,
-    /// Thread-local RocketSim arena for ball prediction.
-    arena: RefCell<Arena>,
 }
 
 impl RipplePolicy {
-    pub fn load(_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        // TODO: Load ONNX models
-        // let policy_path = path.join("ripple-v1.1.onnx");
-        // let base_path = path.join("ripple-v1.1-bcm.onnx");
-        // let policy = ort::Session::builder()?
-        //     .with_optimization_level(ort::GraphOptimizationLevel::Level3)?
-        //     .with_intra_threads(1)?
-        //     .commit_from_file(policy_path)?;
-        // let base = ... similar
+    #[cfg(feature = "ripple")]
+    pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let policy_path = path.join("ripple-v1.1.onnx");
+        let base_path = path.join("ripple-v1.1-bcm.onnx");
+
+        let policy = ort::session::Session::builder()?
+            .with_optimization_level(ort::session::GraphOptimizationLevel::Level3)?
+            .with_intra_threads(1)?
+            .commit_from_file(policy_path)?;
+
+        let base = ort::session::Session::builder()?
+            .with_optimization_level(ort::session::GraphOptimizationLevel::Level3)?
+            .with_intra_threads(1)?
+            .commit_from_file(base_path)?;
 
         Ok(Self {
-            _policy: (),
-            _base: (),
+            policy,
+            base,
             states: Mutex::new(HashMap::new()),
-            arena: RefCell::new(Arena::new(GameMode::Soccar)),
         })
     }
 
-    /// Detect episode reset (kickoff or invalid queue) and update state.
+    #[cfg(not(feature = "ripple"))]
+    pub fn load(_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        Err("Ripple requires the 'ripple' feature".into())
+    }
+
     fn detect_reset(&self, state: &GameState, car: usize) -> bool {
-        let is_kickoff = state.ball.position().x.abs() < 10.0
-            && state.ball.position().y.abs() < 10.0
-            && state.cars.values().all(|c| c.physics.linear_velocity().length() < 10.0);
+        let is_kickoff = state.ball.phys.pos.x.abs() < 10.0
+            && state.ball.phys.pos.y.abs() < 10.0
+            && state
+                .cars
+                .iter()
+                .all(|(_, c)| c.phys.vel.length() < 10.0);
 
         let mut states = self.states.lock().unwrap();
         let st = states.entry(car).or_insert_with(RippleState::new);
@@ -201,97 +207,419 @@ impl RipplePolicy {
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
             if is_kickoff {
-                *st = RippleState::new(); // Full reset
+                *st = RippleState::new();
             } else {
-                st.queue = [[f32::NAN; 8]; QUEUE_LEN]; // Mark for refill
+                st.queue = [[f32::NAN; 8]; QUEUE_LEN];
             }
 
-            // Update ball prediction
             self.update_ball_pred(state, st);
 
-            // Update boost pad timers
-            for (i, &active) in state.boost_pads.iter().enumerate() {
-                st.pad_timers[i] = if active { 0.0 } else { 4.0 };
+            for (i, (_, pad_state)) in state.boost_pads.iter().enumerate() {
+                st.pad_timers[i] = if pad_state.is_active() {
+                    0.0
+                } else if BIG_PADS.contains(&i) {
+                    10.0
+                } else {
+                    4.0
+                };
             }
         }
         needs_reset
     }
 
-    /// Update ball prediction cache (RocketSim forward simulation).
     fn update_ball_pred(&self, state: &GameState, st: &mut RippleState) {
-        let mut arena = self.arena.borrow_mut();
-        let b = state.ball;
-        arena.ball.set_state(BallState {
-            pos: b.position(),
-            vel: b.linear_velocity(),
-            ang_vel: b.angular_velocity(),
-        });
+        // Use thread-local arena
+        thread_local! {
+            static ARENA: RefCell<Arena> = RefCell::new(Arena::new(GameMode::Soccar));
+        }
+        
+        ARENA.with(|arena| {
+        let mut arena = arena.borrow_mut();
+        let b = &state.ball;
+        let mut ball_state = BallState::default();
+        ball_state.phys.pos = b.phys.pos;
+        ball_state.phys.vel = b.phys.vel;
+        ball_state.phys.ang_vel = b.phys.ang_vel;
+        arena.set_ball_state(ball_state);
 
         st.ball_preds[0] = [
-            b.position().x,
-            b.position().y,
-            b.position().z,
-            b.linear_velocity().x,
-            b.linear_velocity().y,
-            b.linear_velocity().z,
-            b.angular_velocity().x,
-            b.angular_velocity().y,
-            b.angular_velocity().z,
+            b.phys.pos.x,
+            b.phys.pos.y,
+            b.phys.pos.z,
+            b.phys.vel.x,
+            b.phys.vel.y,
+            b.phys.vel.z,
+            b.phys.ang_vel.x,
+            b.phys.ang_vel.y,
+            b.phys.ang_vel.z,
         ];
 
         for i in 1..=BALL_PRED_STEPS {
-            arena.step(BALL_STEP_TICKS as u32);
-            let bs = arena.ball.get_state();
-            // Stop at goal line
-            if bs.pos.y.abs() >= GOAL_Y {
+            for _ in 0..BALL_STEP_TICKS {
+                arena.step_tick();
+            }
+            let bs = arena.get_ball_state();
+            if bs.phys.pos.y.abs() >= GOAL_Y {
                 for j in i..=BALL_PRED_STEPS {
                     st.ball_preds[j] = st.ball_preds[i - 1];
                 }
                 break;
             }
             st.ball_preds[i] = [
-                bs.pos.x, bs.pos.y, bs.pos.z, bs.vel.x, bs.vel.y, bs.vel.z, bs.ang_vel.x,
-                bs.ang_vel.y, bs.ang_vel.z,
+                bs.phys.pos.x, bs.phys.pos.y, bs.phys.pos.z, bs.phys.vel.x, bs.phys.vel.y, bs.phys.vel.z, bs.phys.ang_vel.x,
+                bs.phys.ang_vel.y, bs.phys.ang_vel.z,
             ];
         }
+        }); // end ARENA.with
     }
 
-    /// Update per-player timers (boost, jump, air, flip, handbrake).
     fn update_timers(&self, state: &GameState, car: usize, st: &mut RippleState) {
-        // Update boost pad timers
-        for (i, &active) in state.boost_pads.iter().enumerate() {
-            if active {
+        for (i, (_, pad_state)) in state.boost_pads.iter().enumerate() {
+            if pad_state.is_active() {
                 st.pad_timers[i] = 0.0;
             } else if st.pad_timers[i] <= 0.0 {
-                let respawn = if BOOST_LOCATIONS[i][2] > 72.0 { 10.0 } else { 4.0 };
+                let respawn = if BIG_PADS.contains(&i) { 10.0 } else { 4.0 };
                 st.pad_timers[i] = respawn;
             } else {
                 st.pad_timers[i] -= TICK_SKIP as f32 / 120.0;
             }
         }
 
-        // Update demo timer
-        let me = &state.cars[&car];
-        if me.is_demoed && st.demo_timer <= 0.0 {
+        let (_, me) = &state.cars[car];
+        let f = flags(me);
+        if me.demo_respawn_timer > 0.0 && st.demo_timer <= 0.0 {
             st.demo_timer = 3.0;
         }
         st.demo_timer = (st.demo_timer - TICK_SKIP as f32 / 120.0).max(0.0);
 
-        // TODO: Complete timer updates from obs.py `update_player_timers` (~80 lines)
-        // - Boost timer (12 ticks when boosting)
-        // - Jump timer (is_jumping state machine, 3/24 tick windows)
-        // - Air time (since last ground contact, max 150)
-        // - Flip time (since flip started, max 120)
-        // - Flip direction tracking
-        // - Handbrake smoothing
+        let prev_action = st.prev_action;
 
-        st.prev_on_ground = me.on_ground;
+        // Boost timer
+        if prev_action[6] == 0.0 && st.boost_time == 12.0 {
+            st.boost_time = 0.0;
+        } else if st.boost_time != 0.0 || prev_action[6] > 0.5 {
+            st.boost_time = (st.boost_time + TICK_SKIP as f32).min(12.0);
+        } else {
+            st.boost_time = 0.0;
+        }
+
+        // Jump timer
+        if st.prev_on_ground && !st.is_jumping {
+            st.has_jumped = false;
+        }
+
+        if st.is_jumping {
+            st.is_jumping = st.jump_time < 3.0 || (prev_action[5] > 0.5 && st.jump_time < 24.0);
+        } else if prev_action[5] > 0.5 && st.prev_action[5] <= 0.5 && st.prev_on_ground {
+            st.is_jumping = true;
+            st.jump_time = 0.0;
+        }
+
+        if st.is_jumping {
+            st.has_jumped = true;
+            st.jump_time = (st.jump_time + TICK_SKIP as f32).min(24.0);
+        } else {
+            st.jump_time = 0.0;
+        }
+
+        // Air/flip timers
+        if f.on_ground {
+            st.has_double_jumped = false;
+            st.has_flipped = false;
+            st.air_time = 0.0;
+            st.flip_time = 0.0;
+            st.flip_dir = [0.0; 2];
+        } else {
+            if st.has_jumped && !st.is_jumping {
+                st.air_time = (st.air_time + TICK_SKIP as f32).min(150.0);
+            } else {
+                st.air_time = 0.0;
+            }
+
+            if st.has_jumped
+                && prev_action[5] > 0.5
+                && st.prev_action[5] <= 0.5
+                && st.air_time < 150.0
+                && !st.has_double_jumped
+                && !st.has_flipped
+            {
+                let should_flip = prev_action[2].abs() + prev_action[3].abs() + prev_action[4].abs()
+                    >= DEFAULT_DODGE_DEADZONE;
+                if should_flip {
+                    st.flip_time = 0.0;
+                    st.has_flipped = true;
+                    let mut flipdir = [-prev_action[2], prev_action[3] + prev_action[4]];
+                    let norm = (flipdir[0] * flipdir[0] + flipdir[1] * flipdir[1]).sqrt();
+                    if norm > 0.0 {
+                        flipdir[0] /= norm;
+                        flipdir[1] /= norm;
+                    }
+                    st.flip_dir = flipdir;
+                } else {
+                    st.has_double_jumped = true;
+                }
+            }
+
+            if st.has_flipped {
+                st.flip_time = (st.flip_time + TICK_SKIP as f32).min(120.0);
+            }
+        }
+
+        // Handbrake
+        if prev_action[7] > 0.5 {
+            st.handbrake = (st.handbrake + 5.0 * TICK_SKIP as f32 / 120.0).min(1.0);
+        } else {
+            st.handbrake = (st.handbrake - 2.0 * TICK_SKIP as f32 / 120.0).max(0.0);
+        }
+
+        st.prev_on_ground = f.on_ground;
+    }
+
+    #[cfg(feature = "ripple")]
+    fn build_obs_internal(
+        &self,
+        state: &GameState,
+        car: usize,
+        st: &RippleState,
+    ) -> ([f32; 32], [[f32; 21]; 5], [[f32; 9]; 6], [[f32; 8]; 6], [[f32; 5]; 34]) {
+        let (info, me) = &state.cars[car];
+        let inv = info.team == Team::Orange;
+
+        // Build main player observation (32 features)
+        let mut main = [0.0f32; 32];
+        let pos = me.phys.pos;
+        let vel = me.phys.vel;
+        let ang = me.phys.ang_vel;
+        let fwd = me.phys.rot_mat.x_axis;
+        let up = me.phys.rot_mat.z_axis;
+        let f = flags(me);
+
+        main[0..3].copy_from_slice(&[vel.x, vel.y, vel.z]);
+        main[3..6].copy_from_slice(&[vel.x, vel.y, vel.z]);
+        main[6..9].copy_from_slice(&[ang.x, ang.y, ang.z]);
+        main[9..12].copy_from_slice(&[fwd.x, fwd.y, fwd.z]);
+        main[12..15].copy_from_slice(&[up.x, up.y, up.z]);
+        main[15] = if info.team == Team::Blue { -1.0 } else { 1.0 };
+        main[16] = st.demo_timer;
+        main[17] = if f.on_ground { 1.0 } else { 0.0 };
+        main[18] = if !me.has_jumped { 1.0 } else { 0.0 };
+        main[19] = if f.has_flip { 1.0 } else { 0.0 };
+        main[20] = me.boost.min(2.0);
+        main[21] = st.boost_time;
+        main[22] = st.jump_time;
+        main[23] = st.air_time;
+        main[24] = st.flip_time;
+        main[25] = st.handbrake;
+        main[26..28].copy_from_slice(&st.flip_dir);
+        main[28] = if st.queue[0][0].is_nan() { 1.0 } else { 0.0 };
+
+        // Build other players (up to 5, sorted by distance to ball)
+        let mut others = [[0.0f32; 21]; 5];
+        let ball_pos = state.ball.phys.pos;
+        let mut other_cars: Vec<_> = state
+            .cars
+            .iter()
+            .enumerate()
+            .filter(|(cid, _)| *cid != car)
+            .collect();
+        other_cars.sort_by(|(id_a, (_, a)), (id_b, (_, b))| {
+            let da = (a.phys.pos - ball_pos).length_squared();
+            let db = (b.phys.pos - ball_pos).length_squared();
+            da.partial_cmp(&db)
+                .unwrap()
+                .then_with(|| id_a.cmp(id_b))
+        });
+
+        for (i, (_, (cinfo, c))) in other_cars.iter().take(5).enumerate() {
+            let pos = c.phys.pos;
+            let vel = c.phys.vel;
+            let ang = c.phys.ang_vel;
+            let fwd = c.phys.rot_mat.x_axis;
+            let up = c.phys.rot_mat.z_axis;
+            let f = flags(c);
+
+            others[i][0..3].copy_from_slice(&[pos.x, pos.y, pos.z]);
+            others[i][3..6].copy_from_slice(&[vel.x, vel.y, vel.z]);
+            others[i][6..9].copy_from_slice(&[ang.x, ang.y, ang.z]);
+            others[i][9..12].copy_from_slice(&[fwd.x, fwd.y, fwd.z]);
+            others[i][12..15].copy_from_slice(&[up.x, up.y, up.z]);
+            others[i][15] = if cinfo.team == Team::Blue { -1.0 } else { 1.0 };
+            others[i][16] = 0.0; // demo_timer not tracked for others
+            others[i][17] = if f.on_ground { 1.0 } else { 0.0 };
+            others[i][18] = 0.0; // has_jump
+            others[i][19] = 0.0; // has_flip
+            others[i][20] = c.boost.min(2.0);
+        }
+
+        // Ball predictions (6 slices)
+        let mut ball = [[0.0f32; 9]; 6];
+        ball.copy_from_slice(&st.ball_preds);
+
+        // Action queue
+        let mut actions = [[0.0f32; 8]; 6];
+        actions.copy_from_slice(&st.queue);
+
+        // Boosts
+        let mut boosts = [[0.0f32; 5]; 34];
+        for i in 0..34 {
+            boosts[i][0] = BOOST_LOCATIONS[i].0;
+            boosts[i][1] = BOOST_LOCATIONS[i].1;
+            boosts[i][2] = if BIG_PADS.contains(&i) { 73.0 } else { 70.0 };
+            boosts[i][3] = if BIG_PADS.contains(&i) { 1.0 } else { 0.12 };
+            boosts[i][4] = st.pad_timers[i] / 10.0;
+        }
+
+        // Make relative to me
+        let rot = me.phys.rot_mat;
+        let me_pos = pos;
+        let me_vel = vel;
+
+        // Transform others
+        for other in &mut others {
+            let opos = Vec3A::new(other[0], other[1], other[2]) - me_pos;
+            let ovel = Vec3A::new(other[3], other[4], other[5]) - me_vel;
+            let oang = Vec3A::new(other[6], other[7], other[8]);
+            let ofwd = Vec3A::new(other[9], other[10], other[11]);
+            let oup = Vec3A::new(other[12], other[13], other[14]);
+
+            let rot_t = rot.transpose();
+            let opos_r = rot_t * opos;
+            let ovel_r = rot_t * ovel;
+            let oang_r = rot_t * oang;
+            let ofwd_r = rot_t * ofwd;
+            let oup_r = rot_t * oup;
+
+            other[0..3].copy_from_slice(&[opos_r.x, opos_r.y, opos_r.z]);
+            other[3..6].copy_from_slice(&[ovel_r.x, ovel_r.y, ovel_r.z]);
+            other[6..9].copy_from_slice(&[oang_r.x, oang_r.y, oang_r.z]);
+            other[9..12].copy_from_slice(&[ofwd_r.x, ofwd_r.y, ofwd_r.z]);
+            other[12..15].copy_from_slice(&[oup_r.x, oup_r.y, oup_r.z]);
+        }
+
+        // Transform ball
+        for b in &mut ball {
+            let bpos = Vec3A::new(b[0], b[1], b[2]) - me_pos;
+            let bvel = Vec3A::new(b[3], b[4], b[5]) - me_vel;
+            let bang = Vec3A::new(b[6], b[7], b[8]);
+
+            let rot_t = rot.transpose();
+            let bpos_r = rot_t * bpos;
+            let bvel_r = rot_t * bvel;
+            let bang_r = rot_t * bang;
+
+            b[0..3].copy_from_slice(&[bpos_r.x, bpos_r.y, bpos_r.z]);
+            b[3..6].copy_from_slice(&[bvel_r.x, bvel_r.y, bvel_r.z]);
+            b[6..9].copy_from_slice(&[bang_r.x, bang_r.y, bang_r.z]);
+        }
+
+        // Transform boosts
+        let rot_t = rot.transpose();
+        for boost in &mut boosts {
+            let bpos = Vec3A::new(boost[0], boost[1], boost[2]) - me_pos;
+            let bpos_r = rot_t * bpos;
+            boost[0..3].copy_from_slice(&[bpos_r.x, bpos_r.y, bpos_r.z]);
+        }
+
+        // Apply orange inversion (x, y mirrored, NOT z)
+        if inv {
+            main[0] *= -1.0;
+            main[1] *= -1.0;
+            main[3] *= -1.0;
+            main[4] *= -1.0;
+            main[6] *= -1.0;
+            main[7] *= -1.0;
+            main[9] *= -1.0;
+            main[10] *= -1.0;
+            main[12] *= -1.0;
+            main[13] *= -1.0;
+            main[15] *= -1.0;
+            main[31] = 1.0; // is_swapped
+
+            for other in &mut others {
+                other[15] *= -1.0; // team
+            }
+        }
+
+        // Apply side inversion (flip if on left side)
+        if main[0] < 0.0 {
+            for idx in [1, 4, 7, 10, 13] {
+                main[idx] *= -1.0;
+            }
+            for other in &mut others {
+                for idx in [1, 4, 7, 10, 13] {
+                    other[idx] *= -1.0;
+                }
+            }
+            for b in &mut ball {
+                for idx in [1, 4, 7] {
+                    b[idx] *= -1.0;
+                }
+            }
+            for boost in &mut boosts {
+                boost[1] *= -1.0;
+            }
+            for a in &mut actions {
+                a[1] *= -1.0;
+                a[3] *= -1.0;
+                a[4] *= -1.0;
+            }
+            main[30] = 1.0; // is_flipped
+        }
+
+        // Normalize
+        for i in 0..32 {
+            main[i] /= NORM[i];
+        }
+        for other in &mut others {
+            other[0] /= 5000.0;
+            other[1] /= 5000.0;
+            other[2] /= 5000.0;
+            other[3] /= 2300.0;
+            other[4] /= 2300.0;
+            other[5] /= 2300.0;
+            other[6] /= 6.0;
+            other[7] /= 6.0;
+            other[8] /= 6.0;
+        }
+        for b in &mut ball {
+            b[0] /= 5000.0;
+            b[1] /= 5000.0;
+            b[2] /= 5000.0;
+            b[3] /= 2300.0;
+            b[4] /= 2300.0;
+            b[5] /= 2300.0;
+            b[6] /= 6.0;
+            b[7] /= 6.0;
+            b[8] /= 6.0;
+        }
+        for boost in &mut boosts {
+            boost[0] /= 5000.0;
+            boost[1] /= 5000.0;
+            boost[2] /= 5000.0;
+        }
+
+        (main, others, ball, actions, boosts)
+    }
+
+    #[cfg(not(feature = "ripple"))]
+    fn build_obs_internal(
+        &self,
+        _state: &GameState,
+        _car: usize,
+        _st: &RippleState,
+    ) -> ([f32; 32], [[f32; 21]; 5], [[f32; 9]; 6], [[f32; 8]; 6], [[f32; 5]; 34]) {
+        (
+            [0.0; 32],
+            [[0.0; 21]; 5],
+            [[0.0; 9]; 6],
+            [[0.0; 8]; 6],
+            [[0.0; 5]; 34],
+        )
     }
 }
 
 impl ExternalPolicy for RipplePolicy {
     fn action_delay(&self) -> u8 {
-        // No additional delay; delayed action queue handles it
         0
     }
 
@@ -309,32 +637,136 @@ impl ExternalPolicy for RipplePolicy {
         let mut states = self.states.lock().unwrap();
         let st = states.get_mut(&car).unwrap();
 
-        // Update timers
-        self.update_timers(state, car, st);
+        // Ripple decides every 4 ticks, we're called every 8.
+        // Run decision step twice per call.
+        if st.ticks_until_next_decision == 0 {
+            self.update_timers(state, car, st);
+            st.ticks_until_next_decision = TICK_SKIP;
+        }
+        st.ticks_until_next_decision = st.ticks_until_next_decision.saturating_sub(TICK_SKIP);
 
-        // TODO: Build observation from obs.py `pre_step` and `build_obs` (~250 lines)
-        // 1. Build player arrays (main, others) with features
-        // 2. Make relative to current player (rotation transform, subtract pos/vel)
-        // 3. Apply orange inversion (x,y mirrored for team 1)
-        // 4. Apply side inversion (flip left/right if main player x < 0)
-        // 5. Normalize (divide by NORM)
-        // 6. Flatten 5 tensors (main, others, ball, actions, boosts) into obs
+        let (main, others, ball, actions, boosts) = self.build_obs_internal(state, car, st);
 
-        // Placeholder: fill with zeros
-        obs.fill(0.0);
+        // Flatten into obs
+        let mut offset = 0;
+        obs[offset..offset + 32].copy_from_slice(&main);
+        offset += 32;
+        for other in &others {
+            obs[offset..offset + 21].copy_from_slice(other);
+            offset += 21;
+        }
+        for b in &ball {
+            obs[offset..offset + 9].copy_from_slice(b);
+            offset += 9;
+        }
+        for a in &actions {
+            obs[offset..offset + 8].copy_from_slice(a);
+            offset += 8;
+        }
+        for boost in &boosts {
+            obs[offset..offset + 5].copy_from_slice(boost);
+            offset += 5;
+        }
+
         mask.fill(true);
     }
 
-    fn infer(&self, _obs: &[f32], _masks: &[bool], rows: usize) -> Vec<usize> {
-        // TODO: ONNX inference with KL selection
-        // 1. Reshape flat obs into 5 tensors
-        // 2. Run policy.forward(main, others, ball, actions, boosts) → policy_logits
-        // 3. Run base.forward(...) → base_logits
-        // 4. KL selection: argmax(exp(log_policy) * (log_policy − log_base))
-        // 5. Stochastic kickoffs: sample from policy when ball at origin
-        // 6. Update delayed action queue: shift, append new action, return queue[0]
+    #[cfg(feature = "ripple")]
+    fn infer(&self, obs: &[f32], _masks: &[bool], rows: usize) -> Vec<usize> {
+        use ort::value::Value;
 
-        // Placeholder: return first action
+        let mut actions = Vec::with_capacity(rows);
+
+        for i in 0..rows {
+            let obs_row = &obs[i * self.obs_width()..(i + 1) * self.obs_width()];
+
+            // Reshape into 5 tensors
+            let mut offset = 0;
+            let main = &obs_row[offset..offset + 32];
+            offset += 32;
+            let others: Vec<f32> = obs_row[offset..offset + 5 * 21].to_vec();
+            offset += 5 * 21;
+            let ball: Vec<f32> = obs_row[offset..offset + 6 * 9].to_vec();
+            offset += 6 * 9;
+            let act_queue: Vec<f32> = obs_row[offset..offset + 6 * 8].to_vec();
+            offset += 6 * 8;
+            let boosts: Vec<f32> = obs_row[offset..offset + 34 * 5].to_vec();
+
+            // Run inference
+            let policy_inputs = ort::inputs![
+                "main" => Value::from_array(ndarray::Array2::from_shape_vec((1, 32), main.to_vec()).unwrap()).unwrap(),
+                "others" => Value::from_array(ndarray::Array3::from_shape_vec((1, 5, 21), others).unwrap()).unwrap(),
+                "ball" => Value::from_array(ndarray::Array3::from_shape_vec((1, 6, 9), ball.clone()).unwrap()).unwrap(),
+                "actions" => Value::from_array(ndarray::Array3::from_shape_vec((1, 6, 8), act_queue.clone()).unwrap()).unwrap(),
+                "boosts" => Value::from_array(ndarray::Array3::from_shape_vec((1, 34, 5), boosts.clone()).unwrap()).unwrap(),
+            ].unwrap();
+
+            let policy_outputs = self.policy.run(policy_inputs).unwrap();
+            let policy_logits: Vec<f32> = policy_outputs[0]
+                .try_extract_tensor::<f32>()
+                .unwrap()
+                .as_slice()
+                .unwrap()
+                .to_vec();
+
+            let base_inputs = ort::inputs![
+                "main" => Value::from_array(ndarray::Array2::from_shape_vec((1, 32), main.to_vec()).unwrap()).unwrap(),
+                "others" => Value::from_array(ndarray::Array3::from_shape_vec((1, 5, 21), others).unwrap()).unwrap(),
+                "ball" => Value::from_array(ndarray::Array3::from_shape_vec((1, 6, 9), ball).unwrap()).unwrap(),
+                "actions" => Value::from_array(ndarray::Array3::from_shape_vec((1, 6, 8), act_queue).unwrap()).unwrap(),
+                "boosts" => Value::from_array(ndarray::Array3::from_shape_vec((1, 34, 5), boosts).unwrap()).unwrap(),
+            ].unwrap();
+
+            let base_outputs = self.base.run(base_inputs).unwrap();
+            let base_logits: Vec<f32> = base_outputs[0]
+                .try_extract_tensor::<f32>()
+                .unwrap()
+                .as_slice()
+                .unwrap()
+                .to_vec();
+
+            // KL selection
+            let log_policy = log_softmax(&policy_logits);
+            let log_base = log_softmax(&base_logits);
+
+            let mut kl_scores = vec![0.0f32; N_ACTIONS];
+            for j in 0..N_ACTIONS {
+                kl_scores[j] = log_policy[j].exp() * (log_policy[j] - log_base[j]);
+            }
+
+            let action = kl_scores
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .map(|(idx, _)| idx)
+                .unwrap();
+
+            // Update delayed action queue
+            let mut states = self.states.lock().unwrap();
+            if let Some(st) = states.get_mut(&i) {
+                let table = action_table();
+                let new_action = table[action];
+                if st.queue[0][0].is_nan() {
+                    // Fill entire queue on first decision
+                    for slot in &mut st.queue {
+                        *slot = new_action;
+                    }
+                } else {
+                    // Shift queue and append
+                    st.queue.rotate_left(1);
+                    st.queue[QUEUE_LEN - 1] = new_action;
+                }
+                st.prev_action = st.queue[0];
+            }
+
+            actions.push(action);
+        }
+
+        actions
+    }
+
+    #[cfg(not(feature = "ripple"))]
+    fn infer(&self, _obs: &[f32], _masks: &[bool], rows: usize) -> Vec<usize> {
         vec![0; rows]
     }
 
@@ -354,6 +786,14 @@ impl ExternalPolicy for RipplePolicy {
     }
 }
 
+fn log_softmax(logits: &[f32]) -> Vec<f32> {
+    let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let shifted: Vec<f32> = logits.iter().map(|&x| x - max_logit).collect();
+    let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
+    let log_sum_exp = sum_exp.ln();
+    shifted.iter().map(|&x| x - log_sum_exp).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,11 +802,57 @@ mod tests {
     fn test_action_table_size() {
         let table = action_table();
         assert_eq!(table.len(), N_ACTIONS);
-        // Check no NaNs
         for a in table {
             for &v in a {
                 assert!(v.is_finite());
             }
         }
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_ripple_load() {
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if path.exists() && path.join("ripple-v1.1.onnx").exists() {
+            let policy = RipplePolicy::load(&path);
+            assert!(policy.is_ok(), "Failed to load Ripple: {:?}", policy.err());
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_ripple_1000_ticks() {
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() || !path.join("ripple-v1.1.onnx").exists() {
+            eprintln!("Skipping test_ripple_1000_ticks: models not found at {:?}", path);
+            return;
+        }
+
+        let policy = RipplePolicy::load(&path).expect("Failed to load Ripple");
+
+        use rlgym::gamestates::GameConfig;
+        let config = GameConfig {
+            team_size: 1,
+            tick_skip: TICK_SKIP as u32,
+            ..Default::default()
+        };
+        let mut game = rlgym::make(config).unwrap();
+        let mut state = game.reset(None, None);
+
+        let obs_width = policy.obs_width();
+        let mut obs = vec![0.0f32; obs_width];
+        let mut mask = vec![false; N_ACTIONS];
+
+        for _ in 0..1000 / TICK_SKIP as usize {
+            policy.build(&state, 0, &mut obs, &mut mask);
+            let actions = policy.infer(&obs, &mask, 1);
+            let controls = policy.controls(actions[0]);
+
+            let mut actions_map = std::collections::HashMap::new();
+            actions_map.insert(0, controls);
+            state = game.step(actions_map);
+        }
+
+        // If we got here without panicking, test passed
     }
 }

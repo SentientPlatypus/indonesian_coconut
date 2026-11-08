@@ -1,5 +1,7 @@
 //! Galactus (SoldierDoge/GalactusV2, GigaLearn, 201.35B steps) as a frozen
 //! training opponent.
+
+#![cfg(feature = "torch")]
 //!
 //! A line-by-line port of the bot's `GalactusOBS(3)` (258 floats),
 //! GigaLearn's `DefaultAction` (90 actions + masks) and its network

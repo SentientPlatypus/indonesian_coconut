@@ -1,5 +1,7 @@
 //! Megabyte (SubparN0va/ByteBotpack, GigaLearn, 233 obs) as a frozen
 //! training opponent.
+
+#![cfg(feature = "torch")]
 //!
 //! A line-by-line port of the bot's `ByteObs` (233 floats) and GigaLearn's
 //! `DefaultAction` (90 actions + masks), following the C++ source at
