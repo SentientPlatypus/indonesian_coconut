@@ -29,7 +29,7 @@
 
 ---
 
-## 📊 CURRENT RESULTS (71286b39)
+## 📊 CURRENT RESULTS (9c386a74)
 
 ### Idle Car Test (100 games, both sides)
 ```
@@ -130,5 +130,25 @@ indococo_ppo_bot/tools/ripple_replay.rs - Compares logits, KL scores, tensors
 RIPPLE_OBS_LAYOUT.md                    - Documented exact Python layout
 ```
 
-**Commits**: 16 since 601f91e8  
-**Lines changed**: +2132 across 17 files
+**Commits**: 17 since 601f91e8  
+**Lines changed**: +2266 across 18 files
+
+---
+
+## 🎯 NEXT STEPS TO COMPLETION
+
+### 1. Modify Replay to Use Python Controls
+**File**: `indococo_ppo_bot/tools/ripple_replay.rs`  
+**Change**: Instead of calling `ripple.infer()`, apply `record.python_controls`  
+**Purpose**: Evolve Rust state identically to Python to find first divergence
+
+### 2. Find First Divergence
+**Method**: At each step, compare Rust's obs/action against Python's  
+**Report**: First step + first tensor index that differs  
+**Fix**: Correct the live code bug causing that divergence  
+**Repeat**: Until all steps match
+
+### 3. Fix Step 0 Actions[0,0]
+**Current**: Differs by 1.0 at step 0  
+**Location**: `ripple.rs` build_obs_internal() actions tensor construction  
+**Cause**: Initial queue state encoding mismatch
