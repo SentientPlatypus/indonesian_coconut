@@ -29,7 +29,7 @@
 
 ---
 
-## 📊 CURRENT RESULTS (9c386a74)
+## 📊 CURRENT RESULTS (0dcc422d)
 
 ### Idle Car Test (100 games, both sides)
 ```
@@ -130,25 +130,35 @@ indococo_ppo_bot/tools/ripple_replay.rs - Compares logits, KL scores, tensors
 RIPPLE_OBS_LAYOUT.md                    - Documented exact Python layout
 ```
 
-**Commits**: 17 since 601f91e8  
-**Lines changed**: +2266 across 18 files
+**Commits**: 19 since 601f91e8  
+**Lines changed**: +2308 across 18 files
+
+---
+
+## 🔧 LATEST FIXES (0dcc422d)
+
+### is_reset at Kickoff
+**Bug**: Rust set `main[28] is_reset=1.0` at kickoff because queue was NaN  
+**Python**: Sets `is_reset=0.0` at kickoff (queue pre-filled with 0.0)  
+**Fix**: `is_reset = has_nan && !is_kickoff` in `ripple.rs` line 507-511  
+**Impact**:
+- Step 0: main[28] now matches ✓
+- Step 1: main tensor perfect (0.0 diff) ✓
+- Action match still 12% (need to sync queue evolution)
 
 ---
 
 ## 🎯 NEXT STEPS TO COMPLETION
 
-### 1. Modify Replay to Use Python Controls
-**File**: `indococo_ppo_bot/tools/ripple_replay.rs`  
-**Change**: Instead of calling `ripple.infer()`, apply `record.python_controls`  
-**Purpose**: Evolve Rust state identically to Python to find first divergence
+### Critical: Action Queue Evolution Mismatch
+**Problem**: At step 1+, Rust selects different actions (79 vs Python's 38) because the action history tensor differs  
+**Root cause**: Queue evolution diverges when Rust picks different actions  
+**Solution**: Need to apply Python's recorded controls in replay to keep states synchronized  
 
-### 2. Find First Divergence
-**Method**: At each step, compare Rust's obs/action against Python's  
-**Report**: First step + first tensor index that differs  
-**Fix**: Correct the live code bug causing that divergence  
-**Repeat**: Until all steps match
+**Implementation path**:
+1. In `ripple_replay.rs`, skip `infer()` after step 0
+2. Apply `record.python_controls` directly to Rust's state
+3. This requires exposing RipplePolicy state mutation OR
+4. Manually constructing the action queue tensor from Python's controls
 
-### 3. Fix Step 0 Actions[0,0]
-**Current**: Differs by 1.0 at step 0  
-**Location**: `ripple.rs` build_obs_internal() actions tensor construction  
-**Cause**: Initial queue state encoding mismatch
+**Alternative**: Check if there's a systematic bug causing action 79 vs 38 at step 1 with identical observations
