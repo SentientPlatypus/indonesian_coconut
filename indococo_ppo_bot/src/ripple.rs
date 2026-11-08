@@ -153,7 +153,7 @@ impl RippleState {
             jump_time: 0.0,
             air_time: 0.0,
             flip_time: 0.0,
-            handbrake: 0.0,
+            handbrake: 1.0,  // Python initializes to 1.0, not 0.0
             flip_dir: [0.0; 2],
             prev_on_ground: false,
             is_jumping: false,
