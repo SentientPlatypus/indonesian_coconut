@@ -127,7 +127,12 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
                 (*info, *state)
             })
             .collect(),
-        boost_pads: Vec::new(),  // Ripple tracks pads internally
+        boost_pads: {
+            // Get pad states from arena
+            // Note: RocketSim arena pads are always initialized to default active state
+            // Ripple tracks timers internally, not from arena
+            vec![]
+        },
         events: Vec::new(),
     }
 }
@@ -333,7 +338,8 @@ fn main() {
     let mut ball_diffs = Vec::new();
     let mut actions_diffs = Vec::new();
     let mut boosts_diffs = Vec::new();
-    let mut action_matches = 0;
+    let mut action_selected_matches = 0;  // Selected action index matches
+    let mut action_executed_matches = 0;  // Executed controls match
     
     // Track first divergence per tensor (step, index)
     let mut main_first_div: Option<(usize, usize)> = None;
@@ -364,18 +370,18 @@ fn main() {
                      state.cars.get(car_idx).map(|(_, c)| c.phys.pos.z).unwrap_or(0.0));
         }
         
-        // Build Rust Ripple obs and drive infer() to exercise live code path
-        // This ensures queue advancement matches training
+        // Build Rust Ripple obs
         ripple.build(&state, car_idx, &mut obs, &mut mask);
+        
+        // CRITICAL: Inject Python's on_ground and handbrake BEFORE infer()
+        // Per EC2 rip13: timers and queue updates depend on these values
+        // Main tensor: [17]=on_ground, [25]=handbrake
+        obs[17] = if record.python_on_ground { 1.0 } else { 0.0 };
+        obs[25] = record.python_handbrake;
         
         // Call infer() to advance queue and get action (exercises live path)
         let rust_actions = ripple.infer(&obs, &mask, 1);
         let rust_action = rust_actions[0];
-        
-        // Inject Python's main on_ground and handbrake for comparison (timers depend on these)
-        // Main tensor: [17]=on_ground, [25]=handbrake
-        obs[17] = if record.python_on_ground { 1.0 } else { 0.0 };
-        obs[25] = record.python_handbrake;
         
         // Inject opponent's on_ground (others[0] index 17)
         // Others tensor layout: each player is 21 floats, on_ground is at index 17
@@ -472,14 +478,34 @@ fn main() {
         // Rust action was already computed by infer() call above
         // This exercises the same queue advancement path as live training
         
-        // Compare action
-        let action_match = rust_action == record.python_action;
-        if action_match {
-            action_matches += 1;
+        // Compare SELECTED action (what the model chose this step)
+        let selected_match = rust_action == record.python_action;
+        if selected_match {
+            action_selected_matches += 1;
+        }
+        
+        // Compare EXECUTED controls (what will actually be sent to game)
+        // Python dumps the 8-float controls vector that was used
+        let rust_controls = indococo_bot::ripple::controls_of(rust_action);
+        let rust_controls_vec = vec![
+            rust_controls.throttle,
+            rust_controls.steer,
+            rust_controls.pitch,
+            rust_controls.yaw,
+            rust_controls.roll,
+            if rust_controls.jump { 1.0 } else { 0.0 },
+            if rust_controls.boost { 1.0 } else { 0.0 },
+            if rust_controls.handbrake { 1.0 } else { 0.0 },
+        ];
+        let controls_match = rust_controls_vec.iter()
+            .zip(&record.python_controls)
+            .all(|(r, p)| (r - p).abs() < 0.01);
+        if controls_match {
+            action_executed_matches += 1;
         }
         
         // For detailed debugging, optionally get logits
-        let (rust_policy_logits, rust_base_logits) = if idx == 0 || !action_match {
+        let (rust_policy_logits, rust_base_logits) = if idx == 0 || !selected_match {
             ripple.get_raw_logits(&obs).unwrap_or_else(|_| (vec![], vec![]))
         } else {
             (vec![], vec![])
@@ -504,7 +530,7 @@ fn main() {
         // Note: Action already computed by infer() call above (drives live queue path)
         
         // Report first divergence in detail
-        if !action_match && action_matches == 1 {  // First mismatch after initial match
+        if !selected_match && action_selected_matches == 1 {  // First mismatch after initial match
             println!("\n{}", "!".repeat(80));
             println!("FIRST ACTION DIVERGENCE AT STEP {}", idx);
             println!("{}", "!".repeat(80));
@@ -638,8 +664,12 @@ fn main() {
         None => println!("  boosts:  none"),
     }
     println!();
-    println!("Action match: {} / {} ({:.1}%)", action_matches, records.len(),
-             100.0 * action_matches as f32 / records.len() as f32);
+    println!("Action selected match: {} / {} ({:.1}%)", 
+             action_selected_matches, records.len(),
+             100.0 * action_selected_matches as f32 / records.len() as f32);
+    println!("Action executed match: {} / {} ({:.1}%)",
+             action_executed_matches, records.len(),
+             100.0 * action_executed_matches as f32 / records.len() as f32);
     println!();
     
     let max_diff = [
@@ -650,13 +680,15 @@ fn main() {
         boosts_diffs.iter().copied().fold(0.0f32, f32::max),
     ].iter().copied().fold(0.0f32, f32::max);
     
-    let action_rate = 100.0 * action_matches as f32 / records.len() as f32;
+    let selected_rate = 100.0 * action_selected_matches as f32 / records.len() as f32;
+    let executed_rate = 100.0 * action_executed_matches as f32 / records.len() as f32;
     
-    if max_diff < 1e-4 && action_rate > 99.0 {
-        println!("✓ PASS: Parity achieved (max_diff < 1e-4, action_match > 99%)");
+    if max_diff < 1e-4 && selected_rate > 99.0 {
+        println!("✓ PASS: Parity achieved (max_diff < 1e-4, action_selected > 99%)");
     } else {
         println!("✗ FAIL: Parity not achieved");
-        println!("  Target: max_diff < 1e-4, action_match > 99%");
-        println!("  Actual: max_diff = {:.6e}, action_match = {:.1}%", max_diff, action_rate);
+        println!("  Target: max_diff < 1e-4, action_selected > 99%");
+        println!("  Actual: max_diff = {:.6e}, action_selected = {:.1}%, action_executed = {:.1}%", 
+                 max_diff, selected_rate, executed_rate);
     }
 }

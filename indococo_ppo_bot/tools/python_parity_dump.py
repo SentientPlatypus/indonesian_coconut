@@ -61,13 +61,18 @@ def dump_arena_state(gs, tick):
             'is_demoed': player.is_demoed,
         })
     
-    # Boost pads - Ripple tracks these internally, just placeholder
+    # Boost pads - get real availability from RocketSim state
+    # Note: gs has boost pad info but observer also tracks internal timers
     pads = []
     for i in range(34):
+        # Availability comes from RocketSim state
+        # Timer comes from observer internal state (not directly exposed in V1)
+        # For parity, we need both - use RocketSim availability as ground truth
+        pad_active = gs.inverted_boost_pads[i] == 1.0  # V1 inverted_boost_pads is 0/1
         pads.append({
             'index': i,
-            'is_active': True,
-            'timer': 0.0,
+            'is_active': bool(pad_active),
+            'timer': 0.0,  # Observer internal, not exposed by V1 API
         })
     
     return {
