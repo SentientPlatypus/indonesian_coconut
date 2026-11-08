@@ -30,3 +30,4 @@ pub mod state;
 /// Hidden layers of the policy and critic (`1v1.pt` DiscreteFF).
 pub const LAYERS: [usize; 4] = [2048, 2048, 1024, 1024];
 mod ripple_tests;
+mod ripple_multitest;

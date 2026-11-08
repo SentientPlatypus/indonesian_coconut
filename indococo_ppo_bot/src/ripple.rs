@@ -184,10 +184,13 @@ pub struct RipplePolicy {
     _base: (),
     states: Mutex<HashMap<usize, RippleState>>,
     rng: Mutex<rand::rngs::StdRng>,
-    // Track order of build() calls to map infer() batch rows to states
-    // Each build() appends its state key; infer() uses this to look up states
-    build_order: Mutex<Vec<usize>>,
+    // Map batch position -> state_id for multi-game support
+    // batch_position is the order of build() calls (0, 1, 2, ...)
+    // state_id uniquely identifies a (game, car) across steps
+    position_to_state: Mutex<HashMap<usize, usize>>,
     next_state_id: Mutex<usize>,
+    // Current build() call position within this batch
+    current_position: Mutex<usize>,
 }
 
 impl RipplePolicy {
@@ -213,8 +216,9 @@ impl RipplePolicy {
             base: Mutex::new(base),
             states: Mutex::new(HashMap::new()),
             rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
-            build_order: Mutex::new(Vec::new()),
+            position_to_state: Mutex::new(HashMap::new()),
             next_state_id: Mutex::new(0),
+            current_position: Mutex::new(0),
         })
     }
 
@@ -223,9 +227,9 @@ impl RipplePolicy {
         Err("Ripple requires the 'ripple' feature".into())
     }
     
-    /// Clear build order tracking (call before each infer() batch)
+    /// Reset batch position counter (called before collecting a new batch)
     pub fn prepare_batch(&self) {
-        self.build_order.lock().unwrap().clear();
+        *self.current_position.lock().unwrap() = 0;
     }
     
     /// Set RNG seed for deterministic kickoff sampling (e.g. 10000-10049 for paired tests)
@@ -710,22 +714,42 @@ impl ExternalPolicy for RipplePolicy {
     }
 
     fn build(&self, state: &GameState, car: usize, obs: &mut [f32], mask: &mut [bool]) {
-        // TODO: Proper multi-game keying requires tracking build() call order
-        // For now, use car index (works for idle test with single game)
-        let state_key = car;
+        // Get current batch position and increment
+        let batch_position = {
+            let mut pos = self.current_position.lock().unwrap();
+            let p = *pos;
+            *pos += 1;
+            p
+        };
         
-        let mut states = self.states.lock().unwrap();
-        let mut build_order = self.build_order.lock().unwrap();
-        
-        // Record this state key for infer() batch mapping
-        build_order.push(state_key);
-        
-        // Inline detect_reset logic
+        // Detect if this is a reset (kickoff or NaN queue)
         let is_kickoff = state.ball.phys.pos.x.abs() < 1.0
             && state.ball.phys.pos.y.abs() < 1.0
             && state.cars.iter().all(|(_, c)| c.phys.vel.length() < 10.0);
         
-        let st = states.entry(state_key).or_insert_with(RippleState::new);
+        let mut states = self.states.lock().unwrap();
+        let mut position_to_state = self.position_to_state.lock().unwrap();
+        let mut next_id = self.next_state_id.lock().unwrap();
+        
+        // Get or assign state_id for this batch position
+        let state_id = if is_kickoff {
+            // On kickoff, assign new state_id (new game or game reset)
+            let new_id = *next_id;
+            *next_id += 1;
+            position_to_state.insert(batch_position, new_id);
+            states.insert(new_id, RippleState::new());
+            new_id
+        } else {
+            // Non-kickoff: look up existing state_id for this position
+            *position_to_state.entry(batch_position).or_insert_with(|| {
+                let new_id = *next_id;
+                *next_id += 1;
+                states.insert(new_id, RippleState::new());
+                new_id
+            })
+        };
+        
+        let st = states.get_mut(&state_id).unwrap();
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
             *st = RippleState::new();
@@ -791,14 +815,9 @@ impl ExternalPolicy for RipplePolicy {
         for i in 0..rows {
             let obs_row = &obs[i * self.obs_width()..(i + 1) * self.obs_width()];
 
-            // Map batch row i to state key using build_order tracking
-            let build_order = self.build_order.lock().unwrap();
-            let state_key = if i < build_order.len() {
-                build_order[i]
-            } else {
-                // Fallback: use row index modulo 2
-                i % 2
-            };
+            // Map batch row i to state_id using position_to_state mapping
+            let position_to_state = self.position_to_state.lock().unwrap();
+            let state_id = position_to_state.get(&i).copied().unwrap_or(i % 2);
 
             // Reshape into 5 tensors
             let mut offset = 0;
@@ -938,7 +957,7 @@ impl ExternalPolicy for RipplePolicy {
 
             // Update delayed action queue
             let mut states = self.states.lock().unwrap();
-            if let Some(st) = states.get_mut(&state_key) {
+            if let Some(st) = states.get_mut(&state_id) {
                 let table = action_table();
                 let new_action = table[action];
                 
