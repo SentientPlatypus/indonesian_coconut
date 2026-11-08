@@ -145,6 +145,11 @@ struct RippleState {
     ball_preds: [[f32; 9]; 1 + BALL_PRED_STEPS],
     pad_timers: [f32; 34],
     was_flipped: bool,
+    // Edge-trigger reset detection
+    was_kickoff: bool,
+    last_batch: usize,
+    last_ball_pos: Vec3A,
+    last_car_pos: Vec3A,
 }
 
 impl RippleState {
@@ -168,6 +173,10 @@ impl RippleState {
             ball_preds: [[0.0; 9]; 6],
             pad_timers: [0.0; 34],
             was_flipped: false,
+            was_kickoff: false,
+            last_batch: 0,
+            last_ball_pos: Vec3A::ZERO,
+            last_car_pos: Vec3A::ZERO,
         }
     }
 }
@@ -192,6 +201,8 @@ pub struct RipplePolicy {
     // Build counter: increments on each build() call, reset after infer()
     // Provides stable batch_position across steps since batch_sim calls in fixed order
     build_counter: Mutex<usize>,
+    // Batch counter: increments after each infer() for edge-trigger reset detection
+    batch_counter: Mutex<usize>,
 }
 
 impl RipplePolicy {
@@ -225,6 +236,7 @@ impl RipplePolicy {
             position_to_state: Mutex::new(HashMap::new()),
             next_state_id: Mutex::new(0),
             build_counter: Mutex::new(0),
+            batch_counter: Mutex::new(0),
         })
     }
 
@@ -335,12 +347,19 @@ impl RipplePolicy {
         }
         st.demo_timer = (st.demo_timer - TICK_SKIP as f32 / 120.0).max(0.0);
 
+        // Read action ABOUT TO execute (queue[5]) per upstream obs.py:368-379
+        // NOT prev_action (already executed)
+        let about_to_execute = if !st.queue[QUEUE_LEN - 1][0].is_nan() {
+            st.queue[QUEUE_LEN - 1]
+        } else {
+            [0.0; 8]
+        };
         let prev_action = st.prev_action;
 
-        // Boost timer
-        if prev_action[6] == 0.0 && st.boost_time == 12.0 {
+        // Boost timer (obs.py:368-379, normalized /12 at :67,:277)
+        if about_to_execute[6] == 0.0 && st.boost_time == 12.0 {
             st.boost_time = 0.0;
-        } else if st.boost_time != 0.0 || prev_action[6] > 0.5 {
+        } else if st.boost_time != 0.0 || about_to_execute[6] > 0.5 {
             st.boost_time = (st.boost_time + TICK_SKIP as f32).min(12.0);
         } else {
             st.boost_time = 0.0;
@@ -732,38 +751,56 @@ impl ExternalPolicy for RipplePolicy {
             pos
         };
         
-        // Detect episode reset (kickoff with exact world coords)
+        let current_batch = *self.batch_counter.lock().unwrap();
+        
+        // Detect kickoff GEOMETRY (ball centered, cars stopped)
         // Upstream obs.py:234 uses exact np.all(ball.position[:2] == 0)
-        let is_kickoff = state.ball.phys.pos.x == 0.0
+        let is_kickoff_geometry = state.ball.phys.pos.x == 0.0
             && state.ball.phys.pos.y == 0.0
             && state.cars.iter().all(|(_, c)| c.phys.vel.length() < 10.0);
+        
+        let (_, me) = &state.cars[car];
+        let ball_pos = state.ball.phys.pos;
+        let car_pos = me.phys.pos;
         
         let mut states = self.states.lock().unwrap();
         let mut position_to_state = self.position_to_state.lock().unwrap();
         let mut next_id = self.next_state_id.lock().unwrap();
         
-        // Get or assign state_id for this batch position
-        let state_id = if is_kickoff {
-            // On kickoff, assign new state_id (new game or game reset)
+        // Get or create state for this position
+        let state_id = *position_to_state.entry(batch_position).or_insert_with(|| {
             let new_id = *next_id;
             *next_id += 1;
-            position_to_state.insert(batch_position, new_id);
             states.insert(new_id, RippleState::new());
             new_id
-        } else {
-            // Non-kickoff: look up existing state_id for this position
-            *position_to_state.entry(batch_position).or_insert_with(|| {
-                let new_id = *next_id;
-                *next_id += 1;
-                states.insert(new_id, RippleState::new());
-                new_id
-            })
-        };
+        });
         
         let st = states.get_mut(&state_id).unwrap();
-        let needs_reset = is_kickoff || st.queue[0][0].is_nan();
+        
+        // Edge-triggered reset: only on genuine episode start, not consecutive kickoffs
+        // 1. Kickoff edge: transition from non-kickoff to kickoff
+        // 2. Teleport: large position jump (>1000 units)  
+        // 3. Batch gap: slot wasn't called on previous batch
+        let kickoff_edge = !st.was_kickoff && is_kickoff_geometry;
+        let ball_teleported = (ball_pos - st.last_ball_pos).length() > 1000.0;
+        let car_teleported = (car_pos - st.last_car_pos).length() > 1000.0;
+        let batch_gap = st.last_batch > 0 && st.last_batch + 1 < current_batch;
+        let needs_reset = kickoff_edge || ball_teleported || car_teleported || batch_gap;
+        
         if needs_reset {
+            // Reset with kickoff-style zero queue (upstream obs.py:129-133)
+            let old_tracking = (st.was_kickoff, st.last_batch, st.last_ball_pos, st.last_car_pos);
             *st = RippleState::new();
+            st.queue = [[0.0; 8]; QUEUE_LEN]; // Zeros, not NaN
+            // Restore tracking
+            (st.was_kickoff, st.last_batch, st.last_ball_pos, st.last_car_pos) = old_tracking;
+        }
+        
+        // Update tracking for next call
+        st.was_kickoff = is_kickoff_geometry;
+        st.last_batch = current_batch;
+        st.last_ball_pos = ball_pos;
+        st.last_car_pos = car_pos;
             // Leave queue as NaN (RippleState::new() initializes to NaN)
             // infer() will fill it with the first selected action
             // Update ball predictions after reset
@@ -1027,8 +1064,9 @@ impl ExternalPolicy for RipplePolicy {
             }
         }
 
-        // Reset build counter for next batch (infer completes one step)
+        // Reset build counter and increment batch counter for next step
         *self.build_counter.lock().unwrap() = 0;
+        *self.batch_counter.lock().unwrap() += 1;
 
         actions
     }
