@@ -1381,6 +1381,8 @@ demos_against per 200 g: vs BEST 57 cand / 78 opp (ST15 44/97); vs FR4 12/142 (S
 
 ## ST17 (generalization): OPPCH 0.50 -> 0.60
 
+## ST17 (generalization): OPPCH 0.50 -> 0.60
+
 Ended early by user request on 2026-11-08 at 15046.7M (last saved checkpoint, about 260M of 1B); no finals, no promotion. Checkpoints and logs kept in exp_ST17. BEST stays ST16.
 
 ## ST18 (Galactus focus): league pruned, Galactus ~20% of iterations
@@ -1388,3 +1390,111 @@ Ended early by user request on 2026-11-08 at 15046.7M (last saved checkpoint, ab
 Why: Galactus at finals was flat around 25% from ST2 to ST16 despite GAL_WEIGHT 2.5-6.0. Diagnostic (diag_gal, 200 g ST16 vs Galactus): 36% of conceded goals were aerial shots, 29% came within seconds of us being demoed (Galactus 93 demos vs our 9; win rate ~10% in games where we were demoed vs ~33% otherwise), 21% ground shots while out of position; kickoffs fine (112-25). Galactus was only ~4-6% of training iterations because every run added frozen extras that diluted its weight; mid-eval h2h vs BEST had no correlation with Galactus.
 
 Changes vs ST17: base league in train_st.toml pruned to FR4_final@1.0 (dropped FR7/FR8/FR9/FR9b/ST1/ST2/1v1.pt); extras pruned to ST13..ST16 finals @1.0 and HUNT@1.0 (was 2.0); GAL_WEIGHT 3.0 -> 4.5. Kept OPPCH 0.60, ENT 0.016, MEGA_WEIGHT 2.0 (indococo-train-mega2), flip_reset 70. Share = OPPCH * w / total, total = past versions 1 + FR4 1 + ST13..16 4 + HUNT 1 + Mega 2 + Galactus 4.5 = 13.5: Galactus 20.0%, Megabyte 8.9%, each other opponent 4.4%, self-play 40%. From BEST ST16 (14786.0M), 1B steps, measured vs ST16.
+
+## ST Galactus improvements (Nov 8, 2026)
+
+**Motivation:** Galactus (~25% win rate, flat for ~9B steps) is the weakest benchmark. Diagnostic of 200 games found:
+- 36% of conceded goals are aerial/air shots (ball > 300uu at Galactus's last touch)
+- 29% come within 3.5s of us being demoed
+- 21% are ground shots with us on wrong side of ball
+- Kickoffs are fine
+
+**Changes implemented:**
+
+### 1. Promotion gate: absolute Galactus floor (`st_promote.py`)
+
+**OLD RULE:** Galactus blocks promotion only on regression beyond noise: `>= BEST's - 0.04` (~2 SE). This ratcheted down across promotions (e.g., if BEST drops from 0.28 to 0.25, the gate becomes 0.21).
+
+**NEW RULE:** Two conditions, both must hold:
+1. **Absolute floor:** candidate must achieve `>= GALACTUS_FLOOR` (default 0.27, configurable)
+2. **Relative guard:** candidate must be `>= BEST's - 0.08` (prevents catastrophic regressions)
+
+**Configuration:**
+- CLI: `st_promote.py F BF --galactus-floor 0.27`
+- Env: `ST_GALACTUS_FLOOR=0.27`
+- Default: 0.27 (measured on 500-game finals)
+
+The floor doesn't ratchet down: even if BEST drops to 0.24, candidates still need 0.27. The relative guard (-0.08) allows minor noise/variance but blocks severe drops.
+
+**Output:** promotion JSON now includes `"galactus_floor": 0.27` field.
+
+### 2. Enhanced final checkpoint selection (`st_select_final.py`, `st_launch.sh`)
+
+**OLD RULE:** Pick the single best chunk by `h2h_BEST_200` (200 games) with FR4 >= 48%.
+
+**NEW RULE:** Multi-candidate re-evaluation with combined scoring:
+1. Select top N candidates by `h2h_BEST_200` (with FR4 >= 48% guard)
+2. Re-evaluate each on 500 games vs BEST + 500 games vs Galactus (CPU, between runs)
+3. Pick by combined score: `score = h2h_weight * h2h_wr + galactus_weight * galactus_wr`
+4. Fall back to old rule if any re-eval fails
+
+**Configuration (env vars):**
+- `ST_REEVAL_ENABLED` (default 1): set to 0 to force old rule
+- `ST_REEVAL_TOP_N` (default 3): how many candidates to re-evaluate
+- `ST_REEVAL_H2H` (default 500): games vs BEST per candidate
+- `ST_REEVAL_GAL` (default 500): games vs Galactus per candidate
+- `ST_REEVAL_H2H_WEIGHT` (default 0.6): h2h weight in combined score
+- `ST_REEVAL_GAL_WEIGHT` (default 0.4): Galactus weight in combined score
+
+The weighting makes Galactus performance explicit: a candidate with 54% h2h + 26% Galactus (score 0.428) beats one with 56% h2h + 22% Galactus (score 0.424). Adjustable for balancing generalization vs. targeted improvement.
+
+**Fallback:** Robust to eval failures (export, network, timeout). Warns to stderr, always returns a valid checkpoint.
+
+### 3. Aerial-defense training starts (`src/setters.rs`)
+
+**Motivation:** 36% of Galactus goals are aerials, 29% follow demos. Need training scenarios for aerial defense and demo evasion.
+
+**New setters:**
+
+#### `aerial_defense` (configurable, default off)
+Ball airborne (300-1500uu by default) moving toward blue goal, orange car positioned to contest/shoot, blue car at varied defensive positions.
+
+**Parameters (all optional, with defaults):**
+```toml
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.15  # default off (weight = 0); ~15% recommended
+ball_height = [300.0, 1500.0]
+ball_dist_from_goal = [1500.0, 4000.0]
+ball_speed = [400.0, 1200.0]
+ball_lateral = [-800.0, 800.0]
+attacker_dist = [300.0, 800.0]
+defender_goal_side_frac = 0.6  # 60% spawn goal-side, 40% out of position
+defender_goal_dist = [500.0, 1500.0]
+defender_ball_dist = [800.0, 1800.0]
+boost = [20.0, 100.0]
+```
+
+The defender spawns goal-side 60% of the time (good positioning), out of position 40% (recovery practice). Attacker is aerial-capable, moving to contest/shoot.
+
+#### `demo_threat` (configurable, default off)
+Opponent supersonic heading toward our car. Trains demo awareness and evasion.
+
+**Parameters (all optional, with defaults):**
+```toml
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.05  # default off; ~5% recommended
+distance = [800.0, 1500.0]
+attacker_speed = [2250.0, 2300.0]  # supersonic
+supersonic = true
+ball_dist = [1000.0, 3000.0]
+boost = [30.0, 100.0]
+```
+
+**Integration:** Exposed via the `[[state_setters]]` toml config chain (train_st.toml, st.toml, etc.) following the existing pattern. Existing configs with no `aerial_defense` or `demo_threat` entry behave identically (weight = 0 when absent).
+
+**Metrics:** Per-setter episode counts and flip-reset rates already tracked via the `Setters/<kind> share` metrics.
+
+**Usage example (train_st.toml):**
+```toml
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.15
+
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.05
+```
+
+Total setter weight auto-normalizes. A typical recipe: reduce kickoff from 0.45 to 0.25, add aerial_defense 0.15 + demo_threat 0.05 to keep focused on the weakness profile.
