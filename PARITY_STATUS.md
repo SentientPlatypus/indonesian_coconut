@@ -1,7 +1,7 @@
 # Ripple v1.1 Python→Rust Parity Status
 
 **Baseline**: 601f91e8  
-**Current**: e7f38ea (17 commits)  
+**Current**: 5545142 (18 commits)  
 **Date**: 2026-11-08
 
 ---
@@ -27,6 +27,7 @@
 4. **Fixed padding slots** - removed ghost cars from 6-car arena init
 5. **FIXED ACTION QUEUE BUG** - queue was pre-filled with zeros at kickoff, causing first action to always be [0,0,0,0,0,0,0,0] (action 14) instead of KL-selected action (38)
 6. **FIXED ACTION QUEUE ORDER** (e7f38ea) - queue was in REVERSE order: Rust had [old→new] but Python has [new→old], causing actions tensor to be backwards and wrong ONNX inputs
+7. **FIXED BALL PREDICTION TIMING** (5545142) - was stepping 30 ticks (0.25s) instead of 120 ticks (1.0s) between slices, causing ball[1-5] diffs up to 1.39
 
 ---
 
@@ -154,15 +155,26 @@ RIPPLE_OBS_LAYOUT.md                    - Documented exact Python layout
 
 ---
 
-## 🎯 NEXT STEPS TO COMPLETION
+## 🎯 COMPLETED FIXES (This Session)
 
 ### ✅ FIXED: Action Queue Order (e7f38ea)
 **Problem**: At step 1+, Rust selected different actions (79 vs Python's 38) even though main tensor matched  
 **Root cause**: Queue order was REVERSED - Rust had [old, ..., new] but Python has [new, ..., old]  
 **Fix**: Changed from `rotate_left()` + put at queue[5] to `rotate_right()` + put at queue[0], execute from queue[5]  
-**Expected impact**: Actions tensor now matches Python's order, should fix step 1+ divergence
+**Expected impact**: Actions tensor now matches Python's order, should fix step 1+ divergence and improve action match from 12% toward 100%
 
-### Testing Needed
-1. Regenerate Python dump or use existing one
-2. Run `ripple_replay` to verify actions tensor now matches
-3. Check if action match improves from 12% to ~100%
+### ✅ FIXED: Ball Prediction Timing (5545142)
+**Problem**: Ball[0] perfect but Ball[1-5] had diffs up to 1.39  
+**Root cause**: Stepping 30 ticks (0.25s) instead of 120 ticks (1.0s) between prediction slices  
+**Fix**: Changed BALL_STEP_TICKS from 30 to 120 to match Python's `ball_step_size_ticks * tick_skip`  
+**Expected impact**: Ball tensor should now match within 1e-4 for all 6 slices
+
+## 🧪 TESTING REQUIRED
+
+### Immediate Tests (agent cannot run without Ripple weights)
+1. **Regenerate Python dump**: `python tools/python_parity_dump.py /path/to/ripple blue 300 /tmp/ripple_blue_300.jsonl`
+2. **Run parity replay**: Build ripple_replay with nightly Rust, run against dump
+3. **Expected improvements**:
+   - actions tensor diff: 2.0 → <1e-4
+   - ball tensor diff: 1.39 → <1e-4
+   - action match: 12% → >95%
