@@ -501,61 +501,7 @@ fn main() {
             0.0
         };
         
-        // Check if this was a kickoff step (for debug output)
-        let is_kickoff = obs[29].abs() > 0.5;
-        
-        if false {  // Disabled: infer() already computed action via live path
-            // (Old code that recomputed action from logits - kept for reference)
-            // Use Python's uniform draw for deterministic comparison
-            let u = record.python_uniform_u.unwrap();
-            let log_policy: Vec<f32> = {
-                let max_l = rust_policy_logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                let shifted: Vec<f32> = rust_policy_logits.iter().map(|&x| x - max_l).collect();
-                let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
-                let log_sum_exp = sum_exp.ln();
-                shifted.iter().map(|&x| x - log_sum_exp).collect()
-            };
-            let mut cdf = vec![0.0f32; rust_policy_logits.len()];
-            let mut sum = 0.0f32;
-            for j in 0..rust_policy_logits.len() {
-                sum += log_policy[j].exp();
-                cdf[j] = sum;
-            }
-            let mut count = 0;
-            for j in 0..rust_policy_logits.len() {
-                if u >= cdf[j] {
-                    count += 1;
-                }
-            }
-            count.min(rust_policy_logits.len() - 1)
-        } else {
-            // KL mode from upstream Rolv-Arild/Ripple-RLBot @ 7ca4273a agent.py:87-88
-            // weight = log_policy if mode == ActionMode.KL else log_base
-            // return (np.exp(weight) * (log_policy-log_base)).argmax(-1)
-            let log_policy: Vec<f32> = {
-                let max_l = rust_policy_logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                let shifted: Vec<f32> = rust_policy_logits.iter().map(|&x| x - max_l).collect();
-                let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
-                let log_sum_exp = sum_exp.ln();
-                shifted.iter().map(|&x| x - log_sum_exp).collect()
-            };
-            let log_base: Vec<f32> = {
-                let max_l = rust_base_logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                let shifted: Vec<f32> = rust_base_logits.iter().map(|&x| x - max_l).collect();
-                let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
-                let log_sum_exp = sum_exp.ln();
-                shifted.iter().map(|&x| x - log_sum_exp).collect()
-            };
-            let mut kl_scores = vec![0.0f32; rust_policy_logits.len()];
-            for j in 0..rust_policy_logits.len() {
-                let weight = log_policy[j];  // weight = log_policy for KL mode
-                kl_scores[j] = weight.exp() * (log_policy[j] - log_base[j]);
-            }
-            kl_scores.iter().enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                .map(|(idx, _)| idx)
-                .unwrap()
-        }
+        // Note: Action already computed by infer() call above (drives live queue path)
         
         // Report first divergence in detail
         if !action_match && action_matches == 1 {  // First mismatch after initial match

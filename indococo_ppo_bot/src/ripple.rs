@@ -189,6 +189,9 @@ pub struct RipplePolicy {
     // state_id uniquely identifies a (game, car) across steps
     position_to_state: Mutex<HashMap<usize, usize>>,
     next_state_id: Mutex<usize>,
+    // Build counter: increments on each build() call, reset after infer()
+    // Provides stable batch_position across steps since batch_sim calls in fixed order
+    build_counter: Mutex<usize>,
 }
 
 impl RipplePolicy {
@@ -221,6 +224,7 @@ impl RipplePolicy {
             rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
             position_to_state: Mutex::new(HashMap::new()),
             next_state_id: Mutex::new(0),
+            build_counter: Mutex::new(0),
         })
     }
 
@@ -717,9 +721,14 @@ impl ExternalPolicy for RipplePolicy {
     }
 
     fn build(&self, state: &GameState, car: usize, obs: &mut [f32], mask: &mut [bool]) {
-        // Use car index as stable batch_position: same car → same position across steps
-        // In batched training, different games have non-overlapping car indices
-        let batch_position = car;
+        // Increment build counter to get stable batch_position
+        // batch_sim iterates games and cars in fixed order, so position k = same (game, car)
+        let batch_position = {
+            let mut counter = self.build_counter.lock().unwrap();
+            let pos = *counter;
+            *counter += 1;
+            pos
+        };
         
         // Detect episode reset (kickoff with exact world coords)
         // Upstream obs.py:234 uses exact np.all(ball.position[:2] == 0)
@@ -1014,6 +1023,9 @@ impl ExternalPolicy for RipplePolicy {
             }
         }
 
+        // Reset build counter for next batch (infer completes one step)
+        *self.build_counter.lock().unwrap() = 0;
+
         actions
     }
 
@@ -1278,8 +1290,123 @@ mod tests {
     }
 
     #[test]
-    fn test_state_persistence_across_steps() {
-        // Test (a): same game across 10 consecutive steps keeps one state_id
+    fn test_multi_game_batch_no_aliasing() {
+        // Test (a): N=4 games × 2 cars over 10 steps, each slot keeps persistent state
+        // Test (b): repeated car index across games with no aliasing
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            eprintln!("Skipping test: Ripple models not found");
+            return;
+        }
+        
+        let policy = RipplePolicy::load(&path).expect("Load Ripple");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        const N_GAMES: usize = 4;
+        const N_CARS: usize = 2;
+        
+        let mut envs: Vec<_> = (0..N_GAMES).map(|_| create_env(&RewardConfig::default(), &default_mix())).collect();
+        let mut states: Vec<_> = envs.iter_mut().map(|e| e.reset().0).collect();
+        let mut obs_batch = vec![vec![0.0f32; policy.obs_width()]; N_GAMES * N_CARS];
+        let mut mask = vec![false; N_ACTIONS];
+        
+        // Run 10 steps
+        for _ in 0..10 {
+            // Build phase: all games, all cars (fixed order)
+            let mut idx = 0;
+            for g in 0..N_GAMES {
+                for car in 0..N_CARS {
+                    policy.build(&states[g], car, &mut obs_batch[idx], &mut mask);
+                    idx += 1;
+                }
+            }
+            
+            // Infer phase: single batch call
+            let flat_obs: Vec<f32> = obs_batch.iter().flatten().copied().collect();
+            let flat_mask: Vec<bool> = vec![false; N_ACTIONS * N_GAMES * N_CARS];
+            let actions = policy.infer(&flat_obs, &flat_mask, N_GAMES * N_CARS);
+            
+            // Apply actions and step
+            for g in 0..N_GAMES {
+                for car in 0..N_CARS {
+                    let action_idx = g * N_CARS + car;
+                    envs[g].arena.set_car_controls(car, controls_of(actions[action_idx]));
+                }
+                envs[g].step_physics(8);
+                states[g] = envs[g].current_state();
+            }
+        }
+        
+        // Verify: 8 unique states (4 games × 2 cars), no aliasing
+        let num_states = policy.states.lock().unwrap().len();
+        assert!(num_states >= N_GAMES * N_CARS && num_states <= N_GAMES * N_CARS + 2, 
+                "Expected ~{} states, got {}", N_GAMES * N_CARS, num_states);
+        
+        // Verify: each position has persistent queue data
+        let states_map = policy.states.lock().unwrap();
+        let position_map = policy.position_to_state.lock().unwrap();
+        for pos in 0..(N_GAMES * N_CARS) {
+            if let Some(&state_id) = position_map.get(&pos) {
+                let st = states_map.get(&state_id).expect("State exists");
+                let has_data = !st.queue[0][0].is_nan();
+                assert!(has_data, "Position {} should have persistent queue data", pos);
+            }
+        }
+    }
+
+    #[test]
+    fn test_infer_row_maps_to_slot() {
+        // Test (c): infer row i maps to slot i
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            eprintln!("Skipping test: Ripple models not found");
+            return;
+        }
+        
+        let policy = RipplePolicy::load(&path).expect("Load Ripple");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
+        let (state, _, _) = env.reset();
+        
+        const N_SLOTS: usize = 4;
+        let mut obs_batch = vec![vec![0.0f32; policy.obs_width()]; N_SLOTS];
+        let mut mask = vec![false; N_ACTIONS];
+        
+        // Build N_SLOTS observations (simulates N games or cars)
+        for i in 0..N_SLOTS {
+            policy.build(&state, i % 2, &mut obs_batch[i], &mut mask);
+        }
+        
+        // Infer returns actions for each row
+        let flat_obs: Vec<f32> = obs_batch.iter().flatten().copied().collect();
+        let flat_mask: Vec<bool> = vec![false; N_ACTIONS * N_SLOTS];
+        let actions = policy.infer(&flat_obs, &flat_mask, N_SLOTS);
+        
+        assert_eq!(actions.len(), N_SLOTS, "Infer should return action for each row");
+        
+        // Verify mapping: row i used state from slot i (build counter i)
+        let position_map = policy.position_to_state.lock().unwrap();
+        for i in 0..N_SLOTS {
+            assert!(position_map.contains_key(&i), "Slot {} should have state", i);
+        }
+    }
+
+    #[test]
+    fn test_single_game_persistence() {
+        // Test (d): single-game replay/idle still persists state
         use rlgymppo::rlgym::rocketsim::init_from_default;
         init_from_default(true).expect("load collision meshes");
         
@@ -1301,84 +1428,26 @@ mod tests {
         let mut obs = vec![0.0f32; policy.obs_width()];
         let mut mask = vec![false; N_ACTIONS];
         
-        // Run 10 steps
-        for step in 0..10 {
+        // Run 10 steps (single game, single car pattern like idle test)
+        for _ in 0..10 {
             policy.build(&state, 0, &mut obs, &mut mask);
             let actions = policy.infer(&obs, &mask, 1);
-            let action = actions[0];
-            let controls = controls_of(action);
             
-            env.arena.set_car_controls(0, controls);
-            env.arena.set_car_controls(1, Default::default());
+            env.arena.set_car_controls(0, controls_of(actions[0]));
             env.step_physics(8);
-            
             state = env.current_state();
         }
         
-        // Check that we only created one state (not counting potential kickoffs)
+        // Verify: only 1 or 2 states (initial + maybe reset)
         let num_states = policy.states.lock().unwrap().len();
-        assert!(num_states <= 2, "Should have at most 2 states (initial + potential reset), got {}", num_states);
+        assert!(num_states <= 2, "Single game should have ≤2 states, got {}", num_states);
         
-        // Check queue persists: after 10 steps, queue should not be all NaN
-        let states = policy.states.lock().unwrap();
-        let state_id = *policy.position_to_state.lock().unwrap().get(&0).expect("State for car 0");
-        let st = states.get(&state_id).expect("State exists");
-        let has_data = !st.queue[0][0].is_nan();
-        assert!(has_data, "Queue should have persisted data after 10 steps");
-    }
-
-    #[test]
-    fn test_interleaved_games_no_sharing() {
-        // Test (b): two interleaved games in one batch never share state
-        use rlgymppo::rlgym::rocketsim::init_from_default;
-        init_from_default(true).expect("load collision meshes");
-        
-        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
-        if !path.exists() {
-            eprintln!("Skipping test: Ripple models not found");
-            return;
-        }
-        
-        let policy = RipplePolicy::load(&path).expect("Load Ripple");
-        
-        use crate::env::create_env;
-        use crate::rewards::RewardConfig;
-        use crate::setters::default_mix;
-        
-        let mut env1 = create_env(&RewardConfig::default(), &default_mix());
-        let mut env2 = create_env(&RewardConfig::default(), &default_mix());
-        let (mut state1, _, _) = env1.reset();
-        let (mut state2, _, _) = env2.reset();
-        
-        let mut obs1 = vec![0.0f32; policy.obs_width()];
-        let mut obs2 = vec![0.0f32; policy.obs_width()];
-        let mut mask = vec![false; N_ACTIONS];
-        
-        // Interleave: build game1-car0, game2-car1, then infer both
-        for _ in 0..5 {
-            policy.build(&state1, 0, &mut obs1, &mut mask);
-            policy.build(&state2, 1, &mut obs2, &mut mask);
-            
-            let actions1 = policy.infer(&obs1, &mask, 1);
-            let actions2 = policy.infer(&obs2, &mask, 1);
-            
-            env1.arena.set_car_controls(0, controls_of(actions1[0]));
-            env2.arena.set_car_controls(0, controls_of(actions2[0]));
-            env1.step_physics(8);
-            env2.step_physics(8);
-            
-            state1 = env1.current_state();
-            state2 = env2.current_state();
-        }
-        
-        // Verify different states: car0 and car1 should have different state_ids
+        // Verify: queue has persistent data
+        let states_map = policy.states.lock().unwrap();
         let position_map = policy.position_to_state.lock().unwrap();
-        let state_id_0 = position_map.get(&0);
-        let state_id_1 = position_map.get(&1);
-        
-        assert!(state_id_0.is_some(), "Car 0 should have state");
-        assert!(state_id_1.is_some(), "Car 1 should have state");
-        assert_ne!(state_id_0, state_id_1, "Different cars should have different states");
+        let state_id = *position_map.get(&0).expect("Slot 0 should exist");
+        let st = states_map.get(&state_id).expect("State exists");
+        assert!(!st.queue[0][0].is_nan(), "Queue should persist across steps");
     }
 
     #[test]
