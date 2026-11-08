@@ -138,6 +138,7 @@ struct RippleState {
     has_double_jumped: bool,
     has_flipped: bool,
     prev_action: [f32; 8],
+    prev_prev_action: [f32; 8],  // Action from 2 steps ago for timer edge detection
     ball_preds: [[f32; 9]; 1 + BALL_PRED_STEPS],
     pad_timers: [f32; 34],
     was_flipped: bool,
@@ -160,6 +161,7 @@ impl RippleState {
             has_double_jumped: false,
             has_flipped: false,
             prev_action: [0.0; 8],
+            prev_prev_action: [0.0; 8],
             ball_preds: [[0.0; 9]; 6],
             pad_timers: [0.0; 34],
             was_flipped: false,
@@ -327,7 +329,7 @@ impl RipplePolicy {
 
         if st.is_jumping {
             st.is_jumping = st.jump_time < 3.0 || (prev_action[5] > 0.5 && st.jump_time < 24.0);
-        } else if prev_action[5] > 0.5 && st.prev_action[5] <= 0.5 && st.prev_on_ground {
+        } else if prev_action[5] > 0.5 && st.prev_prev_action[5] <= 0.5 && st.prev_on_ground {
             st.is_jumping = true;
             st.jump_time = 0.0;
         }
@@ -355,7 +357,7 @@ impl RipplePolicy {
 
             if st.has_jumped
                 && prev_action[5] > 0.5
-                && st.prev_action[5] <= 0.5
+                && st.prev_prev_action[5] <= 0.5
                 && st.air_time < 150.0
                 && !st.has_double_jumped
                 && !st.has_flipped
@@ -881,6 +883,8 @@ impl ExternalPolicy for RipplePolicy {
                     applied_action_controls[3] *= -1.0; // yaw
                     applied_action_controls[4] *= -1.0; // roll
                 }
+                // Update action history for timer edge detection
+                st.prev_prev_action = st.prev_action;
                 st.prev_action = applied_action_controls;
                 
                 // Find which action index corresponds to the un-flipped controls
