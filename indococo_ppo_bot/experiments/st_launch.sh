@@ -124,16 +124,10 @@ PY
   echo LOW=$LOW > $X/guard.env
 done
 touch $X/TRAIN_DONE
-# Final candidate = best chunk by vs BEST (>= 48% vs FR4), else the last.
-bestck=$($PYT - $X/logs/mid.jsonl <<'PY'
-import json,sys
-b=None
-for l in open(sys.argv[1]):
-    d=json.loads(l)
-    if (d.get("h2h_FR4_200") or 0)>=0.48 and (b is None or (d.get("h2h_BEST_200") or 0)>b[0]): b=(d.get("h2h_BEST_200") or 0,d["ckpt"])
-print(b[1] if b else "")
-PY
-)
+# Final candidate = enhanced multi-candidate selection (st_select_final.py) with top-N
+# re-evaluation (500g vs BEST + 500g vs Galactus, combined scoring). Falls back to the
+# old rule (best h2h_BEST_200 with FR4 >= 48%) on failure. Configure via ST_REEVAL_* env vars.
+bestck=$($PYT $C/experiments/st_select_final.py $X/logs/mid.jsonl "$PYT" "$T" "$X" "$GALP" "$PROCS")
 [[ -n "$bestck" && -d "$bestck" ]] || bestck=$X/checkpoints/$(latest)
 F=$R/${RUN,,}_final; mkdir -p $F; echo $bestck > $F/FINAL_CKPT; echo "$(steps_in $bestck)" > $F/STEPS
 CAND=$F/final_policy.safetensors; export_to $bestck $CAND; sha256sum $CAND > $F/sha.txt
