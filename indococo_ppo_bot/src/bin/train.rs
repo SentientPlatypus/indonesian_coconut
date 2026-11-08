@@ -1954,6 +1954,21 @@ fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize,
             
             let res = g.env.post_step();
             out[3] += 1;
+            
+            // Log per-second trajectory
+            if out[3] % 120 == 0 {
+                let ripple_team = 1 - g.a_team;
+                let ripple_car_idx = g.state.cars.iter().position(|(info, _)| info.team as u8 != g.a_team).unwrap();
+                let ripple_car = &g.state.cars[ripple_car_idx].1;
+                let ball = &g.state.ball;
+                println!("  [T={}s] Ripple team={} x={:.0} y={:.0} vx={:.0} vy={:.0} | Ball y={:.0}",
+                    out[3] / 120, ripple_team,
+                    ripple_car.phys.pos.x, ripple_car.phys.pos.y,
+                    ripple_car.phys.vel.x, ripple_car.phys.vel.y,
+                    ball.phys.pos.y);
+                io::stdout().flush().unwrap();
+            }
+            
             if res.is_terminal || res.truncated {
                 let view = g.env.get_shared_info().view(&res.state);
                 let scoring_team = view.scoring_team();
