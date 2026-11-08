@@ -1875,31 +1875,53 @@ fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize)
                     acts.push(aa[ia]);
                     ia += 1;
                 } else {
-                    acts.push(0);
+                    acts.push(0); // Will be overridden by Ripple
                     ripple_car = Some(i);
                 }
             }
             
-            // Apply candidate actions to all cars
+            // Apply candidate actions - this will set ALL cars, including Ripple's
+            // But Ripple will override immediately after
             g.env.pre_step(&g.state, &acts);
             
-            // Ripple makes 2 decisions per 8-tick step (every 4 ticks)
-            // Re-apply its controls each time to override pre_step
-            for _ in 0..2 {
-                if let Some(i) = ripple_car {
-                    ripple.build(&g.state, i, &mut robs, &mut rmask);
-                    let actions = ripple.infer(&robs, &rmask, 1);
-                    let ripple_act = actions[0];
-                    g.env.arena.set_car_controls(i, rx::controls_of(ripple_act));
-                }
-                g.env.step_physics(4);
+            // Override Ripple's controls immediately (pre_step just set it to action 0)
+            if let Some(i) = ripple_car {
+                // Just set a neutral control to prove we can override
+                let mut test_controls = rx::controls_of(0);
+                test_controls.throttle = 1.0; // Full throttle test
+                g.env.arena.set_car_controls(i, test_controls);
+                if k == 0 { eprintln!("Set Ripple car={} to test throttle=1.0", i); }
             }
+            
+            // Ripple decision 1: build, infer, apply, step 4 ticks
+            if let Some(i) = ripple_car {
+                ripple.build(&g.state, i, &mut robs, &mut rmask);
+                let actions = ripple.infer(&robs, &rmask, 1);
+                let action1 = actions[0];
+                g.env.arena.set_car_controls(i, rx::controls_of(action1));
+                if k == 0 { eprintln!("Ripple car={} action1={}", i, action1); }
+            }
+            g.env.step_physics(4);
+            
+            // Ripple decision 2: build again (history updated), infer, apply, step 4 more ticks
+            if let Some(i) = ripple_car {
+                ripple.build(&g.state, i, &mut robs, &mut rmask);
+                let actions = ripple.infer(&robs, &rmask, 1);
+                let action2 = actions[0];
+                g.env.arena.set_car_controls(i, rx::controls_of(action2));
+                if k == 0 { eprintln!("Ripple car={} action2={}", i, action2); }
+            }
+            g.env.step_physics(4);
             
             let res = g.env.post_step();
             out[3] += 1;
             if res.is_terminal || res.truncated {
                 let view = g.env.get_shared_info().view(&res.state);
-                match view.scoring_team() {
+                let scoring_team = view.scoring_team();
+                let ripple_team = 1 - g.a_team; // Ripple is on opposite team
+                eprintln!("[Game {}] Ripple team={}, Candidate team={}, Scorer={:?}", 
+                    started, ripple_team, g.a_team, scoring_team);
+                match scoring_team {
                     Some(t) if t == g.a_team => out[0] += 1,
                     Some(_) => out[1] += 1,
                     None => out[2] += 1,
