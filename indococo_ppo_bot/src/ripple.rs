@@ -35,7 +35,9 @@ pub fn controls_of(action: usize) -> CarControls {
 }
 const QUEUE_LEN: usize = 6;
 const BALL_PRED_STEPS: usize = 5;
-const BALL_STEP_TICKS: usize = 30; // 1 sec at 120 Hz / tick_skip 4
+// Python: ball_step_size_ticks = 30 iterations, each stepping tick_skip=4 ticks
+// Total: 30 * 4 = 120 ticks = 1.0 sec between prediction slices
+const BALL_STEP_TICKS: usize = 120;
 const DOUBLEJUMP_MAX_DELAY: f32 = 1.25;
 const GOAL_Y: f32 = 5215.5;
 const DEFAULT_DODGE_DEADZONE: f32 = 0.5;
