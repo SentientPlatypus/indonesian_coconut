@@ -10,6 +10,22 @@
 # chunk (vs BEST, with >= 48% vs FR4). Empty queue -> repeats this variant as
 # <RUN>r so the GPU never idles. Stop chain: touch ~/ippo_runs/ST_NO_FOLLOWUP.
 set -u
+# HUNT pseudo-run (ST_QUEUE line "HUNT HUNT"): train the demo hunter with
+# ~/ippo_runs/hunt_launch.sh (no finals/promotion; it adds itself to ST14/ST15
+# EXTRA_OPPS), then pop the next queue line and continue the chain from the
+# same START_CK/START/BESTF (the previous ST run best), as if HUNT never ran.
+if [[ "${VARIANT:-}" == HUNT ]]; then
+  R=/home/ubuntu/ippo_runs
+  echo "$(date "+%F %T %Z") HUNT step (chain START_CK=${START_CK:-?}, BEST=${BESTF:-?})" | tee -a $R/st_driver_hunt.log
+  bash $R/hunt_launch.sh 2>&1 | tee -a $R/hunt_driver.log | grep -E "HUNT|FATAL|panic" 
+  if [[ ! -f $R/ST_NO_FOLLOWUP ]]; then
+    Q=$R/ST_QUEUE; next=$(head -1 $Q 2>/dev/null)
+    if [[ -n "$next" ]]; then sed -i 1d $Q; else next="ST14 ST14"; fi
+    echo "$(date "+%F %T %Z") HUNT -> follow-up ${next}" | tee -a $R/st_driver_hunt.log
+    RUN=${next%% *} VARIANT=${next#* } exec bash "${BASH_SOURCE[0]}"
+  fi
+  exit 0
+fi
 R=/home/ubuntu/ippo_runs; RUN=${RUN:-ST1}; VARIANT=${VARIANT:-ST1}; X=$R/exp_$RUN
 C=${C:-$R/code_fr9/indococo_ppo_bot}; B0=${BIN:-$R/code_fr9/bin/indococo-train-fr9}
 export INDOCOCO_OBS_EXT=1
@@ -144,12 +160,33 @@ fi
 $PYT $C/experiments/st_promote.py $F $BESTF > $F/PROMOTE.json 2>$F/promote.err
 echo "$(date) DONE $(cat $F/PROMOTE.json)" >> $F/run.log; touch $F/DONE
 log "$RUN finals: $(cat $F/PROMOTE.json)"
+# Report-only demos-against (c4c56a0 h2h fields) vs BEST and FR4, 200 kickoff games each,
+# with indococo-train-hunt (has the new fields). Never blocks the chain.
+HB=$R/code_fr9/bin/indococo-train-hunt
+if [[ -x $HB ]]; then
+  for o in BEST:$(cat $BESTF/FINAL_CKPT 2>/dev/null) FR4:$R/exp_FR4/checkpoints/1793481832; do
+    [[ -d "${o#*:}" ]] && timeout 3600 nice -n 19 $HB h2h $bestck ${o#*:} 200 8 > $F/demos_h2h_${o%%:*}.json 2> $F/demos_h2h_${o%%:*}.err || true
+  done
+  log "$RUN demos_against (cand/opp per 200 g): BEST $(grep -o "\"demos_against_a\":[0-9]*,\"demos_against_b\":[0-9]*" $F/demos_h2h_BEST.json 2>/dev/null) FR4 $(grep -o "\"demos_against_a\":[0-9]*,\"demos_against_b\":[0-9]*" $F/demos_h2h_FR4.json 2>/dev/null)"
+fi
 if [[ ! -f $R/ST_NO_FOLLOWUP ]]; then
   Q=$R/ST_QUEUE; next=$(head -1 $Q 2>/dev/null)
   if [[ -n "$next" ]]; then sed -i 1d $Q; else next="${RUN}r $VARIANT"; fi
   nr=${next%% *}; nv=${next#* }
   # If this run was promoted, later runs measure against it.
-  if $PYT -c "import json,sys;sys.exit(0 if json.load(open('$F/PROMOTE.json')).get('promote') else 1)"; then BESTF=$F; fi
+  # Else refresh BESTF from the most recent *_final with promote=true (mtime),
+  # so a manual override (e.g. ST10) beats a stale inherited BESTF.
+  if $PYT -c "import json,sys;sys.exit(0 if json.load(open('$F/PROMOTE.json')).get('promote') else 1)"; then BESTF=$F
+  else
+    nb=$($PYT -c "import json,glob,os
+c=[]
+for p in glob.glob('$R/*_final/PROMOTE.json'):
+  try:
+    if json.load(open(p)).get('promote'): c.append((os.path.getmtime(p), os.path.dirname(p)))
+  except Exception: pass
+print(max(c)[1] if c else '')")
+    [[ -n "$nb" ]] && BESTF=$nb
+  fi
   log "follow-up $nr ($nv) from $bestck, BEST=$BESTF"
   RUN=$nr VARIANT=$nv START=$(steps_in $bestck) START_CK=$bestck END= BESTF=$BESTF exec bash $C/experiments/st_launch.sh
 fi
