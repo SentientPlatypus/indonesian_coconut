@@ -625,9 +625,9 @@ impl RipplePolicy {
             main[i] /= NORM[i];
         }
         for other in &mut others {
-            other[0] /= 5000.0;
-            other[1] /= 5000.0;
-            other[2] /= 5000.0;
+            other[0] /= 2300.0;  // Python NORM[:3] = [2300]*3
+            other[1] /= 2300.0;
+            other[2] /= 2300.0;
             other[3] /= 2300.0;
             other[4] /= 2300.0;
             other[5] /= 2300.0;
@@ -636,9 +636,9 @@ impl RipplePolicy {
             other[8] /= 6.0;
         }
         for b in &mut ball {
-            b[0] /= 5000.0;
-            b[1] /= 5000.0;
-            b[2] /= 5000.0;
+            b[0] /= 2300.0;  // Python NORM[:3] = [2300]*3
+            b[1] /= 2300.0;
+            b[2] /= 2300.0;
             b[3] /= 2300.0;
             b[4] /= 2300.0;
             b[5] /= 2300.0;
@@ -647,9 +647,9 @@ impl RipplePolicy {
             b[8] /= 6.0;
         }
         for boost in &mut boosts {
-            boost[0] /= 5000.0;
-            boost[1] /= 5000.0;
-            boost[2] /= 5000.0;
+            boost[0] /= 2300.0;  // Python NORM[:3] = [2300]*3
+            boost[1] /= 2300.0;
+            boost[2] /= 2300.0;
         }
 
         (main, others, ball, actions, boosts, is_flipped)
