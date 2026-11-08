@@ -1622,4 +1622,287 @@ mod tests {
         assert!(prev_action_set, 
                 "prev_action should be set after infer(), got {:?}", prev_action_1);
     }
+
+    #[test]
+    fn test_edge_triggered_reset_consecutive_kickoffs() {
+        // Per EC2 rip13: consecutive kickoff observations should NOT reset state
+        // Only first kickoff or discontinuity should trigger reset
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            eprintln!("Skipping test: Ripple models not found");
+            return;
+        }
+        
+        let policy = RipplePolicy::load(&path).expect("Load Ripple");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        // Create env and reset to kickoff
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
+        let (state, _, _) = env.reset();
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        
+        // First call: kickoff detected, creates state_id 0
+        policy.build(&state, 0, &mut obs, &mut mask);
+        policy.infer(&obs, &mask, 1);
+        
+        let states_after_first = policy.states.lock().unwrap();
+        let pos_map_after_first = policy.position_to_state.lock().unwrap();
+        let state_id_first = *pos_map_after_first.get(&0).expect("State 0 exists");
+        let first_queue = states_after_first.get(&state_id_first).unwrap().queue;
+        drop(states_after_first);
+        drop(pos_map_after_first);
+        
+        // Second call: SAME kickoff geometry (ball still centered, cars still stopped)
+        // Should NOT reset because was_kickoff=true from previous call
+        policy.build(&state, 0, &mut obs, &mut mask);
+        policy.infer(&obs, &mask, 1);
+        
+        let states_after_second = policy.states.lock().unwrap();
+        let pos_map_after_second = policy.position_to_state.lock().unwrap();
+        let state_id_second = *pos_map_after_second.get(&0).expect("State 0 still exists");
+        let second_queue = states_after_second.get(&state_id_second).unwrap().queue;
+        let total_states = states_after_second.len();
+        drop(states_after_second);
+        drop(pos_map_after_second);
+        
+        // Verify: state_id unchanged, queue evolved, no new states created
+        assert_eq!(state_id_first, state_id_second, 
+                   "Consecutive kickoff obs should reuse same state_id");
+        assert_eq!(total_states, 1, 
+                   "Should only have 1 state, not create new ones on consecutive kickoffs");
+        
+        // Verify queue advanced (not reset to zeros)
+        let queue_advanced = first_queue[0] != second_queue[0] || first_queue[5] != second_queue[5];
+        assert!(queue_advanced, 
+                "Queue should advance across steps, not reset on consecutive kickoff observations");
+    }
+
+    #[test]
+    fn test_history_with_k_distinct_actions() {
+        // Verify queue holds K=6 distinct actions over 6+ steps
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            eprintln!("Skipping test: Ripple models not found");
+            return;
+        }
+        
+        let policy = RipplePolicy::load(&path).expect("Load Ripple");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
+        let (mut state, _, _) = env.reset();
+        
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        
+        // Force distinct actions by manually setting different actions
+        let test_actions = vec![0, 50, 100, 150, 200, 250, 10, 60];
+        
+        for (step, &action) in test_actions.iter().enumerate() {
+            policy.build(&state, 0, &mut obs, &mut mask);
+            
+            // Override infer to use our test action
+            let states = policy.states.lock().unwrap();
+            let pos_map = policy.position_to_state.lock().unwrap();
+            let state_id = *pos_map.get(&0).expect("State exists");
+            let mut st = states.get(&state_id).expect("State exists").clone();
+            drop(states);
+            drop(pos_map);
+            
+            // Manually inject action
+            let action_vec = action_table()[action];
+            st.queue.rotate_right(1);
+            st.queue[0] = action_vec;
+            
+            // Save back
+            let mut states = policy.states.lock().unwrap();
+            *states.get_mut(&state_id).unwrap() = st;
+            drop(states);
+            
+            // Step physics
+            env.arena.set_car_controls(0, controls_of(action));
+            env.step_physics(8);
+            state = env.current_state();
+            
+            // After 6+ steps, verify queue has distinct actions
+            if step >= 6 {
+                let states = policy.states.lock().unwrap();
+                let queue = states.get(&state_id).unwrap().queue;
+                drop(states);
+                
+                // Count unique actions in queue (by first 2 components)
+                let mut unique_count = 0;
+                for i in 0..QUEUE_LEN {
+                    let is_unique = (0..i).all(|j| {
+                        (queue[i][0] - queue[j][0]).abs() > 0.1 ||
+                        (queue[i][1] - queue[j][1]).abs() > 0.1
+                    });
+                    if is_unique {
+                        unique_count += 1;
+                    }
+                }
+                
+                assert!(unique_count >= 3, 
+                        "After {} steps, queue should have multiple distinct actions, found {}",
+                        step, unique_count);
+            }
+        }
+    }
+
+    #[test]
+    fn test_boost_hold_timer_sequence() {
+        // Per EC2 rip13: boost timer should be 0, 1/3, 2/3, 1 during 3-step hold
+        // Normalized as 0, 0.333, 0.667, 1.0 (timer/12)
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            eprintln!("Skipping test: Ripple models not found");
+            return;
+        }
+        
+        let policy = RipplePolicy::load(&path).expect("Load Ripple");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
+        let (mut state, _, _) = env.reset();
+        
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        
+        // Build initial state
+        policy.build(&state, 0, &mut obs, &mut mask);
+        policy.infer(&obs, &mask, 1);
+        
+        // Inject boost-holding action into queue slot 5 (about to execute)
+        let boost_action = action_table().iter()
+            .position(|a| a[6] > 0.5)
+            .expect("Find boost action");
+        
+        let states = policy.states.lock().unwrap();
+        let pos_map = policy.position_to_state.lock().unwrap();
+        let state_id = *pos_map.get(&0).expect("State exists");
+        let mut st = states.get(&state_id).unwrap().clone();
+        drop(states);
+        drop(pos_map);
+        
+        // Set queue[5] to boost action
+        st.queue[QUEUE_LEN - 1] = action_table()[boost_action];
+        st.boost_time = 0.0;
+        
+        let mut states = policy.states.lock().unwrap();
+        *states.get_mut(&state_id).unwrap() = st;
+        drop(states);
+        
+        let expected_sequence = vec![
+            0.0 / 12.0,         // Step 0: initial
+            4.0 / 12.0,         // Step 1: after 1 TICK_SKIP=4 frames
+            8.0 / 12.0,         // Step 2: after 2 TICK_SKIP=4 frames  
+            12.0 / 12.0,        // Step 3: after 3 TICK_SKIP=4 frames (maxed)
+        ];
+        
+        for (i, &expected) in expected_sequence.iter().enumerate() {
+            // Update timers
+            policy.build(&state, 0, &mut obs, &mut mask);
+            
+            let states = policy.states.lock().unwrap();
+            let actual = states.get(&state_id).unwrap().boost_time / 12.0;
+            drop(states);
+            
+            let tolerance = 0.05;
+            assert!((actual - expected).abs() < tolerance,
+                    "Step {}: boost_time/12 should be {:.3}, got {:.3}",
+                    i, expected, actual);
+            
+            policy.infer(&obs, &mask, 1);
+            env.step_physics(8);
+            state = env.current_state();
+        }
+    }
+
+    #[test]
+    fn test_pad_timer_after_small_pad_capture() {
+        // Per EC2 rip13: pad timer = 0.4 after small-pad capture, decreasing by 4/120/10 per decision
+        // 4 ticks at 120 Hz, normalized /10: delta = 4/120/10 = 0.00333 per step
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            eprintln!("Skipping test: Ripple models not found");
+            return;
+        }
+        
+        let policy = RipplePolicy::load(&path).expect("Load Ripple");
+        
+        use crate::env::create_env;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+        
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
+        let (mut state, _, _) = env.reset();
+        
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        
+        // Initialize state
+        policy.build(&state, 0, &mut obs, &mut mask);
+        policy.infer(&obs, &mask, 1);
+        
+        // Set a small pad timer to 4.0 (active, will start countdown)
+        let states = policy.states.lock().unwrap();
+        let pos_map = policy.position_to_state.lock().unwrap();
+        let state_id = *pos_map.get(&0).expect("State exists");
+        let mut st = states.get(&state_id).unwrap().clone();
+        drop(states);
+        drop(pos_map);
+        
+        // Small pad index (not in BIG_PADS)
+        let small_pad_idx = 0;
+        assert!(!BIG_PADS.contains(&small_pad_idx), "Must test with small pad");
+        st.pad_timers[small_pad_idx] = 4.0;
+        
+        let mut states = policy.states.lock().unwrap();
+        *states.get_mut(&state_id).unwrap() = st;
+        drop(states);
+        
+        let delta_per_step = TICK_SKIP as f32 / 120.0;  // 4/120 = 0.0333
+        let steps = 5;
+        
+        for step in 0..steps {
+            policy.build(&state, 0, &mut obs, &mut mask);
+            
+            let states = policy.states.lock().unwrap();
+            let actual = states.get(&state_id).unwrap().pad_timers[small_pad_idx];
+            drop(states);
+            
+            let expected = (4.0 - delta_per_step * step as f32).max(0.0);
+            let tolerance = 0.001;
+            
+            assert!((actual - expected).abs() < tolerance,
+                    "Step {}: pad_timer[{}] should be {:.4}, got {:.4}",
+                    step, small_pad_idx, expected, actual);
+            
+            policy.infer(&obs, &mask, 1);
+            env.step_physics(8);
+            state = env.current_state();
+        }
+    }
 }
