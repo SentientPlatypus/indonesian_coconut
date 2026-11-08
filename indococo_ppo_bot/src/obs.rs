@@ -136,7 +136,13 @@ pub const BOOST_LOCATIONS: [(f32, f32); 34] = [
 ];
 
 /// RocketSim pad index for each rlgym BOOST_LOCATIONS entry.
+/// Returns empty vec if boost_pads is empty (e.g. replay with fake GameState).
 pub fn pad_order(state: &GameState) -> Vec<usize> {
+    if state.boost_pads.is_empty() {
+        // No pads available - return empty (caller should handle gracefully)
+        return Vec::new();
+    }
+    
     BOOST_LOCATIONS
         .iter()
         .map(|&(x, y)| {

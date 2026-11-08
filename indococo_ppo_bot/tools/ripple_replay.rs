@@ -128,10 +128,33 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
             })
             .collect(),
         boost_pads: {
-            // Get pad states from arena
-            // Note: RocketSim arena pads are always initialized to default active state
-            // Ripple tracks timers internally, not from arena
-            vec![]
+            // Build boost_pads from dump data (EC2 rip14: was empty, caused crash)
+            // Use BOOST_LOCATIONS for positions, dump data for states
+            use rlgymppo::rlgym::rocketsim::{BoostPadInfo, BoostPadState};
+            use indococo_bot::obs::BOOST_LOCATIONS;
+            
+            arena_state.pads.iter().enumerate().map(|(i, pad)| {
+                // Get canonical position from BOOST_LOCATIONS
+                let (x, y) = if i < BOOST_LOCATIONS.len() {
+                    BOOST_LOCATIONS[i]
+                } else {
+                    (0.0, 0.0)  // Fallback
+                };
+                
+                let info = BoostPadInfo {
+                    pos: Vec3A::new(x, y, 73.0),  // Standard height
+                    is_big: pad.timer > 5.0,  // Big pads have longer respawn
+                };
+                
+                let state = BoostPadState {
+                    is_active: pad.is_active,
+                    cooldown: pad.timer,
+                    prev_locked_car_id: 0,
+                    cur_locked_car_id: 0,
+                };
+                
+                (info, state)
+            }).collect()
         },
         events: Vec::new(),
     }
@@ -475,29 +498,18 @@ fn main() {
             boosts_first_div = Some((idx, (boosts_i, boosts_j)));
         }
         
-        // Rust action was already computed by infer() call above
-        // This exercises the same queue advancement path as live training
-        
         // Compare SELECTED action (what the model chose this step)
+        // Per EC2 rip14 fix: infer() now returns SELECTED (was returning executed queue[5])
         let selected_match = rust_action == record.python_action;
         if selected_match {
             action_selected_matches += 1;
         }
         
-        // Compare EXECUTED controls (what will actually be sent to game)
-        // Python dumps the 8-float controls vector that was used
-        let rust_controls = indococo_bot::ripple::controls_of(rust_action);
-        let rust_controls_vec = vec![
-            rust_controls.throttle,
-            rust_controls.steer,
-            rust_controls.pitch,
-            rust_controls.yaw,
-            rust_controls.roll,
-            if rust_controls.jump { 1.0 } else { 0.0 },
-            if rust_controls.boost { 1.0 } else { 0.0 },
-            if rust_controls.handbrake { 1.0 } else { 0.0 },
-        ];
-        let controls_match = rust_controls_vec.iter()
+        // Compare EXECUTED controls (what was actually applied to the game)
+        // Use get_executed_controls() to get prev_action (the controls that executed)
+        let rust_executed = ripple.get_executed_controls(&state, car_idx)
+            .unwrap_or([0.0; 8]);
+        let controls_match = rust_executed.iter()
             .zip(&record.python_controls)
             .all(|(r, p)| (r - p).abs() < 0.01);
         if controls_match {

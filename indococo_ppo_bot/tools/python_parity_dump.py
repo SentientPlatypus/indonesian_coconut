@@ -61,18 +61,28 @@ def dump_arena_state(gs, tick):
             'is_demoed': player.is_demoed,
         })
     
-    # Boost pads - get real availability from RocketSim state
-    # Note: gs has boost pad info but observer also tracks internal timers
+    # Boost pads - use boost_pads per upstream obs.py:352 (NOT inverted_boost_pads)
+    # Per EC2 rip14: inverted_boost_pads was REVERSED (376 mismatches/side, 0 after fix)
+    # Dump real pad timers from observer internal state if available
     pads = []
     for i in range(34):
-        # Availability comes from RocketSim state
-        # Timer comes from observer internal state (not directly exposed in V1)
-        # For parity, we need both - use RocketSim availability as ground truth
-        pad_active = gs.inverted_boost_pads[i] == 1.0  # V1 inverted_boost_pads is 0/1
+        # Availability: boost_pads[i] == 1.0 means ACTIVE (upstream obs.py:352)
+        pad_active = gs.boost_pads[i] == 1.0
+        
+        # Timer: try to access observer internal state (inverted_boost_timers if available)
+        # If not accessible, use 0.0 placeholder
+        try:
+            # Ripple observer stores inverted_boost_timers (normalized 0-1)
+            # Denormalize by *10 to get raw timer value
+            timer_normalized = ripple.obs.inverted_boost_timers[i]
+            timer_raw = timer_normalized * 10.0
+        except (AttributeError, IndexError):
+            timer_raw = 0.0  # Fallback if not accessible
+        
         pads.append({
             'index': i,
             'is_active': bool(pad_active),
-            'timer': 0.0,  # Observer internal, not exposed by V1 API
+            'timer': float(timer_raw),
         })
     
     return {
