@@ -815,9 +815,16 @@ impl ExternalPolicy for RipplePolicy {
                     st.queue[QUEUE_LEN - 1] = new_action;
                 }
                 st.prev_action = st.queue[0];
+                
+                // Return the ACTION INDEX that should be APPLIED (from queue[0]), not the chosen action
+                // Need to find which action index corresponds to prev_action
+                let applied_action = table.iter().position(|&a| {
+                    a.iter().zip(st.prev_action.iter()).all(|(x, y)| (x - y).abs() < 0.001)
+                }).unwrap_or(action);
+                actions.push(applied_action);
+            } else {
+                actions.push(action);
             }
-
-            actions.push(action);
         }
 
         actions
