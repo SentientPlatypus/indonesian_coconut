@@ -558,28 +558,47 @@ impl RipplePolicy {
         }
 
         // Apply side inversion (flip if on left side)
+        // Python: INVERT_SIDE = [-1,1,1]*2 + [1,-1,-1] + [-1,1,1]*2 + [1]*17
+        // Inverts: pos.x(0), vel.x(3), angvel.y(7), angvel.z(8), forward.x(9), up.x(12)
         let is_flipped = main[0] < 0.0;
         if is_flipped {
-            for idx in [1, 4, 7, 10, 13] {
-                main[idx] *= -1.0;
-            }
+            // Main player: invert x for pos/vel/forward/up, invert y,z for angvel
+            main[0] *= -1.0;  // pos.x
+            main[3] *= -1.0;  // vel.x
+            main[7] *= -1.0;  // angvel.y
+            main[8] *= -1.0;  // angvel.z
+            main[9] *= -1.0;  // forward.x
+            main[12] *= -1.0; // up.x
+            
+            // Others: INVERT_SIDE_RELATIVE = [1,-1,1]*2 + [-1,1,-1] + [1,-1,1]*2 + ...
+            // Inverts: pos.y(1), vel.y(4), angvel.x(6), angvel.z(8), forward.y(10), up.y(13)
             for other in &mut others {
-                for idx in [1, 4, 7, 10, 13] {
-                    other[idx] *= -1.0;
-                }
+                other[1] *= -1.0;  // pos.y
+                other[4] *= -1.0;  // vel.y
+                other[6] *= -1.0;  // angvel.x
+                other[8] *= -1.0;  // angvel.z
+                other[10] *= -1.0; // forward.y
+                other[13] *= -1.0; // up.y
             }
+            
+            // Ball: INVERT_SIDE_RELATIVE for ball (pos.y, vel.y, angvel.x)
             for b in &mut ball {
-                for idx in [1, 4, 7] {
-                    b[idx] *= -1.0;
-                }
+                b[1] *= -1.0;  // pos.y
+                b[4] *= -1.0;  // vel.y
+                b[6] *= -1.0;  // angvel.x
             }
+            
+            // Boosts: invert y
             for boost in &mut boosts {
                 boost[1] *= -1.0;
             }
+            
+            // Actions: INVERT_SIDE_ACTIONS = [1,-1,1,-1,-1,1,1,1]
+            // Inverts: steer(1), yaw(3), roll(4)
             for a in &mut actions {
-                a[1] *= -1.0;
-                a[3] *= -1.0;
-                a[4] *= -1.0;
+                a[1] *= -1.0;  // steer
+                a[3] *= -1.0;  // yaw
+                a[4] *= -1.0;  // roll
             }
             main[30] = 1.0; // is_flipped
         }
