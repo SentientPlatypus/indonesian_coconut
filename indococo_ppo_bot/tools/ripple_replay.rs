@@ -128,10 +128,17 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
             })
             .collect(),
         boost_pads: {
-            // EC2 rip15: BoostPadConfig and BoostPadState fields don't match dump format
-            // Ripple tracks pad timers internally, not from arena
-            // Leave empty - pad_order() is now robust to empty pads (:139-158 obs.rs)
-            vec![]
+            // Populate from dumped pad states to test pad-timer parity
+            let mut pads = vec![];
+            for pad_data in &arena_state.pads {
+                // Get the RocketSim pad config and state
+                let config = *arena.get_boost_pad_config(pad_data.index);
+                let mut state = arena.get_boost_pad_state(pad_data.index);
+                // Override is_active from dump
+                state.set_is_active(pad_data.is_active);
+                pads.push((config, state));
+            }
+            pads
         },
         events: Vec::new(),
     }

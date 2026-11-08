@@ -208,6 +208,10 @@ pub struct RipplePolicy {
     build_records: Mutex<HashMap<usize, (usize, usize)>>,
     // Batch counter: increments after each infer() for edge-trigger reset detection
     batch_counter: Mutex<usize>,
+    // Replay-only: deterministic RNG override for testing (None = use normal RNG)
+    // Only available in cfg(test) to prevent use in training
+    #[cfg(test)]
+    replay_rng_override: Mutex<Option<f32>>,
 }
 
 impl RipplePolicy {
@@ -240,6 +244,8 @@ impl RipplePolicy {
             rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
             build_records: Mutex::new(HashMap::new()),
             batch_counter: Mutex::new(0),
+            #[cfg(test)]
+            replay_rng_override: Mutex::new(None),
         })
     }
 
@@ -251,6 +257,14 @@ impl RipplePolicy {
     /// Set RNG seed for deterministic kickoff sampling (e.g. 10000-10049 for paired tests)
     pub fn set_seed(&self, seed: u64) {
         *self.rng.lock().unwrap() = rand::rngs::StdRng::seed_from_u64(seed);
+    }
+    
+    /// Set replay-only RNG override for deterministic kickoff sampling in tests
+    /// Pass the python_uniform_u value to force the same kickoff action
+    /// Only available in cfg(test) to prevent use in training
+    #[cfg(test)]
+    pub fn set_replay_rng_override(&self, u: Option<f32>) {
+        *self.replay_rng_override.lock().unwrap() = u;
     }
 
     // detect_reset() removed - dead code, was only used in old eval_player path
@@ -339,19 +353,16 @@ impl RipplePolicy {
         }
         st.demo_timer = (st.demo_timer - TICK_SKIP as f32 / 120.0).max(0.0);
 
-        // Read action ABOUT TO execute (queue[5]) per upstream obs.py:368-379
-        // NOT prev_action (already executed)
-        let about_to_execute = if !st.queue[QUEUE_LEN - 1][0].is_nan() {
-            st.queue[QUEUE_LEN - 1]
-        } else {
-            [0.0; 8]
-        };
-        let prev_action = st.prev_action;
-
         // Boost timer (obs.py:368-379, normalized /12 at :67,:277)
-        if about_to_execute[6] == 0.0 && st.boost_time == 12.0 {
+        // Read from prev_action (the executed action from previous step)
+        // Python reads from executed queue[-1] after the queue has advanced
+        let prev_action = st.prev_action;
+        
+        // Increment by TICK_SKIP per decision (counts ticks, not decisions)
+        // After 1 decision with boost held: boost_time = 4, normalized = 4/12 = 0.333
+        if prev_action[6] == 0.0 && st.boost_time >= 12.0 {
             st.boost_time = 0.0;
-        } else if st.boost_time != 0.0 || about_to_execute[6] > 0.5 {
+        } else if st.boost_time > 0.0 || prev_action[6] > 0.5 {
             st.boost_time = (st.boost_time + TICK_SKIP as f32).min(12.0);
         } else {
             st.boost_time = 0.0;
@@ -789,9 +800,9 @@ impl ExternalPolicy for RipplePolicy {
         let is_demo_related = st.was_demoed || me.is_demoed;
         let unexplained_car_teleport = car_teleported && !is_demo_related;
         
-        let batch_gap = st.last_batch > 0 && st.last_batch + 1 < current_batch;
-        
-        let needs_reset = kickoff_edge || ball_teleported || unexplained_car_teleport || batch_gap;
+        // Per task: batch_gap alone does NOT trigger reset; require geometric evidence
+        // (kickoff edge or large normalized displacement)
+        let needs_reset = kickoff_edge || ball_teleported || unexplained_car_teleport;
         
         if needs_reset {
             // Reset semantics per EC2 rip14:
@@ -981,8 +992,26 @@ impl ExternalPolicy for RipplePolicy {
                 // Stochastic sampling using Python's method:
                 // cdf = np.cumsum(np.exp(log_policy))
                 // return min((random >= cdf).sum(), N-1)
-                let mut rng = self.rng.lock().unwrap();
-                let u: f32 = (rng.next_u64() as f64 / std::u64::MAX as f64) as f32;
+                
+                // Check for replay RNG override first (test-only)
+                let u: f32 = {
+                    #[cfg(test)]
+                    {
+                        let override_guard = self.replay_rng_override.lock().unwrap();
+                        if let Some(override_u) = *override_guard {
+                            override_u
+                        } else {
+                            drop(override_guard);
+                            let mut rng = self.rng.lock().unwrap();
+                            (rng.next_u64() as f64 / std::u64::MAX as f64) as f32
+                        }
+                    }
+                    #[cfg(not(test))]
+                    {
+                        let mut rng = self.rng.lock().unwrap();
+                        (rng.next_u64() as f64 / std::u64::MAX as f64) as f32
+                    }
+                };
                 
                 // Compute cumulative distribution
                 let mut cdf = vec![0.0f32; N_ACTIONS];
