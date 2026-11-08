@@ -76,7 +76,7 @@ while :; do
   sed -e "s|@RUN@|$X|g" -e "s|@ITERATIONS@|$left|" -e "s|@WARM@|$((START0 + ${WARM:-10000000}))|" -e "s|@HOLD@|$((START0 + HOLDREL))|" \
       -e "s|@SNAP@|$SNAP/train.f32|" -e "s|@TPI@|$TPI|" -e "s|@MB@|$MB|" -e "s|@LR@|$LR|g" -e "s|@ENT@|$ENT|" -e "s|@GAMMA@|$GAMMA|" \
       -e "s|@OPPCH@|$OPPCH|" -e "s|@DECAY@|$DECAY|" -e "s|@MINLR@|$MINLR|" -e "s|^threads = .*|threads = $THREADS|" -e "s|^games = .*|games = $GAMES|" \
-      $X/cfg/experiments/train_st.toml > $X/train_st.toml
+      $X/cfg/experiments/${TRAIN_TMPL:-train_st.toml} > $X/train_st.toml
   # Galactus (Rust port, src/galactus.rs) as a league opponent when the variant sets GAL_WEIGHT.
   if [[ -n "${GAL_WEIGHT:-}" ]]; then
     printf "\n[[opponents.external]]\nname = \"galactus\"\nkind = \"galactus\"\npath = \"%s\"\nweight = %s\n" "${GAL_DIR:-/home/ubuntu/eval_bots/galactus/rust}" "$GAL_WEIGHT" >> $X/train_st.toml
@@ -124,10 +124,11 @@ PY
   echo LOW=$LOW > $X/guard.env
 done
 touch $X/TRAIN_DONE
-# Final candidate = enhanced multi-candidate selection (st_select_final.py) with top-N
-# re-evaluation (500g vs BEST + 500g vs Galactus, combined scoring). Falls back to the
-# old rule (best h2h_BEST_200 with FR4 >= 48%) on failure. Configure via ST_REEVAL_* env vars.
-bestck=$($PYT $C/experiments/st_select_final.py $X/logs/mid.jsonl "$PYT" "$T" "$X" "$GALP" "$PROCS")
+# Final candidate = multi-candidate selection (st_select_final.py, 79614e5): top-N chunks by
+# h2h_BEST_200 (FR4 >= 48%) re-evaluated at 500 g vs BEST + 500 g vs Galactus, picked by
+# 0.6*h2h + 0.4*Galactus. Falls back to the old rule (best h2h_BEST_200) on any failure.
+# BIN/R passed so its export step uses this run's binary. Configure via ST_REEVAL_*.
+bestck=$(BIN=$B R=$R OMP_NUM_THREADS=1 nice -n 19 $PYT $C/experiments/st_select_final.py $X/logs/mid.jsonl "$PYT" "$T" "$X" "$GALP" "$PROCS" 2>>$X/logs/select_final.log)
 [[ -n "$bestck" && -d "$bestck" ]] || bestck=$X/checkpoints/$(latest)
 F=$R/${RUN,,}_final; mkdir -p $F; echo $bestck > $F/FINAL_CKPT; echo "$(steps_in $bestck)" > $F/STEPS
 CAND=$F/final_policy.safetensors; export_to $bestck $CAND; sha256sum $CAND > $F/sha.txt

@@ -1498,3 +1498,18 @@ weight = 0.05
 ```
 
 Total setter weight auto-normalizes. A typical recipe: reduce kickoff from 0.45 to 0.25, add aerial_defense 0.15 + demo_threat 0.05 to keep focused on the weakness profile.
+
+## ST19 (queued 2026-11-08): ST18 recipe + defensive state setters
+
+- Why: diag_gal (200 g ST16 vs Galactus) showed 36% of conceded goals were aerial and 29% came right after we were demoed.
+- Same as ST18: pruned league, GAL_WEIGHT 4.5 (Galactus about 20% of iterations), MEGA 2.0, OPPCH 0.60. Chains from ST18's selected final.
+- New: `aerial_defense` 0.15 and `demo_threat` 0.05 state setters from 57dd650. Normal play is scaled x0.8 to kickoff 0.36, random 0.12 + 0.12, replay 0.20 (`experiments/train_st19.toml`, selected with `TRAIN_TMPL`).
+- Binary: `indococo-train-gal2`, built at 57dd650, which includes the d998340 mega2 Megabyte fix.
+- Finals selection: multi-candidate re-eval (`st_select_final.py`; top 3 at 500 g vs BEST + 500 g vs Galactus, score 0.6/0.4).
+- Promotion: absolute Galactus floor 0.27 plus a -0.08 relative guard (`st_promote.py`).
+- Smoke (`rates`, 20k CPU steps each, ST16 ckpt): both setters parse and run with no panic. aerial_defense ball z 300-1500 with velocity toward the blue goal by construction.
+- Known setter issues, to be fixed by a cloud agent:
+  - The aerial_defense attacker spawns on the goal side of the ball (`ball_pos - (-to_goal)*d`), not behind it.
+  - About 0.4% of attacker spawns land below the floor.
+  - The `demo_threat.supersonic` field is unused.
+  - Both drills always defend blue.
