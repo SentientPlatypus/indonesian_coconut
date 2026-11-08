@@ -507,7 +507,7 @@ impl RipplePolicy {
         let rot = me.phys.rot_mat;
         let me_pos = pos;
         let me_vel = vel;
-
+        
         // Transform others
         for other in &mut others {
             let opos = Vec3A::new(other[0], other[1], other[2]) - me_pos;
@@ -577,6 +577,7 @@ impl RipplePolicy {
         // Apply side inversion (flip if on left side)
         // Python: INVERT_SIDE = [-1,1,1]*2 + [1,-1,-1] + [-1,1,1]*2 + [1]*17
         // Inverts: pos.x(0), vel.x(3), angvel.y(7), angvel.z(8), forward.x(9), up.x(12)
+        
         let is_flipped = main[0] < 0.0;
         if is_flipped {
             // Main player: invert x for pos/vel/forward/up, invert y,z for angvel

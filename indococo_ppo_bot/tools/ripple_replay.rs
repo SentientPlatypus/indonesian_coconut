@@ -78,8 +78,18 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
     ball_state.phys.ang_vel = Vec3A::from_array(arena_state.ball.ang_vel);
     arena.set_ball_state(ball_state);
     
-    // Set cars - map Python car IDs (1-6) to arena indices (0-5)
-    for car_data in &arena_state.cars {
+    // Set cars - remap car IDs to sequential arena indices
+    // The dump has arbitrary car IDs (e.g. 1, 5), but arena uses 0, 1, 2...
+    // Sort by ID to get consistent mapping
+    let mut car_id_to_idx: Vec<(u32, usize)> = arena_state.cars.iter()
+        .map(|c| c.id)
+        .enumerate()
+        .map(|(idx, id)| (id, idx))
+        .collect();
+    car_id_to_idx.sort_by_key(|(id, _)| *id);
+    
+    for (arena_idx, (_, dump_idx)) in car_id_to_idx.iter().enumerate() {
+        let car_data = &arena_state.cars[*dump_idx];
         let mut car_state = CarState::DEFAULT;
         car_state.phys.pos = Vec3A::from_array(car_data.pos);
         car_state.phys.vel = Vec3A::from_array(car_data.vel);
@@ -98,8 +108,6 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
         car_state.has_double_jumped = car_data.has_double_jumped;
         car_state.has_flipped = car_data.has_flipped;
         
-        // Convert car ID to arena index (0-based)
-        let arena_idx = (car_data.id - 1) as usize;
         arena.set_car_state(arena_idx, car_state.core());
     }
     
@@ -193,10 +201,13 @@ fn main() {
     // Create arena with cars
     let mut arena = Arena::new(GameMode::Soccar);
     
-    // Add 6 cars (3 blue, 3 orange)
+    // Add only the cars that exist in the dump (usually 2: 1v1)
+    // We'll determine the actual cars from the first record
+    let num_cars_in_dump = records[0].arena_state.cars.len();
+    let cars_per_team = (num_cars_in_dump + 1) / 2;  // Round up for odd numbers
     for team_idx in 0..2 {
         let team = if team_idx == 0 { Team::Blue } else { Team::Orange };
-        for _ in 0..3 {
+        for _ in 0..cars_per_team {
             arena.add_car(team, CarBodyConfig::OCTANE);
         }
     }
