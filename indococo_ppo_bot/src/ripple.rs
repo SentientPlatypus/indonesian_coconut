@@ -739,7 +739,7 @@ impl ExternalPolicy for RipplePolicy {
                 Err(_) => { actions.push(0); continue; }
             };
             
-            let (_, policy_logits) = match policy_outputs["output"].try_extract_tensor::<f32>() {
+            let (_, policy_logits) = match policy_outputs["logits"].try_extract_tensor::<f32>() {
                 Ok(t) => t,
                 Err(_) => { actions.push(0); continue; }
             };
@@ -778,7 +778,7 @@ impl ExternalPolicy for RipplePolicy {
                 Err(_) => { actions.push(0); continue; }
             };
             
-            let (_, base_logits) = match base_outputs["output"].try_extract_tensor::<f32>() {
+            let (_, base_logits) = match base_outputs["logits"].try_extract_tensor::<f32>() {
                 Ok(t) => t,
                 Err(_) => { actions.push(0); continue; }
             };
@@ -880,6 +880,9 @@ mod tests {
     #[test]
     #[cfg(feature = "ripple")]
     fn test_ripple_1000_ticks() {
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+        
         let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
         if !path.exists() || !path.join("ripple-v1.1.onnx").exists() {
             eprintln!("Skipping test_ripple_1000_ticks: models not found at {:?}", path);
@@ -888,11 +891,11 @@ mod tests {
 
         let policy = RipplePolicy::load(&path).expect("Failed to load Ripple");
 
-        use crate::env::{BotEnv, create_env};
+        use crate::env::create_env;
         use crate::rewards::RewardConfig;
         use crate::setters::default_mix;
 
-        let mut env = create_env(&RewardConfig::default(), default_mix());
+        let mut env = create_env(&RewardConfig::default(), &default_mix());
         let (mut state, mut obs, _) = env.reset();
 
         let obs_width = policy.obs_width();
@@ -902,11 +905,10 @@ mod tests {
         for _ in 0..125 { // 125 * 8 = 1000 ticks
             policy.build(&state, 0, &mut ripple_obs, &mut ripple_mask);
             let actions = policy.infer(&ripple_obs, &ripple_mask, 1);
-            let controls = policy.controls(actions[0]);
+            let action = actions[0];
 
-            let mut actions_map = std::collections::HashMap::new();
-            actions_map.insert(0, controls);
-            let res = env.step(actions_map);
+            let acts = vec![action];
+            let res = env.step(&state, &acts);
             state = res.state;
             obs = res.obs;
         }

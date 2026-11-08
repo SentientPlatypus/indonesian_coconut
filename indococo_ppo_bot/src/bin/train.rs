@@ -1901,9 +1901,8 @@ fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize)
     out
 }
 
-/// `ripple-dump`: writes Ripple's 5 ONNX input tensors (main, others, ball, actions, boosts)
-/// plus the chosen action as JSONL, for a sequence of random states. Python parity tool can
-/// feed these to botpack5.py::Ripple without FFI.
+/// `ripple-dump`: writes full game state plus Ripple's chosen action as JSONL.
+/// Python parity tool rebuilds obs from state and compares tensors + action.
 #[cfg(feature = "ripple")]
 fn ripple_dump(rdir: &Path, steps: usize, out: &Path) {
     use indococo_bot::ripple as rx;
@@ -1922,22 +1921,57 @@ fn ripple_dump(rdir: &Path, steps: usize, out: &Path) {
         let actions = ripple.infer(&robs, &rmask, 1);
         let action = actions[0];
         
-        // Extract the 5 tensors from flat obs
+        // Extract Rust tensors
         let mut offset = 0;
-        let main: Vec<f32> = robs[offset..offset+32].to_vec(); offset += 32;
-        let others: Vec<f32> = robs[offset..offset+5*21].to_vec(); offset += 5*21;
-        let ball: Vec<f32> = robs[offset..offset+6*9].to_vec(); offset += 6*9;
-        let action_queue: Vec<f32> = robs[offset..offset+6*8].to_vec(); offset += 6*8;
-        let boosts: Vec<f32> = robs[offset..offset+34*5].to_vec();
+        let rust_main: Vec<f32> = robs[offset..offset+32].to_vec(); offset += 32;
+        let rust_others: Vec<f32> = robs[offset..offset+5*21].to_vec(); offset += 5*21;
+        let rust_ball: Vec<f32> = robs[offset..offset+6*9].to_vec(); offset += 6*9;
+        let rust_actions: Vec<f32> = robs[offset..offset+6*8].to_vec(); offset += 6*8;
+        let rust_boosts: Vec<f32> = robs[offset..offset+34*5].to_vec();
+        
+        // Serialize full game state
+        let cars: Vec<_> = state.cars.iter().map(|(ci, c)| serde_json::json!({
+            "team": ci.team as u8,
+            "pos": [c.phys.pos.x, c.phys.pos.y, c.phys.pos.z],
+            "vel": [c.phys.vel.x, c.phys.vel.y, c.phys.vel.z],
+            "ang_vel": [c.phys.ang_vel.x, c.phys.ang_vel.y, c.phys.ang_vel.z],
+            "rot_mat": [
+                [c.phys.rot_mat.x_axis.x, c.phys.rot_mat.x_axis.y, c.phys.rot_mat.x_axis.z],
+                [c.phys.rot_mat.y_axis.x, c.phys.rot_mat.y_axis.y, c.phys.rot_mat.y_axis.z],
+                [c.phys.rot_mat.z_axis.x, c.phys.rot_mat.z_axis.y, c.phys.rot_mat.z_axis.z],
+            ],
+            "boost": c.boost,
+            "on_ground": c.is_on_ground(),
+            "has_flipped": c.has_flipped,
+            "has_double_jumped": c.has_double_jumped,
+            "has_jumped": c.has_jumped,
+            "air_time_since_jump": c.air_time_since_jump,
+            "is_demoed": c.is_demoed,
+            "controls": [c.controls.throttle, c.controls.steer, c.controls.pitch, c.controls.yaw,
+                c.controls.roll, f32::from(c.controls.jump), f32::from(c.controls.boost), f32::from(c.controls.handbrake)],
+        })).collect();
+        
+        let pads: Vec<_> = state.boost_pads.iter().map(|(_, ps)| serde_json::json!({
+            "is_active": ps.is_active(),
+            "cooldown": ps.cooldown,
+        })).collect();
         
         let line = serde_json::json!({
             "step": step,
-            "main": main,
-            "others": others,
-            "ball": ball,
-            "actions": action_queue,
-            "boosts": boosts,
-            "action": action,
+            "tick": state.tick_count,
+            "ball": {
+                "pos": [state.ball.phys.pos.x, state.ball.phys.pos.y, state.ball.phys.pos.z],
+                "vel": [state.ball.phys.vel.x, state.ball.phys.vel.y, state.ball.phys.vel.z],
+                "ang_vel": [state.ball.phys.ang_vel.x, state.ball.phys.ang_vel.y, state.ball.phys.ang_vel.z],
+            },
+            "cars": cars,
+            "pads": pads,
+            "rust_main": rust_main,
+            "rust_others": rust_others,
+            "rust_ball": rust_ball,
+            "rust_actions": rust_actions,
+            "rust_boosts": rust_boosts,
+            "rust_action": action,
         });
         writeln!(f, "{}", serde_json::to_string(&line).unwrap()).expect("write");
         
