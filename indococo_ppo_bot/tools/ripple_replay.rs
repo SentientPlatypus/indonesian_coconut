@@ -383,17 +383,32 @@ fn main() {
             }
             count.min(rust_policy_logits.len() - 1)
         } else {
-            // KL mode: argmax(policy - base)
-            let mut best_idx = 0;
-            let mut best_kl = f32::NEG_INFINITY;
+            // KL mode from upstream Rolv-Arild/Ripple-RLBot @ 7ca4273a agent.py:87-88
+            // weight = log_policy if mode == ActionMode.KL else log_base
+            // return (np.exp(weight) * (log_policy-log_base)).argmax(-1)
+            let log_policy: Vec<f32> = {
+                let max_l = rust_policy_logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let shifted: Vec<f32> = rust_policy_logits.iter().map(|&x| x - max_l).collect();
+                let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
+                let log_sum_exp = sum_exp.ln();
+                shifted.iter().map(|&x| x - log_sum_exp).collect()
+            };
+            let log_base: Vec<f32> = {
+                let max_l = rust_base_logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let shifted: Vec<f32> = rust_base_logits.iter().map(|&x| x - max_l).collect();
+                let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
+                let log_sum_exp = sum_exp.ln();
+                shifted.iter().map(|&x| x - log_sum_exp).collect()
+            };
+            let mut kl_scores = vec![0.0f32; rust_policy_logits.len()];
             for j in 0..rust_policy_logits.len() {
-                let kl = rust_policy_logits[j] - rust_base_logits[j];
-                if kl > best_kl {
-                    best_kl = kl;
-                    best_idx = j;
-                }
+                let weight = log_policy[j];  // weight = log_policy for KL mode
+                kl_scores[j] = weight.exp() * (log_policy[j] - log_base[j]);
             }
-            best_idx
+            kl_scores.iter().enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .map(|(idx, _)| idx)
+                .unwrap()
         };
         
         let action_match = rust_action == record.python_action;

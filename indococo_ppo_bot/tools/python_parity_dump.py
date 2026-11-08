@@ -155,23 +155,24 @@ def main():
         policy_logits = ripple.agent.model(obs_batch)[0]  # Get first element of batch (276 logits)
         base_logits = ripple.agent.base(obs_batch)[0]
         
-        # For deterministic replay: record the random draw
+        # Use actual Ripple agent.act() selection logic
+        # From Rolv-Arild/Ripple-RLBot @ 7ca4273a agent.py:76-88
         if stochastic:
-            # Sample u ~ Uniform(0, 1) and compute action from it
+            # Record the random draw for deterministic replay
             uniform_u = np.random.uniform(0.0, 1.0)
-            log_probs = policy_logits - np.logaddexp.reduce(policy_logits)
-            probs = np.exp(log_probs)
-            cdf = np.cumsum(probs)
-            chosen_action = int((uniform_u >= cdf).sum())
-            chosen_action = min(chosen_action, len(probs) - 1)
+            log_policy = policy_logits - np.logaddexp.reduce(policy_logits)
+            cdf = np.cumsum(np.exp(log_policy))
+            chosen_action = int(min((uniform_u >= cdf).sum(), len(policy_logits) - 1))
         else:
             uniform_u = None
-            # KL mode: mix policy and base logits
-            kl_logits = policy_logits - base_logits
-            chosen_action = int(np.argmax(kl_logits))
-        
-        # Store action for next step (don't call agent.act since we already computed it)
-        # chosen_action = ripple.agent.act(obs_batch, stochastic=stochastic)[0]  # Get first element of batch
+            # KL mode from agent.py:87-88:
+            # weight = log_policy if mode == ActionMode.KL else log_base
+            # return (np.exp(weight) * (log_policy-log_base)).argmax(-1)
+            log_policy = policy_logits - np.logaddexp.reduce(policy_logits)
+            log_base = base_logits - np.logaddexp.reduce(base_logits)
+            weight = log_policy  # For KL mode
+            kl_scores = np.exp(weight) * (log_policy - log_base)
+            chosen_action = int(np.argmax(kl_scores))
         
         # Update actions
         ripple.actions = ripple.parser.parse_actions(np.array([chosen_action]), gs)

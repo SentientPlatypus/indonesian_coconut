@@ -946,11 +946,15 @@ impl ExternalPolicy for RipplePolicy {
                 }
                 count.min(N_ACTIONS - 1)
             } else {
-                // KL selection (argmax)
+                // KL selection from upstream Rolv-Arild/Ripple-RLBot @ 7ca4273a agent.py:87-88
+                // weight = log_policy if mode == ActionMode.KL else log_base
+                // return (np.exp(weight) * (log_policy-log_base)).argmax(-1)
                 let log_base = log_softmax(&base_logits);
                 let mut kl_scores = vec![0.0f32; N_ACTIONS];
                 for j in 0..N_ACTIONS {
-                    kl_scores[j] = log_policy[j].exp() * (log_policy[j] - log_base[j]);
+                    // weight = log_policy for KL mode
+                    let weight = log_policy[j];
+                    kl_scores[j] = weight.exp() * (log_policy[j] - log_base[j]);
                 }
                 kl_scores
                     .iter()
@@ -1059,33 +1063,49 @@ impl RipplePolicy {
         let actions_vec = obs[191..239].to_vec();
         let boosts_vec = obs[239..409].to_vec();
         
-        let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice()))?;
-        let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice()))?;
-        let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice()))?;
-        let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice()))?;
-        let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice()))?;
+        // Run policy model - create inputs, lock, run, extract, drop lock
+        let policy_logits = {
+            let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice()))?;
+            let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice()))?;
+            let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice()))?;
+            let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice()))?;
+            let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice()))?;
+            
+            let mut policy = self.policy.lock().unwrap();
+            let policy_outputs = policy.run(inputs![
+                "main" => main_input,
+                "others" => others_input,
+                "ball" => ball_input,
+                "actions" => actions_input,
+                "boosts" => boosts_input,
+            ])?;
+            let (_, logits) = policy_outputs["logits"].try_extract_tensor::<f32>()?;
+            logits.to_vec()
+            // policy lock drops here
+        };
         
-        let mut policy = self.policy.lock().unwrap();
-        let policy_outputs = policy.run(inputs![
-            "main" => main_input.clone(),
-            "others" => others_input.clone(),
-            "ball" => ball_input.clone(),
-            "actions" => actions_input.clone(),
-            "boosts" => boosts_input.clone(),
-        ])?;
-        let (_, policy_logits) = policy_outputs["logits"].try_extract_tensor::<f32>()?;
+        // Run base model - create inputs, lock, run, extract, drop lock
+        let base_logits = {
+            let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice()))?;
+            let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice()))?;
+            let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice()))?;
+            let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice()))?;
+            let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice()))?;
+            
+            let mut base = self.base.lock().unwrap();
+            let base_outputs = base.run(inputs![
+                "main" => main_input,
+                "others" => others_input,
+                "ball" => ball_input,
+                "actions" => actions_input,
+                "boosts" => boosts_input,
+            ])?;
+            let (_, logits) = base_outputs["logits"].try_extract_tensor::<f32>()?;
+            logits.to_vec()
+            // base lock drops here
+        };
         
-        let mut base = self.base.lock().unwrap();
-        let base_outputs = base.run(inputs![
-            "main" => main_input,
-            "others" => others_input,
-            "ball" => ball_input,
-            "actions" => actions_input,
-            "boosts" => boosts_input,
-        ])?;
-        let (_, base_logits) = base_outputs["logits"].try_extract_tensor::<f32>()?;
-        
-        Ok((policy_logits.to_vec(), base_logits.to_vec()))
+        Ok((policy_logits, base_logits))
     }
     
     #[cfg(not(feature = "ripple"))]
@@ -1117,6 +1137,35 @@ mod tests {
             let policy = RipplePolicy::load(&path);
             assert!(policy.is_ok(), "Failed to load Ripple: {:?}", policy.err());
         }
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_get_raw_logits_no_deadlock() {
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() || !path.join("ripple-v1.1.onnx").exists() {
+            eprintln!("Skipping test_get_raw_logits_no_deadlock: models not found");
+            return;
+        }
+        
+        let policy = RipplePolicy::load(&path).expect("Failed to load Ripple");
+        let obs = vec![0.0f32; policy.obs_width()];
+        
+        // First call
+        let result1 = policy.get_raw_logits(&obs);
+        assert!(result1.is_ok(), "First call failed: {:?}", result1.err());
+        
+        // Second call (would deadlock if locks not properly released)
+        let result2 = policy.get_raw_logits(&obs);
+        assert!(result2.is_ok(), "Second call failed: {:?}", result2.err());
+        
+        let (p1, b1) = result1.unwrap();
+        let (p2, b2) = result2.unwrap();
+        
+        assert_eq!(p1.len(), N_ACTIONS);
+        assert_eq!(b1.len(), N_ACTIONS);
+        assert_eq!(p1, p2, "Policy logits should be deterministic");
+        assert_eq!(b1, b2, "Base logits should be deterministic");
     }
 
     #[test]
