@@ -1513,3 +1513,14 @@ Total setter weight auto-normalizes. A typical recipe: reduce kickoff from 0.45 
   - About 0.4% of attacker spawns land below the floor.
   - The `demo_threat.supersonic` field is unused.
   - Both drills always defend blue.
+
+## Ripple v1.1 Integration (2026-11-08)
+
+Ripple v1.1 (Rolv-Arild/Ripple-RLBot @ 7ca4273a, CC BY-NC-SA 4.0) is now available as an external training opponent, following the Galactus and Megabyte pattern (see `RIPPLE.md`).
+
+- **Status:** Implementation scaffold complete, observation builder and ONNX inference need completion on GPU box.
+- **Architecture:** 5-tensor observation (main, others, ball w/ prediction, actions queue, boosts), 276-action lookup, tick skip 4, KL selection (policy + BC base).
+- **Usage:** Set `RIPPLE_WEIGHT` and `RIPPLE_DIR` in the variant's `.env` file. Default 0 = off. Existing configs unchanged.
+- **Eval:** Per-chunk 200 games (logged as `ripple_200` in `mid.jsonl`), finals 500 games (`ripple_final.jsonl`).
+- **License:** CC BY-NC-SA 4.0 NonCommercial. Assets load from `~/eval_bots/ripple/bots/v1.1/` at runtime, not vendored.
+- **Next steps:** Complete obs builder (~250 lines from `obs.py`), ONNX inference with KL selection, parity validation (`ripple_parity.py`), tune weight in ST20+.

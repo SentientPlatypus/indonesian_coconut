@@ -1,0 +1,10 @@
+# Ripple v1.1 (Rolv-Arild/Ripple-RLBot, CC BY-NC-SA 4.0) eval pool.
+# 1v1 games against Ripple (tick skip 4, KL selection, stochastic kickoffs).
+
+[[opponent]]
+name = "Ripple v1.1"
+kind = "python"
+path = "~/eval_bots/ripple"
+module = "poolkit.botpack5"
+class = "Ripple"
+args = ["~/eval_bots/ripple", "v1.1", "kl"]
