@@ -292,14 +292,17 @@ impl RipplePolicy {
         let st = states.entry(car).or_insert_with(RippleState::new);
 
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
+        
+        // DEBUG
+        if car == 0 && state.tick_count <= 10 {
+            eprintln!("DEBUG detect_reset: tick={}, is_kickoff={}, queue[0][0]={}, needs_reset={}", 
+                state.tick_count, is_kickoff, st.queue[0][0], needs_reset);
+        }
+        
         if needs_reset {
-            if is_kickoff {
-                *st = RippleState::new();
-                // Python sets queue to 0 at kickoff, not NaN
-                st.queue = [[0.0; 8]; QUEUE_LEN];
-            } else {
-                st.queue = [[f32::NAN; 8]; QUEUE_LEN];
-            }
+            *st = RippleState::new();
+            // Leave queue as NaN so infer() fills it with the first selected action
+            // (RippleState::new() already initializes queue to NaN)
 
             self.update_ball_pred(state, st);
 
@@ -773,10 +776,8 @@ impl ExternalPolicy for RipplePolicy {
         let needs_reset = is_kickoff || st.queue[0][0].is_nan();
         if needs_reset {
             *st = RippleState::new();
-            // Python sets queue to 0 at kickoff, NaN at other resets
-            if is_kickoff {
-                st.queue = [[0.0; 8]; QUEUE_LEN];
-            }
+            // Leave queue as NaN so infer() fills it with the first selected action
+            // (RippleState::new() already initializes queue to NaN)
             // Update ball predictions after reset
             self.update_ball_pred(state, st);
             // Initialize pad timers
@@ -944,13 +945,31 @@ impl ExternalPolicy for RipplePolicy {
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
                 .map(|(idx, _)| idx)
                 .unwrap();
+            
+            // DEBUG: print KL selection for first car at step 0
+            let states_check = self.states.lock().unwrap();
+            if i == 0 && states_check.len() <= 1 {
+                eprintln!("\n  DEBUG infer() internal KL:");
+                eprintln!("    KL[38] = {:.6}", kl_scores[38]);
+                eprintln!("    KL[14] = {:.6}", kl_scores[14]);
+                eprintln!("    Selected action: {}", action);
+            }
+            drop(states_check);
 
             // Update delayed action queue
             let mut states = self.states.lock().unwrap();
+            
+            // DEBUG
+            if i == 0 && states.len() <= 2 {
+                eprintln!("    DEBUG before queue update:");
+                eprintln!("      i={}, states.len()={}, has state: {}", i, states.len(), states.contains_key(&i));
+            }
+            
             if let Some(st) = states.get_mut(&i) {
                 let table = action_table();
                 let new_action = table[action];
-                if st.queue[0][0].is_nan() {
+                let was_first_fill = st.queue[0][0].is_nan();
+                if was_first_fill {
                     // Fill entire queue on first decision
                     for slot in &mut st.queue {
                         *slot = new_action;
@@ -977,6 +996,17 @@ impl ExternalPolicy for RipplePolicy {
                 let applied_action = table.iter().position(|&a| {
                     a.iter().zip(applied_action_controls.iter()).all(|(x, y)| (x - y).abs() < 0.001)
                 }).unwrap_or(action);
+                
+                // DEBUG
+                if i == 0 && was_first_fill {
+                    eprintln!("    DEBUG queue fill:");
+                    eprintln!("      Selected action index: {}", action);
+                    eprintln!("      new_action (table[{}]): {:?}", action, new_action);
+                    eprintln!("      applied_action_controls: {:?}", applied_action_controls);
+                    eprintln!("      was_flipped: {}", st.was_flipped);
+                    eprintln!("      applied_action (table search result): {}", applied_action);
+                }
+                
                 actions.push(applied_action);
             } else {
                 actions.push(action);

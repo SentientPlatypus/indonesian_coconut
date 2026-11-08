@@ -342,6 +342,7 @@ fn main() {
             let python_action_idx = python_actions_out[0];
             
             eprintln!("  Action selection:");
+            eprintln!("    infer() returned vec: {:?}", python_actions_out);
             eprintln!("    Python's chosen action: {}", record.python_action);
             eprintln!("    Rust's chosen action:   {}", python_action_idx);
             eprintln!("    Match: {}", python_action_idx == record.python_action);
