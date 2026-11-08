@@ -373,22 +373,22 @@ fn main() {
         // Build Rust Ripple obs
         ripple.build(&state, car_idx, &mut obs, &mut mask);
         
-        // CRITICAL: Inject Python's on_ground and handbrake BEFORE infer()
-        // Per EC2 rip13: timers and queue updates depend on these values
+        // CRITICAL: Inject ALL Python values BEFORE infer() (EC2 rip16: third request!)
         // Main tensor: [17]=on_ground, [25]=handbrake
         obs[17] = if record.python_on_ground { 1.0 } else { 0.0 };
         obs[25] = record.python_handbrake;
         
-        // Call infer() to advance queue and get action (exercises live path)
-        let rust_actions = ripple.infer(&obs, &mask, 1);
-        let rust_action = rust_actions[0];
-        
-        // Inject opponent's on_ground (others[0] index 17)
-        // Others tensor layout: each player is 21 floats, on_ground is at index 17
+        // Opponent's on_ground (others[0] index 17)
+        // Others tensor layout: each player is 21 floats, on_ground at 17
+        // Main is 32 floats, so others starts at 32
         if record.python_others.len() > 0 && record.python_others[0].len() > 17 {
             let opponent_on_ground = record.python_others[0][17];
-            obs[32 + 17] = opponent_on_ground;  // 32 for main, then others starts
+            obs[32 + 17] = opponent_on_ground;
         }
+        
+        // Call infer() with fully injected obs
+        let rust_actions = ripple.infer(&obs, &mask, 1);
+        let rust_action = rust_actions[0];
         
         // At step 0, also test with Python's exact tensors to isolate policy path
         if idx == 0 {

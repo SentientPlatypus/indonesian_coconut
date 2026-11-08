@@ -69,13 +69,11 @@ def dump_arena_state(gs, tick, ripple_obs):
         # Availability: boost_pads[i] == 1.0 means ACTIVE (upstream obs.py:352)
         pad_active = gs.boost_pads[i] == 1.0
         
-        # Timer: try to access observer internal state (EC2 rip15: boost_timers, not inverted)
-        # If not accessible, use 0.0 placeholder
+        # Timer: try to access observer internal state (EC2 rip16: raw seconds, don't multiply!)
+        # Upstream obs.py:351-357 keeps RAW SECONDS, :242 divides /10 only when emitting
         try:
-            # Upstream stores boost_timers (normalized 0-1)
-            # Denormalize by *10 to get raw timer value
-            timer_normalized = ripple_obs.boost_timers[i]
-            timer_raw = timer_normalized * 10.0
+            # boost_timers stores raw seconds (not normalized)
+            timer_raw = ripple_obs.boost_timers[i]
         except (AttributeError, IndexError):
             timer_raw = 0.0  # Fallback if not accessible
         

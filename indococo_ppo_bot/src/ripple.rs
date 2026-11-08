@@ -147,6 +147,7 @@ struct RippleState {
     was_flipped: bool,
     // Edge-trigger reset detection
     was_kickoff: bool,
+    was_demoed: bool,  // For demo respawn detection (EC2 rip16)
     last_batch: usize,
     last_tick_count: u64,
     last_ball_pos: Vec3A,
@@ -175,6 +176,7 @@ impl RippleState {
             pad_timers: [0.0; 34],
             was_flipped: false,
             was_kickoff: false,
+            was_demoed: false,
             last_batch: 0,
             last_tick_count: 0,
             last_ball_pos: Vec3A::ZERO,
@@ -305,31 +307,30 @@ impl RipplePolicy {
         // Order: subtract elapsed, clear available, init expired, clip
         let pad_indices = crate::obs::pad_order(state);
         
-        // Skip pad updates if no pads available (e.g. replay with empty boost_pads)
-        if pad_indices.is_empty() {
-            return;
-        }
-        
-        for (ui_idx, &rs_idx) in pad_indices.iter().enumerate() {
-            let (_, pad_state) = &state.boost_pads[rs_idx];
-            
-            // 1. Subtract elapsed time (TICK_SKIP decisions at 120 Hz)
-            st.pad_timers[ui_idx] -= TICK_SKIP as f32 / 120.0;
-            
-            // 2. If available, clear to 0
-            if pad_state.is_active() {
-                st.pad_timers[ui_idx] = 0.0;
+        // Only update pad timers if pads available (EC2 rip16: don't early-return!)
+        if !pad_indices.is_empty() {
+            for (ui_idx, &rs_idx) in pad_indices.iter().enumerate() {
+                let (_, pad_state) = &state.boost_pads[rs_idx];
+                
+                // 1. Subtract elapsed time (TICK_SKIP decisions at 120 Hz)
+                st.pad_timers[ui_idx] -= TICK_SKIP as f32 / 120.0;
+                
+                // 2. If available, clear to 0
+                if pad_state.is_active() {
+                    st.pad_timers[ui_idx] = 0.0;
+                }
+                
+                // 3. If expired (<=0), reset to respawn time
+                if st.pad_timers[ui_idx] <= 0.0 && !pad_state.is_active() {
+                    let respawn = if BIG_PADS.contains(&ui_idx) { 10.0 } else { 4.0 };
+                    st.pad_timers[ui_idx] = respawn;
+                }
+                
+                // 4. Clip to [0, 10] per obs.py:357
+                st.pad_timers[ui_idx] = st.pad_timers[ui_idx].clamp(0.0, 10.0);
             }
-            
-            // 3. If expired (<=0), reset to respawn time
-            if st.pad_timers[ui_idx] <= 0.0 && !pad_state.is_active() {
-                let respawn = if BIG_PADS.contains(&ui_idx) { 10.0 } else { 4.0 };
-                st.pad_timers[ui_idx] = respawn;
-            }
-            
-            // 4. Clip to [0, 10] per obs.py:357
-            st.pad_timers[ui_idx] = st.pad_timers[ui_idx].clamp(0.0, 10.0);
         }
+        // Continue to player timers regardless of pad availability
 
         let (_, me) = &state.cars[car];
         let f = flags(me);
@@ -740,11 +741,11 @@ impl ExternalPolicy for RipplePolicy {
         // - batch_sim.rs:1116,1306,1396 all borrow &mut, never reallocate or swap
         // - sim.rs:379 GameInstance.last_state is owned field, updated in place
         // Therefore &GameState address is STABLE across collection steps
-        // INFER ROW MAPPING:
-        // - build() atomically allocates row via build_row_counter.fetch_add (:820)
-        // - build() records build_records[row] = key (:826)
-        // - infer() reads key = build_records[i] for row i (:836-840)
-        // Deterministic regardless of parallel build() execution order
+        // INFER ROW MAPPING (EC2 rip16: verified correct vs batch_sim):
+        // - batch_sim :1211-1219 pre-allocates obs slices in game order before spawn
+        // - build() records obs.as_ptr() → key (self-identifying rows)
+        // - infer() computes row ptr, looks up key
+        // Deterministic regardless of parallel execution order
         let state_ptr = state as *const GameState as usize;
         let key = (state_ptr, car);
         
@@ -769,14 +770,24 @@ impl ExternalPolicy for RipplePolicy {
         // Use teleport detection: ball/car moved impossibly fast (not explained by demo)
         let kickoff_edge = !st.was_kickoff && is_kickoff_geometry;
         
-        // Teleport detection: movement > physically possible in 8 ticks
-        // Ball max ~600uu/8ticks, car max ~400uu/8ticks (conservative estimates)
-        let ball_teleported = st.last_batch > 0 && (ball_pos - st.last_ball_pos).length() > 600.0;
-        let car_teleported = st.last_batch > 0 && (car_pos - st.last_car_pos).length() > 400.0;
+        // Teleport detection: movement > physically possible per tick
+        // Per EC2 rip16: normalize by elapsed batches
+        let batches_elapsed = if st.last_batch > 0 && current_batch > st.last_batch {
+            (current_batch - st.last_batch) as f32
+        } else {
+            1.0
+        };
+        // Ball max ~75uu/tick, car max ~50uu/tick @ 120Hz, times 8 ticks per decision
+        let ball_max = 600.0 * batches_elapsed;
+        let car_max = 400.0 * batches_elapsed;
+        let ball_teleported = st.last_batch > 0 && (ball_pos - st.last_ball_pos).length() > ball_max;
+        let car_teleported = st.last_batch > 0 && (car_pos - st.last_car_pos).length() > car_max;
         
-        // Don't reset on demo respawn (car demoed but episode continues)
-        let is_demo_respawn = me.demo_respawn_timer > 0.0;
-        let unexplained_car_teleport = car_teleported && !is_demo_respawn;
+        // Demo respawn detection per EC2 rip16:
+        // RocketSim respawns when timer reaches 0 (rocketsim base.rs:962-965)
+        // Check: was demoed on previous call OR is_demoed now
+        let is_demo_related = st.was_demoed || me.is_demoed;
+        let unexplained_car_teleport = car_teleported && !is_demo_related;
         
         let batch_gap = st.last_batch > 0 && st.last_batch + 1 < current_batch;
         
@@ -786,7 +797,7 @@ impl ExternalPolicy for RipplePolicy {
             // Reset semantics per EC2 rip14:
             // - Kickoff resets: queue = zeros (upstream obs.py:129-133)
             // - Non-kickoff resets: queue = NaN (filled on first action)
-            let old_tracking = (st.was_kickoff, st.last_batch, st.last_tick_count, st.last_ball_pos, st.last_car_pos);
+            let old_tracking = (st.was_kickoff, st.was_demoed, st.last_batch, st.last_tick_count, st.last_ball_pos, st.last_car_pos);
             *st = RippleState::new();
             
             if is_kickoff_geometry {
@@ -796,7 +807,7 @@ impl ExternalPolicy for RipplePolicy {
             // else: leave queue as NaN (RippleState::new() default)
             
             // Restore tracking
-            (st.was_kickoff, st.last_batch, st.last_tick_count, st.last_ball_pos, st.last_car_pos) = old_tracking;
+            (st.was_kickoff, st.was_demoed, st.last_batch, st.last_tick_count, st.last_ball_pos, st.last_car_pos) = old_tracking;
             
             // Initialize ball predictions on reset
             self.update_ball_pred(state, st);
@@ -804,6 +815,7 @@ impl ExternalPolicy for RipplePolicy {
         
         // Update tracking for next call
         st.was_kickoff = is_kickoff_geometry;
+        st.was_demoed = me.is_demoed || me.demo_respawn_timer > 0.0;
         st.last_batch = current_batch;
         st.last_tick_count = state.tick_count;
         st.last_ball_pos = ball_pos;
@@ -1529,10 +1541,10 @@ mod tests {
                 handle.join().unwrap();
             }
             
-            // Infer in game order
-            let obs = flat_obs.lock().unwrap().clone();
-            let mask = flat_mask.lock().unwrap().clone();
-            let actions = policy.infer(&obs, &mask, N_GAMES * N_CARS);
+            // Infer in game order (EC2 rip16: don't clone, batch_sim :1252 doesn't clone)
+            let obs_ref = flat_obs.lock().unwrap();
+            let mask_ref = flat_mask.lock().unwrap();
+            let actions = policy.infer(&obs_ref, &mask_ref, N_GAMES * N_CARS);
             
             // Apply actions and update states
             for g in 0..N_GAMES {
