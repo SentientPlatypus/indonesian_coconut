@@ -269,10 +269,13 @@ impl RipplePolicy {
 
             self.update_ball_pred(state, st);
 
-            for (i, (_, pad_state)) in state.boost_pads.iter().enumerate() {
-                st.pad_timers[i] = if pad_state.is_active() {
+            // Initialize pad timers with position remapping like update_timers()
+            let pad_indices = crate::obs::pad_order(state);
+            for (ui_idx, &rs_idx) in pad_indices.iter().enumerate() {
+                let (_, pad_state) = &state.boost_pads[rs_idx];
+                st.pad_timers[ui_idx] = if pad_state.is_active() {
                     0.0
-                } else if BIG_PADS.contains(&i) {
+                } else if BIG_PADS.contains(&ui_idx) {
                     10.0
                 } else {
                     4.0
@@ -329,15 +332,29 @@ impl RipplePolicy {
     }
 
     fn update_timers(&self, state: &GameState, car: usize, st: &mut RippleState) {
-        for (i, (_, pad_state)) in state.boost_pads.iter().enumerate() {
+        // Pad timer update per upstream obs.py:351-357
+        // Order: subtract elapsed, clear available, init expired, clip
+        let pad_indices = crate::obs::pad_order(state);
+        
+        for (ui_idx, &rs_idx) in pad_indices.iter().enumerate() {
+            let (_, pad_state) = &state.boost_pads[rs_idx];
+            
+            // 1. Subtract elapsed time (TICK_SKIP decisions at 120 Hz)
+            st.pad_timers[ui_idx] -= TICK_SKIP as f32 / 120.0;
+            
+            // 2. If available, clear to 0
             if pad_state.is_active() {
-                st.pad_timers[i] = 0.0;
-            } else if st.pad_timers[i] <= 0.0 {
-                let respawn = if BIG_PADS.contains(&i) { 10.0 } else { 4.0 };
-                st.pad_timers[i] = respawn;
-            } else {
-                st.pad_timers[i] -= TICK_SKIP as f32 / 120.0;
+                st.pad_timers[ui_idx] = 0.0;
             }
+            
+            // 3. If expired (<=0), reset to respawn time
+            if st.pad_timers[ui_idx] <= 0.0 && !pad_state.is_active() {
+                let respawn = if BIG_PADS.contains(&ui_idx) { 10.0 } else { 4.0 };
+                st.pad_timers[ui_idx] = respawn;
+            }
+            
+            // 4. Clip to [0, 10] per obs.py:357
+            st.pad_timers[ui_idx] = st.pad_timers[ui_idx].clamp(0.0, 10.0);
         }
 
         let (_, me) = &state.cars[car];
@@ -794,6 +811,9 @@ impl ExternalPolicy for RipplePolicy {
             st.queue = [[0.0; 8]; QUEUE_LEN]; // Zeros, not NaN
             // Restore tracking
             (st.was_kickoff, st.last_batch, st.last_ball_pos, st.last_car_pos) = old_tracking;
+            
+            // Initialize ball predictions on reset
+            self.update_ball_pred(state, st);
         }
         
         // Update tracking for next call
@@ -801,29 +821,10 @@ impl ExternalPolicy for RipplePolicy {
         st.last_batch = current_batch;
         st.last_ball_pos = ball_pos;
         st.last_car_pos = car_pos;
-            // Leave queue as NaN (RippleState::new() initializes to NaN)
-            // infer() will fill it with the first selected action
-            // Update ball predictions after reset
-            self.update_ball_pred(state, st);
-            // Initialize pad timers
-            for (i, (_, pad_state)) in state.boost_pads.iter().enumerate() {
-                st.pad_timers[i] = if pad_state.is_active() {
-                    0.0
-                } else if BIG_PADS.contains(&i) {
-                    10.0
-                } else {
-                    4.0
-                };
-            }
-        }
-
-        // Ripple uses tick_skip=4; we're called every 8 ticks (trainer's tick_skip).
-        // Update timers by 4 ticks per call to match Python adapter behavior.
-        // Also update ball predictions each step
+        
+        // Update timers and ball predictions each step
         self.update_timers(state, car, st);
-        if !needs_reset {
-            self.update_ball_pred(state, st);
-        }
+        self.update_ball_pred(state, st);
 
         let (main, mut others, ball, mut actions, boosts, is_flipped) = self.build_obs_internal(state, car, st);
         
