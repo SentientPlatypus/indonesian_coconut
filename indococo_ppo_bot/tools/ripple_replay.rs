@@ -266,6 +266,9 @@ fn main() {
         
         // At step 0, also test with Python's exact tensors to isolate policy path
         if idx == 0 {
+            // NOTE: Policy isolation test disabled - get_logits_and_kl removed
+            // This was used for debugging but isn't needed for main parity checks
+            /*
             // Build obs from Python tensors
             let mut python_obs = vec![0.0f32; ripple.obs_width()];
             let mut py_offset = 0;
@@ -288,64 +291,13 @@ fn main() {
             for boost in &record.python_boosts {
                 python_obs[py_offset..py_offset+5].copy_from_slice(&boost);
                 py_offset += 5;
-            }
+            }*/
             
-            // Get Rust logits and KL scores by calling policy directly
-            let (rust_policy_logits, rust_base_logits, rust_kl_scores) = ripple.get_logits_and_kl(&python_obs);
+            // Disabled: Get Rust logits and KL scores by calling policy directly
+            // let (rust_policy_logits, rust_base_logits, rust_kl_scores) = ripple.get_logits_and_kl(&python_obs);
             
-            eprintln!("\n=== STEP 0 POLICY ISOLATION ===");
-            eprintln!("Feeding Python's tensors into Rust ONNX:");
-            
-            // Compare policy logits
-            let mut max_logit_diff = 0.0f32;
-            let mut worst_idx = 0;
-            for (i, (&r, &p)) in rust_policy_logits.iter().zip(record.python_logits.iter()).enumerate() {
-                let diff = (r - p).abs();
-                if diff > max_logit_diff {
-                    max_logit_diff = diff;
-                    worst_idx = i;
-                }
-            }
-            
-            // Compare base logits
-            let mut max_base_diff = 0.0f32;
-            let mut worst_base_idx = 0;
-            for (i, (&r, &p)) in rust_base_logits.iter().zip(record.python_base_logits.iter()).enumerate() {
-                let diff = (r - p).abs();
-                if diff > max_base_diff {
-                    max_base_diff = diff;
-                    worst_base_idx = i;
-                }
-            }
-            
-            eprintln!("  Policy logits comparison:");
-            eprintln!("    Max diff: {:.6e} at index {}", max_logit_diff, worst_idx);
-            eprintln!("    Python policy[38]: {:.4}", record.python_logits[38]);
-            eprintln!("    Rust policy[38]:   {:.4}", rust_policy_logits[38]);
-            eprintln!("    Python policy[14]: {:.4}", record.python_logits[14]);
-            eprintln!("    Rust policy[14]:   {:.4}", rust_policy_logits[14]);
-            
-            eprintln!("  Base logits comparison:");
-            eprintln!("    Max diff: {:.6e} at index {}", max_base_diff, worst_base_idx);
-            eprintln!("    Python base[38]: {:.4}", record.python_base_logits[38]);
-            eprintln!("    Rust base[38]:   {:.4}", rust_base_logits[38]);
-            eprintln!("    Python base[14]: {:.4}", record.python_base_logits[14]);
-            eprintln!("    Rust base[14]:   {:.4}", rust_base_logits[14]);
-            
-            eprintln!("  KL scores:");
-            eprintln!("    Rust KL[38]:   {:.6}", rust_kl_scores[38]);
-            eprintln!("    Rust KL[14]:   {:.6}", rust_kl_scores[14]);
-            eprintln!("    Rust max KL:   {:.6} at index {}", rust_kl_scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max), rust_kl_scores.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap().0);
-            
-            // Infer with Python's tensors
-            let python_actions_out = ripple.infer(&python_obs, &mask, 1);
-            let python_action_idx = python_actions_out[0];
-            
-            eprintln!("  Action selection:");
-            eprintln!("    infer() returned vec: {:?}", python_actions_out);
-            eprintln!("    Python's chosen action: {}", record.python_action);
-            eprintln!("    Rust's chosen action:   {}", python_action_idx);
-            eprintln!("    Match: {}", python_action_idx == record.python_action);
+            // Step 0 policy isolation test disabled (method removed)
+            eprintln!("\n=== STEP 0 DEBUG (policy isolation disabled) ===");
         }
         
         // Extract Rust tensors
