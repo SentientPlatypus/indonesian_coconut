@@ -25,6 +25,11 @@ path = "tools/ripple_parity_rust.rs"
 required-features = ["ripple"]
 
 [[bin]]
+name = "ripple-replay"
+path = "tools/ripple_replay.rs"
+required-features = ["ripple"]
+
+[[bin]]
 name = "ripple-idle-test"
 path = "tools/ripple_idle_test.rs"
 required-features = ["ripple"]
