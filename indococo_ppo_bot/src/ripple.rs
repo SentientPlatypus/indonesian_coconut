@@ -461,15 +461,16 @@ impl RipplePolicy {
         // is_reset: True if action queue contains NaN (indicates next action will fill queue)
         // Python: is_reset = queue has NaN AND not kickoff
         // At kickoff, Python fills queue with 0.0 before first obs, so is_reset=0.0
-        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
+        // Upstream obs.py:234: exact test np.all(ball.position[:2] == 0)
+        let is_kickoff_exact = state.ball.phys.pos.x == 0.0 && state.ball.phys.pos.y == 0.0;
         let has_nan = st.queue.iter().flatten().any(|&x| x.is_nan());
-        let is_reset = has_nan && !is_kickoff;
+        let is_reset = has_nan && !is_kickoff_exact;
         main[28] = if is_reset { 1.0 } else { 0.0 };
-        // is_kickoff: True if ball is at center (will be flipped to indicate side later)
-        let is_kickoff = state.ball.phys.pos.x.abs() < 1.0 && state.ball.phys.pos.y.abs() < 1.0;
-        main[29] = if is_kickoff { 1.0 } else { 0.0 };
-        // [30] is_flipped and [31] is_swapped are set by coordinate transform in Python
-        // For now, set to 0 (TODO: implement coordinate transform)
+        // is_kickoff: True if ball is at center
+        // Upstream obs.py:234: set to 1.0 at kickoff
+        // Upstream obs.py:272: NEGATED when side-flipped (x < 0): is_kickoff *= -1
+        main[29] = if is_kickoff_exact { 1.0 } else { 0.0 };
+        // [30] is_flipped and [31] is_swapped are set by coordinate transform below
         main[30] = 0.0;
         main[31] = 0.0;
 
@@ -619,6 +620,9 @@ impl RipplePolicy {
             main[8] *= -1.0;  // angvel.z
             main[9] *= -1.0;  // forward.x
             main[12] *= -1.0; // up.x
+            
+            // Upstream obs.py:272: NEGATE is_kickoff when side-flipped
+            main[29] *= -1.0;  // is_kickoff
             
             // Others: INVERT_SIDE_RELATIVE = [1,-1,1]*2 + [-1,1,-1] + [1,-1,1]*2 + ...
             // Inverts: pos.y(1), vel.y(4), angvel.x(6), angvel.z(8), forward.y(10), up.y(13)
