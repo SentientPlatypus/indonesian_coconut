@@ -85,6 +85,10 @@ while :; do
   if [[ -n "${MEGA_WEIGHT:-}" ]]; then
     printf "\n[[opponents.external]]\nname = \"megabyte\"\nkind = \"megabyte\"\npath = \"%s\"\nweight = %s\n" "${MEGA_DIR:-/home/ubuntu/eval_bots/megabyte}" "$MEGA_WEIGHT" >> $X/train_st.toml
   fi
+  # Ripple (Rust port, src/ripple.rs) as a league opponent when the variant sets RIPPLE_WEIGHT.
+  if [[ -n "${RIPPLE_WEIGHT:-}" ]]; then
+    printf "\n[[opponents.external]]\nname = \"ripple\"\nkind = \"ripple\"\npath = \"%s\"\nweight = %s\n" "${RIPPLE_DIR:-/home/ubuntu/eval_bots/ripple/bots/v1.1}" "$RIPPLE_WEIGHT" >> $X/train_st.toml
+  fi
   for e in ${EXTRA_OPPS:-}; do n=${e%%:*}
     printf '\n[[opponents.fixed]]\nname = "%s"\ncheckpoint = "%s"\nweight = %s\n' "$n" "$X/opponents/$n" "${e##*:}" >> $X/train_st.toml; done
   log "$RUN train: $left iterations from $now"
@@ -102,9 +106,14 @@ while :; do
     MEGAP=$C/experiments/pool_megabyte.toml
     OMP_NUM_THREADS=1 nice -n 19 $PYT $T/pool_eval.py --candidate $W/actor.safetensors --pool $MEGAP --games $GAL_GAMES --procs $PROCS --seed 424242 --out $W/megabyte.jsonl --label ${RUN}_${now}_vs_megabyte > $W/megabyte.log 2>&1
   fi
-  wb=$(wr_of $W/h2h_BEST.jsonl); wb=${wb:-null}; wf=$(wr_of $W/h2h_FR4.jsonl); wf=${wf:-null}; wg=$(wr_of $W/galactus.jsonl); wg=${wg:-null}; wm=$(wr_of $W/megabyte.jsonl); wm=${wm:-null}
-  echo "{\"steps\":$now,\"ckpt\":\"$ck\",\"h2h_BEST_200\":$wb,\"h2h_FR4_200\":$wf,\"galactus_$GAL_GAMES\":$wg,\"megabyte_$GAL_GAMES\":$wm}" >> $X/logs/mid.jsonl
-  log "$RUN chunk done at $now: vs BEST $wb, vs FR4 $wf, vs Galactus $wg, vs Megabyte $wm"
+  # Ripple eval per chunk when the variant sets RIPPLE_WEIGHT.
+  if [[ -n "${RIPPLE_WEIGHT:-}" ]]; then
+    RIPPLEP=$C/experiments/pool_ripple.toml
+    OMP_NUM_THREADS=1 nice -n 19 $PYT $T/pool_eval.py --candidate $W/actor.safetensors --pool $RIPPLEP --games $GAL_GAMES --procs $PROCS --seed 424242 --out $W/ripple.jsonl --label ${RUN}_${now}_vs_ripple > $W/ripple.log 2>&1
+  fi
+  wb=$(wr_of $W/h2h_BEST.jsonl); wb=${wb:-null}; wf=$(wr_of $W/h2h_FR4.jsonl); wf=${wf:-null}; wg=$(wr_of $W/galactus.jsonl); wg=${wg:-null}; wm=$(wr_of $W/megabyte.jsonl); wm=${wm:-null}; wr=$(wr_of $W/ripple.jsonl); wr=${wr:-null}
+  echo "{\"steps\":$now,\"ckpt\":\"$ck\",\"h2h_BEST_200\":$wb,\"h2h_FR4_200\":$wf,\"galactus_$GAL_GAMES\":$wg,\"megabyte_$GAL_GAMES\":$wm,\"ripple_$GAL_GAMES\":$wr}" >> $X/logs/mid.jsonl
+  log "$RUN chunk done at $now: vs BEST $wb, vs FR4 $wf, vs Galactus $wg, vs Megabyte $wm, vs Ripple $wr"
   if [[ "$wf" != null ]] && $PYT -c "import sys;sys.exit(0 if $wf < 0.45 else 1)"; then LOW=$((LOW + 1)); else LOW=0; fi
   if (( LOW >= 2 )); then
     src=$($PYT - $X/logs/mid.jsonl <<'PY'
@@ -151,6 +160,12 @@ if [[ -n "${MEGA_WEIGHT:-}" ]]; then
   echo "$(date) megabyte" >> $F/run.log
   MEGAP=$C/experiments/pool_megabyte.toml
   OMP_NUM_THREADS=1 nice -n 19 $PYT $T/pool_eval.py --candidate $CAND --pool $MEGAP --games $FIN_GAL --procs $PROCS --seed 424242 --out $F/megabyte_final.jsonl --label ${RUN}final > $F/megabyte_final.log 2>&1
+fi
+# Ripple finals when the variant sets RIPPLE_WEIGHT.
+if [[ -n "${RIPPLE_WEIGHT:-}" ]]; then
+  echo "$(date) ripple" >> $F/run.log
+  RIPPLEP=$C/experiments/pool_ripple.toml
+  OMP_NUM_THREADS=1 nice -n 19 $PYT $T/pool_eval.py --candidate $CAND --pool $RIPPLEP --games $FIN_GAL --procs $PROCS --seed 424242 --out $F/ripple_final.jsonl --label ${RUN}final > $F/ripple_final.log 2>&1
 fi
 $PYT $C/experiments/st_promote.py $F $BESTF > $F/PROMOTE.json 2>$F/promote.err
 echo "$(date) DONE $(cat $F/PROMOTE.json)" >> $F/run.log; touch $F/DONE

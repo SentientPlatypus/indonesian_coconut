@@ -174,6 +174,10 @@ fn load_external_opponents(cfg: &OpponentsConfig, dev: &Device) -> Vec<ExternalO
                             .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
                     )
                 }
+                "ripple" => std::sync::Arc::new(
+                    indococo_bot::ripple::RipplePolicy::load(&o.path)
+                        .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
+                ),
                 other => panic!("opponent {}: unknown external kind {other:?}", o.name),
             };
             ExternalOpponent { name: o.name.clone(), policy, weight: o.weight }
