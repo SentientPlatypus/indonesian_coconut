@@ -423,7 +423,7 @@ impl RipplePolicy {
         main[17] = if f.on_ground { 1.0 } else { 0.0 };
         main[18] = if !me.has_jumped { 1.0 } else { 0.0 };
         main[19] = if f.has_flip { 1.0 } else { 0.0 };
-        main[20] = me.boost.min(2.0);
+        main[20] = (me.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
         main[21] = st.boost_time;
         main[22] = st.jump_time;
         main[23] = st.air_time;
@@ -467,7 +467,7 @@ impl RipplePolicy {
             others[i][17] = if f.on_ground { 1.0 } else { 0.0 };
             others[i][18] = 0.0; // has_jump
             others[i][19] = 0.0; // has_flip
-            others[i][20] = c.boost.min(2.0);
+            others[i][20] = (c.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
         }
 
         // Ball predictions (6 slices)

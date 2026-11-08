@@ -20,53 +20,46 @@ from pathlib import Path
 # Add poolkit to path
 sys.path.insert(0, str(Path(__file__).parent / "pool_eval"))
 
-def dump_arena_state(arena_engine, tick):
-    """Extract raw RocketSim physics state from arena."""
-    import RocketSim as rs
-    
-    # Get arena from engine
-    rs_arena = arena_engine._arena
-    
+def dump_arena_state(gs, tick):
+    """Extract raw RocketSim physics state from V1GameState."""
     # Ball
-    ball_state = rs_arena.ball.get_state()
     ball = {
-        'pos': [ball_state.pos.x, ball_state.pos.y, ball_state.pos.z],
-        'vel': [ball_state.vel.x, ball_state.vel.y, ball_state.vel.z],
-        'ang_vel': [ball_state.ang_vel.x, ball_state.ang_vel.y, ball_state.ang_vel.z],
+        'pos': gs.ball.position.tolist(),
+        'vel': gs.ball.linear_velocity.tolist(),
+        'ang_vel': gs.ball.angular_velocity.tolist(),
     }
     
-    # Cars (IDs 1-6)
+    # Cars - extract from V1GameState players list
     cars = []
-    for car_id in range(1, 7):
-        try:
-            car = rs_arena.get_car(car_id)
-            car_state = car.get_state()
-            
-            # Rotation matrix
-            rot = car_state.rot_mat
-            rot_mat = [
-                [rot.forward.x, rot.forward.y, rot.forward.z],
-                [rot.right.x, rot.right.y, rot.right.z],
-                [rot.up.x, rot.up.y, rot.up.z],
-            ]
-            
-            cars.append({
-                'id': car_id,
-                'team': car.team,
-                'pos': [car_state.pos.x, car_state.pos.y, car_state.pos.z],
-                'vel': [car_state.vel.x, car_state.vel.y, car_state.vel.z],
-                'ang_vel': [car_state.ang_vel.x, car_state.ang_vel.y, car_state.ang_vel.z],
-                'rot_mat': rot_mat,
-                'boost': car_state.boost,
-                'on_ground': car_state.is_on_ground,
-                'has_jumped': car_state.has_jumped,
-                'has_double_jumped': car_state.has_double_jumped,
-                'has_flipped': car_state.has_flipped,
-                'demo_respawn_timer': car_state.demo_respawn_timer,
-                'is_demoed': car_state.is_demoed,
-            })
-        except:
-            pass
+    for idx, player in enumerate(gs.players):
+        # Assign car IDs: blues are 1-3, oranges are 4-6
+        team_num = player.team_num
+        if team_num == 0:  # Blue
+            car_id = 1 + (idx if idx < 3 else idx)  # First 3 players
+        else:  # Orange
+            car_id = 4 + (idx - 3 if idx >= 3 else idx)
+        
+        # Get rotation matrix
+        rot_mat = player.car_data.rotation_mtx()
+        if callable(rot_mat):
+            rot_mat = rot_mat()
+        rot_mat_list = rot_mat.tolist() if hasattr(rot_mat, 'tolist') else rot_mat
+        
+        cars.append({
+            'id': car_id,
+            'team': team_num,
+            'pos': player.car_data.position.tolist(),
+            'vel': player.car_data.linear_velocity.tolist(),
+            'ang_vel': player.car_data.angular_velocity.tolist(),
+            'rot_mat': rot_mat_list,
+            'boost': player.boost_amount * 100.0,  # Convert 0-1 to 0-100
+            'on_ground': player.on_ground,
+            'has_jumped': not player.has_jump,  # Inverted in rlgym
+            'has_double_jumped': False,  # Not directly available in V1
+            'has_flipped': not player.has_flip,  # Inverted in rlgym
+            'demo_respawn_timer': 0.0,  # Not available in V1
+            'is_demoed': player.is_demoed,
+        })
     
     # Boost pads - Ripple tracks these internally, just placeholder
     pads = []
@@ -162,8 +155,8 @@ def main():
         # Update actions
         ripple.actions = ripple.parser.parse_actions(np.array([chosen_action]), gs)
         
-        # Dump arena state (access engine from arena)
-        arena_state = dump_arena_state(arena.engine, tick)
+        # Dump arena state from GameState
+        arena_state = dump_arena_state(gs, tick)
         
         # Record
         record = {

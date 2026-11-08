@@ -82,11 +82,12 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
         car_state.phys.vel = Vec3A::from_array(car_data.vel);
         car_state.phys.ang_vel = Vec3A::from_array(car_data.ang_vel);
         
-        // Rotation matrix: forward, right, up
+        // Rotation matrix: transpose from row-major (Python) to column-major (Rust)
+        // Python dumps [forward, right, up] as rows, Rust Mat3A::from_cols expects columns
         car_state.phys.rot_mat = Mat3A::from_cols(
-            Vec3A::from_array(car_data.rot_mat[0]),
-            Vec3A::from_array(car_data.rot_mat[1]),
-            Vec3A::from_array(car_data.rot_mat[2]),
+            Vec3A::new(car_data.rot_mat[0][0], car_data.rot_mat[1][0], car_data.rot_mat[2][0]),  // x column
+            Vec3A::new(car_data.rot_mat[0][1], car_data.rot_mat[1][1], car_data.rot_mat[2][1]),  // y column
+            Vec3A::new(car_data.rot_mat[0][2], car_data.rot_mat[1][2], car_data.rot_mat[2][2]),  // z column
         );
         
         car_state.boost = car_data.boost;
@@ -224,6 +225,20 @@ fn main() {
         // Apply arena state and get GameState
         let state = apply_arena_state_and_get_gamestate(&mut arena, &record.arena_state);
         
+        // Debug: print first few car positions
+        if idx < 3 {
+            println!("\nStep {} - After applying state:", idx);
+            println!("  JSON car 0: pos=[{:.3}, {:.3}, {:.3}]", 
+                     record.arena_state.cars.get(0).map(|c| c.pos[0]).unwrap_or(0.0),
+                     record.arena_state.cars.get(0).map(|c| c.pos[1]).unwrap_or(0.0),
+                     record.arena_state.cars.get(0).map(|c| c.pos[2]).unwrap_or(0.0));
+            println!("  GameState.cars[{}]: pos=[{:.3}, {:.3}, {:.3}]",
+                     car_idx,
+                     state.cars.get(car_idx).map(|(_, c)| c.phys.pos.x).unwrap_or(0.0),
+                     state.cars.get(car_idx).map(|(_, c)| c.phys.pos.y).unwrap_or(0.0),
+                     state.cars.get(car_idx).map(|(_, c)| c.phys.pos.z).unwrap_or(0.0));
+        }
+        
         // Build Rust Ripple obs
         ripple.build(&state, car_idx, &mut obs, &mut mask);
         
@@ -270,7 +285,8 @@ fn main() {
         // Print first few and any large divergences
         if idx < 3 || main_diff > 1e-3 || others_diff > 1e-3 || ball_diff > 1e-3 || rust_action != record.python_action {
             println!("\nStep {}", idx);
-            println!("  main:    max_diff={:.6e} at [{}]", main_diff, main_idx);
+            println!("  main:    max_diff={:.6e} at [{}] rust={:.6} python={:.6}", 
+                     main_diff, main_idx, rust_main[main_idx], python_main[main_idx]);
             println!("  others:  max_diff={:.6e} at [{},{}]", others_diff, others_i, others_j);
             println!("  ball:    max_diff={:.6e} at [{},{}]", ball_diff, ball_i, ball_j);
             println!("  actions: max_diff={:.6e} at [{},{}]", actions_diff, actions_i, actions_j);
@@ -278,9 +294,9 @@ fn main() {
             println!("  action:  rust={} python={} {}", rust_action, record.python_action,
                      if rust_action == record.python_action { "✓" } else { "✗" });
             
-            if rust_action != record.python_action || main_diff > 1e-3 {
-                println!("    rust_main[0..5]   = {:?}", &rust_main[0..5]);
-                println!("    python_main[0..5] = {:?}", &python_main[0..5]);
+            if idx < 2 {
+                println!("    rust_main[9..15]   = {:?}", &rust_main[9..15]);
+                println!("    python_main[9..15] = {:?}", &python_main[9..15]);
             }
         }
         
