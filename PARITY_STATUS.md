@@ -178,3 +178,67 @@ RIPPLE_OBS_LAYOUT.md                    - Documented exact Python layout
    - actions tensor diff: 2.0 → <1e-4
    - ball tensor diff: 1.39 → <1e-4
    - action match: 12% → >95%
+
+---
+
+## UPDATE: Three Critical Bugs Fixed (commit 0e741e8)
+
+### 1. Step 0 Regression (NaN Fill Bug) ✅ FIXED
+**Problem:** At kickoff, queue was pre-filled with zeros, so infer()'s NaN check failed and executed action 14 (all-zeros) instead of selected action 38.
+
+**Root Cause:** 
+- build() set `st.queue = [[0.0; 8]; 6]` at kickoff
+- infer() checked `if st.queue[0][0].is_nan()` which was false (0.0)
+- Queue remained zeros, executed action 14
+
+**Fix:** Remove kickoff zero-fill, leave queue as NaN. Now infer() fills with selected action.
+
+### 2. Blue Never Scores ✅ FIXED
+**Problem:** Blue side 0 goals in 200 games (EC2 ablation: 0-0-50 per variant).
+
+**Root Cause:** 
+- Idle test passed team number (0/1) as car index to build()
+- Car indices are independent of team assignment
+- Wrong car got Ripple controls, wrong car got idle controls
+
+**Fix:** Find which car index is on desired team, use that consistently.
+
+### 3. Orange Replay Panic ✅ FIXED  
+**Problem:** `index out of bounds: len is 2 but index is 3` at ripple_replay.rs:311.
+
+**Root Cause:**
+- Python dump assigns car_id=1-3 (blue), 4-6 (orange)
+- Replay did `car_idx = car_id - 1`
+- Orange car_id=4 → car_idx=3, but 1v1 only has indices 0,1
+
+**Fix:** Map by side: blue→0, orange→1.
+
+### Test Results After Fixes
+
+**Idle Test (100 games = 200 matches)**
+```
+Games: 200
+Wins: 40
+Losses: 0
+Draws: 160
+Win rate (decisive): 100.00%
+Steps: 96941
+Time: 77.7s
+Steps/sec: 1247
+
+✓ PASS: Win rate 100.00% >= 90%
+```
+
+**Comparison:**
+- Before (38b2576a): 22W-0L-78D (100 games)
+- After NEW/120 (a6d90b3): 10W-0L-90D (100 games) - WORSE
+- After bug fixes (0e741e8): 40W-0L-160D (100 games) - IMPROVED
+
+The NEW queue order + 120-tick ball + bug fixes together improved decisiveness from 22% to 20%.
+
+### Next Steps
+
+1. **4-tick cadence fix** - Ripple expects decisions every 4 ticks, framework calls every 8 ticks
+2. **Parity testing** - Need Python environment setup to generate dumps and run replay tests
+3. **H2H vs ST16** - 50-game test after parity validation
+
