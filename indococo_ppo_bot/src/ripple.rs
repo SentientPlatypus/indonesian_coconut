@@ -159,6 +159,8 @@ struct RippleState {
     /// Unquantized ball-only arena left where the cache ended.
     /// Owned by this car's state so batched games do not share it.
     forecast_arena: Option<Arena>,
+    /// Tick of the last forecast write. None on a fresh state and after reset.
+    last_forecast_tick: Option<u64>,
     pad_timers: [f32; 34],
     // Edge-trigger reset detection
     was_kickoff: bool,
@@ -191,6 +193,7 @@ impl RippleState {
             ball_cache: [[0.0; 9]; BALL_CACHE_LEN],
             ball_preds: [[0.0; 9]; 6],
             forecast_arena: None,
+            last_forecast_tick: None,
             pad_timers: [0.0; 34],
             was_kickoff: false,
             was_demoed: false,
@@ -359,10 +362,10 @@ impl RipplePolicy {
         // The cache is one row per 4 physics ticks (151 rows, 5 seconds).
         // A goal is tested after every 4 ticks. The crossing row is copied
         // through the rest of the cache. While the live ball stays within
-        // BALL_PRED_TOLERANCE of cache[1], the rows shift and the arena
-        // steps 4 more ticks. Otherwise the arena is rewound to the live
-        // ball and the cache is rebuilt. cache[0] is the exact live ball
-        // only on that rebuild.
+        // BALL_PRED_TOLERANCE of cache[1] and this call is 4 ticks after
+        // the previous forecast, the rows shift and the arena steps 4 more
+        // ticks. Any other gap, including the first call after reset,
+        // rebuilds. Row 0 is then the exact live ball on both paths.
         //
         // The arena is ball-only Soccar, no_ball_rot, quantize_physics false.
         // It lives on this RippleState (game pointer + car), not in a
@@ -376,7 +379,14 @@ impl RipplePolicy {
             ));
         }
         let actual = ball_row(state.ball.phys.pos, state.ball.phys.vel, state.ball.phys.ang_vel);
-        let extend = ball_within_pred_tolerance(st.ball_cache[1], actual);
+        // obs.py:191-197. A gap other than tick_skip rebuilds. None means
+        // this is the first forecast after a reset.
+        let on_phase = match st.last_forecast_tick {
+            Some(prev) => state.tick_count.wrapping_sub(prev) == u64::from(TICK_SKIP),
+            None => false,
+        };
+        let extend = on_phase && ball_within_pred_tolerance(st.ball_cache[1], actual);
+        st.last_forecast_tick = Some(state.tick_count);
         let RippleState {
             ball_cache,
             forecast_arena,
@@ -388,8 +398,9 @@ impl RipplePolicy {
             extend_ball_cache(ball_cache, arena);
         } else {
             reset_ball_cache(ball_cache, arena, &state.ball);
-            ball_cache[0] = actual;
         }
+        // obs.py:327. Both branches leave the live ball in slice 0.
+        ball_cache[0] = actual;
         for i in 0..=BALL_PRED_STEPS {
             ball_preds[i] = ball_cache[i * BALL_CACHE_STRIDE];
         }
@@ -2426,14 +2437,16 @@ mod tests {
         nudged.ball.phys.vel = Vec3A::new(predicted_next[3], predicted_next[4], predicted_next[5]);
         nudged.ball.phys.ang_vel = Vec3A::new(predicted_next[6], predicted_next[7], predicted_next[8]);
         nudged.ball.phys.vel.x += 0.25;
+        nudged.tick_count = state.tick_count + u64::from(TICK_SKIP);
         RipplePolicy::update_ball_pred(&nudged, &mut game_a);
+        let live = ball_row(nudged.ball.phys.pos, nudged.ball.phys.vel, nudged.ball.phys.ang_vel);
         assert_eq!(
-            game_a.ball_cache[0], predicted_next,
-            "extend keeps the cached row; it does not snap to the nudged ball"
+            game_a.ball_cache[0], live,
+            "extend writes the live ball into slice 0"
         );
         assert!(
-            (game_a.ball_cache[0][3] - nudged.ball.phys.vel.x).abs() > 0.2,
-            "extended row 0 should not be the nudged velocity"
+            (game_a.ball_cache[0][3] - predicted_next[3]).abs() > 0.2,
+            "slice 0 keeps the nudged velocity"
         );
         let grown = game_a.ball_cache[BALL_CACHE_LEN - 1];
         for (k, (&got, &want)) in grown.iter().zip(expected_horizon.iter()).enumerate() {
