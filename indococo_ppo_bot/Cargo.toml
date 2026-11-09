@@ -34,6 +34,11 @@ name = "ripple-idle-test"
 path = "tools/ripple_idle_test.rs"
 required-features = ["ripple"]
 
+[[bin]]
+name = "ripple-bench"
+path = "tools/ripple_bench.rs"
+required-features = ["ripple"]
+
 [dependencies]
 glam = { version = "0.34", features = ["serde"] }
 rand = "0.10.1"

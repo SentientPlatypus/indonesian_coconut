@@ -272,6 +272,58 @@ fn extend_ball_cache(cache: &mut [[f32; 9]; BALL_CACHE_LEN], arena: &mut Arena) 
     cache[BALL_CACHE_LEN - 1] = arena_ball_row(arena);
 }
 
+/// Puts a car's forecast state back even if `build` unwinds.
+struct CarStateHold<'a> {
+    map: &'a Mutex<HashMap<(usize, usize), RippleState>>,
+    key: (usize, usize),
+    state: Option<RippleState>,
+}
+
+impl Drop for CarStateHold<'_> {
+    fn drop(&mut self) {
+        if let Some(st) = self.state.take() {
+            if let Ok(mut guard) = self.map.lock() {
+                guard.insert(self.key, st);
+            }
+        }
+    }
+}
+
+/// Intra-op threads for the Ripple ONNX sessions. `RIPPLE_ORT_THREADS`, default 4.
+///
+/// The session stays on CPU. A CUDA execution provider would share the
+/// trainer's GPU. The official ORT binary is often built with OpenMP, in
+/// which case this count is ignored and `OMP_NUM_THREADS` wins.
+pub fn ripple_ort_threads() -> usize {
+    match std::env::var("RIPPLE_ORT_THREADS") {
+        Ok(raw) => raw.parse::<usize>().unwrap_or_else(|_| {
+            panic!("RIPPLE_ORT_THREADS={raw:?} is not a positive integer")
+        }),
+        Err(_) => 4,
+    }
+    .max(1)
+}
+
+/// `RIPPLE_WEIGHT` from the environment. `None` means the toml weight stands.
+pub fn ripple_weight_override() -> Option<f32> {
+    let Ok(raw) = std::env::var("RIPPLE_WEIGHT") else {
+        return None;
+    };
+    Some(raw.parse::<f32>().unwrap_or_else(|_| {
+        panic!("RIPPLE_WEIGHT={raw:?} is not a number")
+    }))
+}
+
+/// Env weight wins over the toml entry. `Some(0)` or a non-positive toml
+/// weight with no env removes the opponent. `None` toml and `None` env adds nothing.
+pub fn merged_ripple_weight(toml_weight: Option<f32>, env_weight: Option<f32>) -> Option<f32> {
+    match env_weight {
+        Some(w) if w > 0.0 => Some(w),
+        Some(_) => None,
+        None => toml_weight.filter(|w| *w > 0.0),
+    }
+}
+
 /// Ripple policy with ONNX inference.
 pub struct RipplePolicy {
     #[cfg(feature = "ripple")]
@@ -314,14 +366,21 @@ impl RipplePolicy {
             ort::init().build().expect("Failed to initialize ORT environment")
         });
 
+        let threads = ripple_ort_threads();
         let policy = ort::session::Session::builder(&env)?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
-            .with_intra_threads(1)?
+            .with_intra_threads(threads)?
+            .with_inter_threads(1)?
+            .with_deterministic_compute(true)?
+            .with_intra_op_spinning(false)?
             .commit_from_file(policy_path)?;
 
         let base = ort::session::Session::builder(&env)?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
-            .with_intra_threads(1)?
+            .with_intra_threads(threads)?
+            .with_inter_threads(1)?
+            .with_deterministic_compute(true)?
+            .with_intra_op_spinning(false)?
             .commit_from_file(base_path)?;
 
         Ok(Self {
@@ -888,9 +947,18 @@ impl ExternalPolicy for RipplePolicy {
         let ball_pos = state.ball.phys.pos;
         let car_pos = me.phys.pos;
         
-        // Get or create state for this key
-        let mut states = self.states.lock().unwrap();
-        let st = states.entry(key).or_insert_with(RippleState::new);
+        // Take this car's state out of the map so the forecast arena can run
+        // while other games build. The collector already schedules one job
+        // per game; the map lock was serializing those forecasts.
+        let mut held = CarStateHold {
+            map: &self.states,
+            key,
+            state: Some({
+                let mut states = self.states.lock().unwrap();
+                states.remove(&key).unwrap_or_else(RippleState::new)
+            }),
+        };
+        let st = held.state.as_mut().unwrap();
         
         // Edge-triggered reset: only on genuine episode start
         // Per EC2 rip15: tick_count does NOT rewind (Env::reset lib.rs:238-258 doesn't zero it)
@@ -976,7 +1044,8 @@ impl ExternalPolicy for RipplePolicy {
         }
 
         mask.fill(true);
-        
+        drop(held);
+
         // Record key by obs slice pointer (self-identifying rows)
         // Per EC2 rip15: batch_sim :1211-1219 pre-allocates slices in game order
         // Obs pointer is deterministic regardless of parallel execution order
@@ -987,232 +1056,16 @@ impl ExternalPolicy for RipplePolicy {
 
     #[cfg(feature = "ripple")]
     fn infer(&self, obs: &[f32], _masks: &[bool], rows: usize) -> Vec<usize> {
-        use ort::{inputs, value::TensorRef};
-
-        let mut actions = Vec::with_capacity(rows);
-
-        for i in 0..rows {
-            let obs_row = &obs[i * self.obs_width()..(i + 1) * self.obs_width()];
-
-            // Look up key by obs row pointer (self-identifying)
-            let obs_row_ptr = obs_row.as_ptr() as usize;
-            let records = self.build_records.lock().unwrap();
-            let key = *records.get(&obs_row_ptr).unwrap_or_else(|| {
-                panic!("infer() row {} (ptr {:x}) has no recorded key - build() must be called first", i, obs_row_ptr)
-            });
-            drop(records);
-
-            // Reshape into 5 tensors
-            let mut offset = 0;
-            let main = &obs_row[offset..offset + 32];
-            offset += 32;
-            let others_vec: Vec<f32> = obs_row[offset..offset + 5 * 21].to_vec();
-            offset += 5 * 21;
-            let ball_vec: Vec<f32> = obs_row[offset..offset + 6 * 9].to_vec();
-            offset += 6 * 9;
-            let actions_vec: Vec<f32> = obs_row[offset..offset + 6 * 8].to_vec();
-            offset += 6 * 8;
-            let boosts_vec: Vec<f32> = obs_row[offset..offset + 34 * 5].to_vec();
-
-            // Run inference
-            let main_vec = main.to_vec();
-            
-            let main_input = match TensorRef::from_array_view((vec![1, 32], main_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-            let others_input = match TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-            let ball_input = match TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-            let actions_input = match TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-            let boosts_input = match TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-
-            let mut policy_session = self.policy.lock().unwrap();
-            let policy_outputs = match policy_session.run(inputs![
-                "main" => main_input,
-                "others" => others_input,
-                "ball" => ball_input,
-                "actions" => actions_input,
-                "boosts" => boosts_input,
-            ]) {
-                Ok(o) => o,
-                Err(_) => { actions.push(0); continue; }
-            };
-            
-            let (_, policy_logits) = match policy_outputs["logits"].try_extract_tensor::<f32>() {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-
-            // Recreate inputs for base model
-            let main_input2 = match TensorRef::from_array_view((vec![1, 32], main_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-            let others_input2 = match TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-            let ball_input2 = match TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-            let actions_input2 = match TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-            let boosts_input2 = match TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice())) {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-
-            let mut base_session = self.base.lock().unwrap();
-            let base_outputs = match base_session.run(inputs![
-                "main" => main_input2,
-                "others" => others_input2,
-                "ball" => ball_input2,
-                "actions" => actions_input2,
-                "boosts" => boosts_input2,
-            ]) {
-                Ok(o) => o,
-                Err(_) => { actions.push(0); continue; }
-            };
-            
-            let (_, base_logits) = match base_outputs["logits"].try_extract_tensor::<f32>() {
-                Ok(t) => t,
-                Err(_) => { actions.push(0); continue; }
-            };
-
-            // Action selection: stochastic at kickoff (ball at world 0,0), KL argmax otherwise
-            // Python upstream tests WORLD ball x/y, not car-relative coords
-            // Use is_kickoff flag from main[29] (obs[29]), which was set in build() from world ball coords
-            let is_kickoff = obs_row[29].abs() > 0.5;
-            
-            let log_policy = log_softmax(&policy_logits);
-            
-            let action = if is_kickoff {
-                // Stochastic sampling using Python's method:
-                // cdf = np.cumsum(np.exp(log_policy))
-                // return min((random >= cdf).sum(), N-1)
-                
-                // Check for replay RNG override first (ripple-replay feature only)
-                let u: f32 = {
-                    #[cfg(feature = "ripple-replay")]
-                    {
-                        let override_guard = self.replay_rng_override.lock().unwrap();
-                        if let Some(override_u) = *override_guard {
-                            override_u
-                        } else {
-                            drop(override_guard);
-                            let mut rng = self.rng.lock().unwrap();
-                            (rng.next_u64() as f64 / std::u64::MAX as f64) as f32
-                        }
-                    }
-                    #[cfg(not(feature = "ripple-replay"))]
-                    {
-                        let mut rng = self.rng.lock().unwrap();
-                        (rng.next_u64() as f64 / std::u64::MAX as f64) as f32
-                    }
-                };
-                
-                // Compute cumulative distribution
-                let mut cdf = vec![0.0f32; N_ACTIONS];
-                let mut sum = 0.0f32;
-                for j in 0..N_ACTIONS {
-                    sum += log_policy[j].exp();
-                    cdf[j] = sum;
-                }
-                
-                // Count how many cdf values are < u (Python: u >= cdf)
-                let mut count = 0;
-                for j in 0..N_ACTIONS {
-                    if u >= cdf[j] {
-                        count += 1;
-                    }
-                }
-                count.min(N_ACTIONS - 1)
-            } else {
-                // KL selection from upstream Rolv-Arild/Ripple-RLBot @ 7ca4273a agent.py:87-88
-                // weight = log_policy if mode == ActionMode.KL else log_base
-                // return (np.exp(weight) * (log_policy-log_base)).argmax(-1)
-                // np.argmax keeps the first maximum.
-                let log_base = log_softmax(&base_logits);
-                let mut best = 0usize;
-                let mut best_score = f32::NEG_INFINITY;
-                for j in 0..N_ACTIONS {
-                    let weight = log_policy[j];
-                    let score = weight.exp() * (log_policy[j] - log_base[j]);
-                    if score > best_score {
-                        best_score = score;
-                        best = j;
-                    }
-                }
-                best
-            };
-
-            // Update delayed action queue
-            let mut states = self.states.lock().unwrap();
-            if let Some(st) = states.get_mut(&key) {
-                let table = action_table();
-                let new_action = table[action];
-                
-                // Python queue structure (act.py DelayedAction.parse_actions lines 109-117):
-                // - queue[0] = newest action (just decided)
-                // - queue[5] = oldest action (about to execute)
-                // Python logic:
-                //   1. If queue has NaN, fill entire queue with new_action
-                //   2. Save to_execute = queue[5]
-                //   3. Shift right: queue[1:6] = queue[0:5]
-                //   4. Put new_action at queue[0]
-                //   5. Return to_execute
-                
-                // act.py DelayedAction.parse_actions:114-117 returns the raw
-                // queue[-1] row. There is no side un-mirror on execution.
-                if st.queue[0][0].is_nan() {
-                    for slot in &mut st.queue {
-                        *slot = new_action;
-                    }
-                }
-                
-                let to_execute = st.queue[QUEUE_LEN - 1];
-                
-                // Shift right: move queue[0..5] to queue[1..6]
-                st.queue.rotate_right(1);
-                
-                // Newest selection is the raw model row
-                st.queue[0] = new_action;
-                st.last_selected = Some(action);
-                
-                // Timer history sees the raw executed row, same as Python's self.actions.
-                st.prev_prev_action = st.prev_action;
-                st.prev_action = to_execute;
-                
-                // Return the executed raw row's table index.
-                let applied_action = table.iter().position(|&a| {
-                    a.iter().zip(to_execute.iter()).all(|(x, y)| (x - y).abs() < 0.001)
-                }).unwrap_or(action);
-                actions.push(applied_action);
-            } else {
-                actions.push(action);
+        if rows == 0 {
+            return self.finish_infer(Vec::new());
+        }
+        match self.infer_batched(obs, rows) {
+            Ok(actions) => self.finish_infer(actions),
+            Err(err) => {
+                eprintln!("ripple batched infer failed ({err}); using the per-row path");
+                self.infer_per_row(obs, rows)
             }
         }
-
-        // Reset build tracking and increment batch counter for next step
-        self.build_records.lock().unwrap().clear();
-        *self.batch_counter.lock().unwrap() += 1;
-
-        actions
     }
 
     #[cfg(not(feature = "ripple"))]
@@ -1289,7 +1142,290 @@ fn log_softmax(logits: &[f32]) -> Vec<f32> {
     logits.iter().map(|&x| x - log_sum_exp).collect()
 }
 
+const ORT_CHUNK_ROWS: usize = 1024;
+
+fn split_obs_row(row: &[f32]) -> (&[f32], &[f32], &[f32], &[f32], &[f32]) {
+    let (main, rest) = row.split_at(32);
+    let (others, rest) = rest.split_at(5 * 21);
+    let (ball, rest) = rest.split_at(6 * 9);
+    let (actions, boosts) = rest.split_at(6 * 8);
+    (main, others, ball, actions, boosts)
+}
+
+fn pack_obs(obs: &[f32], rows: usize, width: usize) -> [Vec<f32>; 5] {
+    let mut main = Vec::with_capacity(rows * 32);
+    let mut others = Vec::with_capacity(rows * 5 * 21);
+    let mut ball = Vec::with_capacity(rows * 6 * 9);
+    let mut actions = Vec::with_capacity(rows * 6 * 8);
+    let mut boosts = Vec::with_capacity(rows * 34 * 5);
+    for i in 0..rows {
+        let (m, o, b, a, bo) = split_obs_row(&obs[i * width..(i + 1) * width]);
+        main.extend_from_slice(m);
+        others.extend_from_slice(o);
+        ball.extend_from_slice(b);
+        actions.extend_from_slice(a);
+        boosts.extend_from_slice(bo);
+    }
+    [main, others, ball, actions, boosts]
+}
+
+fn inverse_cdf(log_policy: &[f32], u: f32) -> usize {
+    let mut sum = 0.0f32;
+    let mut count = 0usize;
+    for lp in log_policy.iter().take(N_ACTIONS) {
+        sum += lp.exp();
+        if u >= sum {
+            count += 1;
+        }
+    }
+    count.min(N_ACTIONS - 1)
+}
+
+fn kl_argmax(log_policy: &[f32], log_base: &[f32]) -> usize {
+    let mut best = 0usize;
+    let mut best_score = f32::NEG_INFINITY;
+    for j in 0..N_ACTIONS {
+        let weight = log_policy[j];
+        let score = weight.exp() * (log_policy[j] - log_base[j]);
+        if score > best_score {
+            best_score = score;
+            best = j;
+        }
+    }
+    best
+}
+
+fn commit_queue(st: &mut RippleState, action: usize) -> usize {
+    let table = action_table();
+    let new_action = table[action];
+    if st.queue[0][0].is_nan() {
+        for slot in &mut st.queue {
+            *slot = new_action;
+        }
+    }
+    let to_execute = st.queue[QUEUE_LEN - 1];
+    st.queue.rotate_right(1);
+    st.queue[0] = new_action;
+    st.last_selected = Some(action);
+    st.prev_prev_action = st.prev_action;
+    st.prev_action = to_execute;
+    table
+        .iter()
+        .position(|&a| a.iter().zip(to_execute.iter()).all(|(x, y)| (x - y).abs() < 0.001))
+        .unwrap_or(action)
+}
+
 impl RipplePolicy {
+    fn finish_infer(&self, actions: Vec<usize>) -> Vec<usize> {
+        self.build_records.lock().unwrap().clear();
+        *self.batch_counter.lock().unwrap() += 1;
+        actions
+    }
+
+    /// Per-row ONNX, one session run per row. Replay and the batched fallback use this.
+    #[cfg(feature = "ripple")]
+    fn infer_per_row(&self, obs: &[f32], rows: usize) -> Vec<usize> {
+        self.finish_infer(self.infer_per_row_body(obs, rows))
+    }
+
+    #[cfg(feature = "ripple")]
+    fn infer_per_row_body(&self, obs: &[f32], rows: usize) -> Vec<usize> {
+        let width = self.obs_width();
+        let keys = self.row_keys(obs, rows);
+        let mut chosen = Vec::with_capacity(rows);
+        for i in 0..rows {
+            let row = &obs[i * width..(i + 1) * width];
+            let (main, others, ball, acts, boosts) = split_obs_row(row);
+            let Ok((policy, base)) = self.run_models(1, main, others, ball, acts, boosts) else {
+                chosen.push(None);
+                continue;
+            };
+            let is_kickoff = row[29].abs() > 0.5;
+            chosen.push(Some(self.choose_action(is_kickoff, &policy, &base)));
+        }
+        self.commit_chosen(&keys, &chosen)
+    }
+
+    /// One policy run and one base run over all rows (chunked past `ORT_CHUNK_ROWS`).
+    #[cfg(feature = "ripple")]
+    fn infer_batched(&self, obs: &[f32], rows: usize) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+        let keys = self.row_keys(obs, rows);
+        let (policy, base) = self.run_obs_batched(obs, rows)?;
+        if policy.len() != rows * N_ACTIONS || base.len() != rows * N_ACTIONS {
+            return Err(format!(
+                "ripple logits len {} / {} for {rows} rows",
+                policy.len(),
+                base.len()
+            )
+            .into());
+        }
+        let width = self.obs_width();
+        let mut chosen = Vec::with_capacity(rows);
+        for i in 0..rows {
+            let is_kickoff = obs[i * width + 29].abs() > 0.5;
+            let p = &policy[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+            let b = &base[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+            chosen.push(Some(self.choose_action(is_kickoff, p, b)));
+        }
+        Ok(self.commit_chosen(&keys, &chosen))
+    }
+
+    #[cfg(feature = "ripple")]
+    fn run_obs_batched(
+        &self,
+        obs: &[f32],
+        rows: usize,
+    ) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
+        let width = self.obs_width();
+        let mut policy = Vec::with_capacity(rows * N_ACTIONS);
+        let mut base = Vec::with_capacity(rows * N_ACTIONS);
+        let mut done = 0;
+        while done < rows {
+            let n = (rows - done).min(ORT_CHUNK_ROWS);
+            let slice = &obs[done * width..(done + n) * width];
+            let packed = pack_obs(slice, n, width);
+            let (p, b) = self.run_models(n, &packed[0], &packed[1], &packed[2], &packed[3], &packed[4])?;
+            policy.extend(p);
+            base.extend(b);
+            done += n;
+        }
+        Ok((policy, base))
+    }
+
+    #[cfg(feature = "ripple")]
+    fn run_models(
+        &self,
+        rows: usize,
+        main: &[f32],
+        others: &[f32],
+        ball: &[f32],
+        actions: &[f32],
+        boosts: &[f32],
+    ) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
+        use ort::{inputs, value::TensorRef};
+        let n = rows;
+        let policy_logits = {
+            let main_in = TensorRef::from_array_view((vec![n, 32], main))?;
+            let others_in = TensorRef::from_array_view((vec![n, 5, 21], others))?;
+            let ball_in = TensorRef::from_array_view((vec![n, 6, 9], ball))?;
+            let actions_in = TensorRef::from_array_view((vec![n, 6, 8], actions))?;
+            let boosts_in = TensorRef::from_array_view((vec![n, 34, 5], boosts))?;
+            let mut session = self.policy.lock().unwrap();
+            let outputs = session.run(inputs![
+                "main" => main_in,
+                "others" => others_in,
+                "ball" => ball_in,
+                "actions" => actions_in,
+                "boosts" => boosts_in,
+            ])?;
+            let (_, logits) = outputs["logits"].try_extract_tensor::<f32>()?;
+            logits.to_vec()
+        };
+        let base_logits = {
+            let main_in = TensorRef::from_array_view((vec![n, 32], main))?;
+            let others_in = TensorRef::from_array_view((vec![n, 5, 21], others))?;
+            let ball_in = TensorRef::from_array_view((vec![n, 6, 9], ball))?;
+            let actions_in = TensorRef::from_array_view((vec![n, 6, 8], actions))?;
+            let boosts_in = TensorRef::from_array_view((vec![n, 34, 5], boosts))?;
+            let mut session = self.base.lock().unwrap();
+            let outputs = session.run(inputs![
+                "main" => main_in,
+                "others" => others_in,
+                "ball" => ball_in,
+                "actions" => actions_in,
+                "boosts" => boosts_in,
+            ])?;
+            let (_, logits) = outputs["logits"].try_extract_tensor::<f32>()?;
+            logits.to_vec()
+        };
+        Ok((policy_logits, base_logits))
+    }
+
+    fn row_keys(&self, obs: &[f32], rows: usize) -> Vec<(usize, usize)> {
+        let width = self.obs_width();
+        let records = self.build_records.lock().unwrap();
+        (0..rows)
+            .map(|i| {
+                let ptr = obs[i * width..(i + 1) * width].as_ptr() as usize;
+                *records.get(&ptr).unwrap_or_else(|| {
+                    panic!(
+                        "infer() row {i} (ptr {ptr:x}) has no recorded key - build() must be called first"
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn choose_action(&self, is_kickoff: bool, policy_logits: &[f32], base_logits: &[f32]) -> usize {
+        let log_policy = log_softmax(policy_logits);
+        if is_kickoff {
+            inverse_cdf(&log_policy, self.draw_unit_interval())
+        } else {
+            kl_argmax(&log_policy, &log_softmax(base_logits))
+        }
+    }
+
+    fn draw_unit_interval(&self) -> f32 {
+        #[cfg(feature = "ripple-replay")]
+        {
+            let override_guard = self.replay_rng_override.lock().unwrap();
+            if let Some(override_u) = *override_guard {
+                return override_u;
+            }
+        }
+        let mut rng = self.rng.lock().unwrap();
+        (rng.next_u64() as f64 / std::u64::MAX as f64) as f32
+    }
+
+    fn commit_chosen(&self, keys: &[(usize, usize)], chosen: &[Option<usize>]) -> Vec<usize> {
+        let mut actions = Vec::with_capacity(chosen.len());
+        let mut states = self.states.lock().unwrap();
+        for (key, choice) in keys.iter().zip(chosen) {
+            match *choice {
+                Some(action) => {
+                    if let Some(st) = states.get_mut(key) {
+                        actions.push(commit_queue(st, action));
+                    } else {
+                        actions.push(action);
+                    }
+                }
+                None => actions.push(0),
+            }
+        }
+        actions
+    }
+
+    /// Mean milliseconds for one batched decision, and that time divided by `rows`.
+    #[cfg(feature = "ripple")]
+    pub fn bench_infer(&self, rows: usize, warmup: usize, repeats: usize) -> (f64, f64) {
+        let width = self.obs_width();
+        let obs = vec![0.0f32; rows * width];
+        let mask = vec![true; rows * N_ACTIONS];
+        let once = || {
+            {
+                let mut records = self.build_records.lock().unwrap();
+                for i in 0..rows {
+                    let ptr = obs[i * width..(i + 1) * width].as_ptr() as usize;
+                    records.insert(ptr, (0xBEEF, i));
+                }
+            }
+            let started = std::time::Instant::now();
+            let actions = self.infer(&obs, &mask, rows);
+            let elapsed = started.elapsed();
+            assert_eq!(actions.len(), rows);
+            elapsed
+        };
+        for _ in 0..warmup {
+            once();
+        }
+        let mut total = std::time::Duration::ZERO;
+        for _ in 0..repeats {
+            total += once();
+        }
+        let ms = total.as_secs_f64() * 1e3 / repeats as f64;
+        (ms, ms / rows as f64)
+    }
+
     /// Get raw logits from both models given the 5 separate tensors (for Python tensor comparison)
     #[cfg(feature = "ripple")]
     pub fn get_raw_logits_from_tensors(
@@ -1300,108 +1436,16 @@ impl RipplePolicy {
         actions_vec: &[f32],
         boosts_vec: &[f32],
     ) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
-        use ort::{inputs, value::TensorRef};
-        
-        // Run policy model
-        let policy_logits = {
-            let main_input = TensorRef::from_array_view((vec![1, 32], main_vec))?;
-            let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec))?;
-            let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec))?;
-            let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec))?;
-            let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec))?;
-            
-            let mut policy = self.policy.lock().unwrap();
-            let policy_outputs = policy.run(inputs![
-                "main" => main_input,
-                "others" => others_input,
-                "ball" => ball_input,
-                "actions" => actions_input,
-                "boosts" => boosts_input,
-            ])?;
-            let (_, logits) = policy_outputs["logits"].try_extract_tensor::<f32>()?;
-            logits.to_vec()
-        };
-        
-        // Run base model
-        let base_logits = {
-            let main_input = TensorRef::from_array_view((vec![1, 32], main_vec))?;
-            let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec))?;
-            let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec))?;
-            let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec))?;
-            let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec))?;
-            
-            let mut base = self.base.lock().unwrap();
-            let base_outputs = base.run(inputs![
-                "main" => main_input,
-                "others" => others_input,
-                "ball" => ball_input,
-                "actions" => actions_input,
-                "boosts" => boosts_input,
-            ])?;
-            let (_, logits) = base_outputs["logits"].try_extract_tensor::<f32>()?;
-            logits.to_vec()
-        };
-        
-        Ok((policy_logits, base_logits))
+        self.run_models(1, main_vec, others_vec, ball_vec, actions_vec, boosts_vec)
     }
 
     /// Get raw logits from both models without sampling (for deterministic replay comparison)
     #[cfg(feature = "ripple")]
     pub fn get_raw_logits(&self, obs: &[f32]) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
-        use ort::{inputs, value::TensorRef};
-        
-        // Parse obs into 5 tensors (same as infer does)
-        let main_vec = obs[0..32].to_vec();
-        let others_vec = obs[32..137].to_vec();
-        let ball_vec = obs[137..191].to_vec();
-        let actions_vec = obs[191..239].to_vec();
-        let boosts_vec = obs[239..409].to_vec();
-        
-        // Run policy model - create inputs, lock, run, extract, drop lock
-        let policy_logits = {
-            let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice()))?;
-            let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice()))?;
-            let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice()))?;
-            let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice()))?;
-            let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice()))?;
-            
-            let mut policy = self.policy.lock().unwrap();
-            let policy_outputs = policy.run(inputs![
-                "main" => main_input,
-                "others" => others_input,
-                "ball" => ball_input,
-                "actions" => actions_input,
-                "boosts" => boosts_input,
-            ])?;
-            let (_, logits) = policy_outputs["logits"].try_extract_tensor::<f32>()?;
-            logits.to_vec()
-            // policy lock drops here
-        };
-        
-        // Run base model - create inputs, lock, run, extract, drop lock
-        let base_logits = {
-            let main_input = TensorRef::from_array_view((vec![1, 32], main_vec.as_slice()))?;
-            let others_input = TensorRef::from_array_view((vec![1, 5, 21], others_vec.as_slice()))?;
-            let ball_input = TensorRef::from_array_view((vec![1, 6, 9], ball_vec.as_slice()))?;
-            let actions_input = TensorRef::from_array_view((vec![1, 6, 8], actions_vec.as_slice()))?;
-            let boosts_input = TensorRef::from_array_view((vec![1, 34, 5], boosts_vec.as_slice()))?;
-            
-            let mut base = self.base.lock().unwrap();
-            let base_outputs = base.run(inputs![
-                "main" => main_input,
-                "others" => others_input,
-                "ball" => ball_input,
-                "actions" => actions_input,
-                "boosts" => boosts_input,
-            ])?;
-            let (_, logits) = base_outputs["logits"].try_extract_tensor::<f32>()?;
-            logits.to_vec()
-            // base lock drops here
-        };
-        
-        Ok((policy_logits, base_logits))
+        let (main, others, ball, actions, boosts) = split_obs_row(obs);
+        self.run_models(1, main, others, ball, actions, boosts)
     }
-    
+
     #[cfg(not(feature = "ripple"))]
     pub fn get_raw_logits_from_tensors(
         &self,
@@ -1413,7 +1457,7 @@ impl RipplePolicy {
     ) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
         Ok((vec![], vec![]))
     }
-    
+
     #[cfg(not(feature = "ripple"))]
     pub fn get_raw_logits(&self, _obs: &[f32]) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
         Ok((vec![], vec![]))
@@ -2589,5 +2633,142 @@ mod tests {
             "forecast should leave the quantizing arena, got {:?}",
             forecast_ang
         );
+    }
+
+    #[test]
+    fn test_merged_ripple_weight() {
+        assert_eq!(merged_ripple_weight(Some(1.5), None), Some(1.5));
+        assert_eq!(merged_ripple_weight(Some(1.5), Some(0.4)), Some(0.4));
+        assert_eq!(merged_ripple_weight(Some(1.5), Some(0.0)), None);
+        assert_eq!(merged_ripple_weight(None, Some(2.0)), Some(2.0));
+        assert_eq!(merged_ripple_weight(None, None), None);
+        assert_eq!(merged_ripple_weight(Some(0.0), None), None);
+        if std::env::var("RIPPLE_ORT_THREADS").is_err() {
+            assert_eq!(ripple_ort_threads(), 4);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_batched_infer_matches_per_row_rollout() {
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.join("ripple-v1.1.onnx").exists() {
+            eprintln!("Skipping test: Ripple models not found");
+            return;
+        }
+        let batched = RipplePolicy::load(&path).expect("load batched");
+        let per_row = RipplePolicy::load(&path).expect("load per-row");
+        batched.set_seed(0x5171);
+        per_row.set_seed(0x5171);
+
+        const N_GAMES: usize = 4;
+        const N_STEPS: usize = 4;
+        let mut envs_a: Vec<_> = (0..N_GAMES)
+            .map(|_| {
+                crate::env::create_env(
+                    &crate::rewards::RewardConfig::default(),
+                    &crate::setters::default_mix(),
+                )
+            })
+            .collect();
+        let mut envs_b: Vec<_> = (0..N_GAMES)
+            .map(|_| {
+                crate::env::create_env(
+                    &crate::rewards::RewardConfig::default(),
+                    &crate::setters::default_mix(),
+                )
+            })
+            .collect();
+        let mut states_a: Vec<GameState> = envs_a.iter_mut().map(|e| e.reset().0).collect();
+        let mut states_b: Vec<GameState> = envs_b.iter_mut().map(|e| e.reset().0).collect();
+        for g in 0..N_GAMES {
+            envs_b[g].arena = envs_a[g].arena.clone();
+            states_a[g] = envs_a[g].current_state();
+            states_b[g] = envs_b[g].current_state();
+        }
+        let n_cars = states_a[0].cars.len();
+        let rows = N_GAMES * n_cars;
+        let width = batched.obs_width();
+        let mut checked_logits = false;
+
+        for step in 0..N_STEPS {
+            for half in 0..2 {
+                let mut obs_a = vec![0.0f32; rows * width];
+                let mut obs_b = vec![0.0f32; rows * width];
+                let mut mask_a = vec![true; rows * N_ACTIONS];
+                let mut mask_b = vec![true; rows * N_ACTIONS];
+                for g in 0..N_GAMES {
+                    for c in 0..n_cars {
+                        let i = g * n_cars + c;
+                        batched.build(
+                            &states_a[g],
+                            c,
+                            &mut obs_a[i * width..(i + 1) * width],
+                            &mut mask_a[i * N_ACTIONS..(i + 1) * N_ACTIONS],
+                        );
+                        per_row.build(
+                            &states_b[g],
+                            c,
+                            &mut obs_b[i * width..(i + 1) * width],
+                            &mut mask_b[i * N_ACTIONS..(i + 1) * N_ACTIONS],
+                        );
+                    }
+                }
+                assert_eq!(
+                    obs_a, obs_b,
+                    "step {step} half {half}: builds diverged before inference"
+                );
+                if !checked_logits {
+                    let (batch_p, batch_b) = batched.run_obs_batched(&obs_a, rows).expect("batched logits");
+                    let mut row_p = Vec::with_capacity(batch_p.len());
+                    let mut row_b = Vec::with_capacity(batch_b.len());
+                    for i in 0..rows {
+                        let (m, o, b, a, bo) = split_obs_row(&obs_b[i * width..(i + 1) * width]);
+                        let (p, base) = per_row.run_models(1, m, o, b, a, bo).expect("row logits");
+                        row_p.extend(p);
+                        row_b.extend(base);
+                    }
+                    assert_eq!(batch_p.len(), rows * N_ACTIONS);
+                    assert_eq!(
+                        batch_p, row_p,
+                        "policy logits are not bitwise-identical to the per-row session"
+                    );
+                    assert_eq!(
+                        batch_b, row_b,
+                        "base logits are not bitwise-identical to the per-row session"
+                    );
+                    checked_logits = true;
+                }
+                let actions_a = batched.infer(&obs_a, &mask_a, rows);
+                let actions_b = per_row.infer_per_row(&obs_b, rows);
+                assert_eq!(
+                    actions_a, actions_b,
+                    "step {step} half {half}: batched actions != per-row"
+                );
+                for g in 0..N_GAMES {
+                    for c in 0..n_cars {
+                        assert_eq!(
+                            batched.get_selected_action(&states_a[g], c),
+                            per_row.get_selected_action(&states_b[g], c),
+                            "step {step} half {half} game {g} car {c} selected index"
+                        );
+                        assert_eq!(
+                            batched.get_executed_controls(&states_a[g], c),
+                            per_row.get_executed_controls(&states_b[g], c),
+                            "step {step} half {half} game {g} car {c} executed row"
+                        );
+                        let action = actions_a[g * n_cars + c];
+                        envs_a[g].arena.set_car_controls(c, controls_of(action));
+                        envs_b[g].arena.set_car_controls(c, controls_of(action));
+                    }
+                    envs_a[g].step_physics(4);
+                    envs_b[g].step_physics(4);
+                    states_a[g] = envs_a[g].current_state();
+                    states_b[g] = envs_b[g].current_state();
+                }
+            }
+        }
     }
 }

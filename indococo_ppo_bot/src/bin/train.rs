@@ -149,7 +149,7 @@ struct OpponentsConfig {
     external: Vec<ExternalOpponentConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExternalOpponentConfig {
     name: String,
@@ -158,9 +158,43 @@ struct ExternalOpponentConfig {
     weight: f32,
 }
 
+/// `RIPPLE_WEIGHT` overrides a toml `kind = "ripple"` entry. A positive value
+/// with no entry adds one at `RIPPLE_DIR` (or the v1.1 default). Zero removes it.
+fn ripple_external_specs(cfg: &OpponentsConfig) -> Vec<ExternalOpponentConfig> {
+    let env_weight = indococo_bot::ripple::ripple_weight_override();
+    let mut found = false;
+    let mut specs = Vec::with_capacity(cfg.external.len());
+    for o in &cfg.external {
+        if o.kind != "ripple" {
+            specs.push(o.clone());
+            continue;
+        }
+        found = true;
+        if let Some(weight) = indococo_bot::ripple::merged_ripple_weight(Some(o.weight), env_weight)
+        {
+            let mut spec = o.clone();
+            spec.weight = weight;
+            specs.push(spec);
+        }
+    }
+    if !found {
+        if let Some(weight) = indococo_bot::ripple::merged_ripple_weight(None, env_weight) {
+            let path = std::env::var("RIPPLE_DIR")
+                .unwrap_or_else(|_| "/home/ubuntu/eval_bots/ripple/bots/v1.1".to_string());
+            specs.push(ExternalOpponentConfig {
+                name: "ripple".into(),
+                kind: "ripple".into(),
+                path: PathBuf::from(path),
+                weight,
+            });
+        }
+    }
+    specs
+}
+
 /// Loads the external opponents (inference on `dev`).
 fn load_external_opponents(cfg: &OpponentsConfig, dev: &Device) -> Vec<ExternalOpponent> {
-    cfg.external
+    ripple_external_specs(cfg)
         .iter()
         .map(|o| {
             let policy: std::sync::Arc<dyn rlgymppo::ExternalPolicy> = match o.kind.as_str() {
