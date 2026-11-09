@@ -481,7 +481,9 @@ impl RippleGpu {
                     let actions = upload(&stage.actions, &packed[3], &[rows_i, 6, 8], device);
                     let boosts = upload(&stage.boosts, &packed[4], &[rows_i, 34, 5], device);
                     let policy_gpu = self.policy.forward(&main, &others, &ball, &actions, &boosts);
-                    // Policy D2H overlaps the base forward. Both stay queued on this stream.
+                    // One stream, so this D2H finishes before the base forward starts.
+                    // Pinned memory skips the pageable bounce buffer, and the CPU
+                    // waits once at the end instead of on every copy.
                     let policy_host = queue_download(&stage.policy, &policy_gpu, rows_i);
                     let base_gpu = self.base.forward(&main, &others, &ball, &actions, &boosts);
                     let base_host = queue_download(&stage.base, &base_gpu, rows_i);
