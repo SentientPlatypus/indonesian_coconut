@@ -1551,4 +1551,18 @@ Panel vs ST16 BEST: 50.4% vs ST16 (252-248 / 500 g; auto gate needs ≥52), FR4 
 Pool vs ST16: 1v1.pt 82.5 (81.5), ppo_430M 83.75 (81.25), Nexto 93.0 (93.25), Necto 97.25 (99.25), Element 99.75 (99.5), Immortal 99.5 (97.5).
 bp5 vs ST16: Ripple 65.0 (65.75), Kira 67.5 (68.0), Dice 60.5 (56.5), Chronos 77.25 (78.75), Galactus-in-bp5 34.0 (26.25), Seer 100.0 (99.75).
 demos_against per 200 g: vs BEST 46 cand / 51 opp; vs FR4 11/103.
-User override 8:41 AM ET: h2h vs ST16 is even and FR4 dropped, but Galactus (+9.2 pt), Megabyte, pool, bp5 and the gen panel improved. Shipped checkpoints_to_test/st19r_15919M.bpk (sha256 `5a2405ebf11dc72131ad964518366df3dad22e8487c8707f167c631845d6fe6a`). PROMOTE.json backed up to PROMOTE.json.bak_auto_false; promote=true + manual_override note. BESTF=/home/ubuntu/ippo_runs/st19r_final. ST20 was already running from this checkpoint with BESTF=st16_final; exp_ST20/opp_BEST.toml was re-pointed to st19r_final at ~8:43 AM ET, so later ST20 mid chunks, final selection and finals h2h measure vs ST19r. The st_promote.py baseline for ST20 finals (FR4/pool/bp5/Galactus) is still st16_final until re-scored, as with ST11 after ST10.
+User override 8:41 AM ET: h2h vs ST16 is even and FR4 dropped, but Galactus (+9.2 pt), Megabyte, pool, bp5 and the gen panel improved. Shipped checkpoints_to_test/st19r_15919M.bpk (sha256 `5a2405ebf11dc72131ad964518366df3dad22e8487c8707f167c631845d6fe6a`). PROMOTE.json backed up to PROMOTE.json.bak_auto_false; promote=true + manual_override note. BESTF=/home/ubuntu/ippo_runs/st19r_final. ST20 was already running from this checkpoint with BESTF=st16_final; exp_ST20/opp_BEST.toml was re-pointed to st19r_final at ~8:43 AM ET, so later ST20 mid chunks, final selection and finals h2h measure vs ST19r. ST19r remains BEST.
+
+## ST20 results (Nov 9, 2026): not promoted
+
+ST20 finished. The user declined promotion. BEST stays ST19r (`checkpoints_to_test/st19r_15919M.bpk`). No bpk exported.
+
+Selected checkpoint `exp_ST20/checkpoints/1794253717` at 16880.9M (`st20_final`). Finals vs ST19r: h2h 54.4, FR4 73.6 (ST19r 71.6), pool 91.88 (92.62), bp5 67.0 (67.38), Galactus 33.0 (34.2), Megabyte 78.8 (report-only), gen-panel min 0.33 / mean 0.7954 (ST19r 0.342 / 0.800). Mixed panel.
+
+The Ripple share was the toml weight 1.286 (about 5% of iterations). `RIPPLE_WEIGHT` was not set in the variant env. `RIPPLE_DEVICE=cuda`. The ST20 env and train toml were not committed.
+
+## ST21 (queued after the running ST20r): Galactus 25%, Ripple 5%, Megabyte 7.8%
+
+Same ST20 recipe otherwise: gal4 setters, OPPCH 0.60, Megabyte `MEGA_WEIGHT=2.0` (7.8%), binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-e429d1a`. Ripple v1.1 stays weight 1.286 in `experiments/train_st21.toml` (5% of iterations, `0.6*1.286/15.427`). `experiments/st_ST21.env` exports `RIPPLE_DEVICE=cuda` and does not set `RIPPLE_WEIGHT`.
+
+One change: Galactus 20% to 25% (`GAL_WEIGHT` 6.429, was 5.143). The extra 5% comes from the other league weights (past versions, FR4, and EXTRA_OPPS), each scaled to 0.816, not from Ripple or Megabyte. League total 15.427 at OPPCH 0.60: Galactus 25.0%, Megabyte 7.8%, Ripple 5.0%. Measured vs ST19r. ST20r is still the running run ahead of this one in the queue.

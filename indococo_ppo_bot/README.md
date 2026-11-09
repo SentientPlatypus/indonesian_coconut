@@ -404,6 +404,21 @@ iteration at about 2.1× a normal one. Early ST20 production does not: Ripple wa
 17/346 iterations (4.9%), the median Ripple iteration took about 5.5 s (the same as other iterations),
 and throughput is 51.2k steps/s against 54.5k for ST19r (about −6%).
 
+ST20 finished and was not promoted. The user declined on Nov 9. BEST stays ST19r
+(`checkpoints_to_test/st19r_15919M.bpk`). Selected checkpoint
+`exp_ST20/checkpoints/1794253717` at 16880.9M (`st20_final`). Finals vs ST19r: h2h 54.4,
+FR4 73.6 (ST19r 71.6), pool 91.88 (92.62), bp5 67.0 (67.38), Galactus 33.0 (34.2),
+Megabyte 78.8 (report-only), gen-panel min 0.33 / mean 0.7954 (ST19r 0.342 / 0.800).
+No bpk was exported.
+
+ST21 is queued after the running ST20r (`experiments/st_ST21.env`,
+`experiments/train_st21.toml`). It keeps the ST20 recipe: Ripple weight 1.286 in the
+toml (5% of iterations), Megabyte `MEGA_WEIGHT=2.0` (7.8%), gal4 setters, OPPCH 0.60,
+binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-e429d1a`. `st_ST21.env` exports
+`RIPPLE_DEVICE=cuda` and does not set `RIPPLE_WEIGHT`. The one change is Galactus from
+20% to 25% (`GAL_WEIGHT` 6.429, was 5.143). The extra 5% comes from past versions, FR4,
+and EXTRA_OPPS, each scaled to 0.816. Evals stay against ST19r.
+
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench
 0.0118 ms/row at 1024 rows and 0.0237 ms/row at 256, with the forward at about 5 ms per call. The

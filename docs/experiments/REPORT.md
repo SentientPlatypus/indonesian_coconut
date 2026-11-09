@@ -1278,6 +1278,26 @@ GPU-box verification of `e429d1a` (rip33):
 | Bench | 0.0118 ms/row at 1024 rows, 0.0237 ms/row at 256; forward about 5 ms per call |
 | Trainer smoke | pools=2, checkpoint saved; Ripple iteration about 2.1× normal |
 
+### 11.8q ST20 not promoted; ST21 queued (Galactus 25%, 2026-11-09)
+
+ST19r (`checkpoints_to_test/st19r_15919M.bpk`) stays BEST. ST20 finished and the user declined promotion on Nov 9. No bpk was exported.
+
+Selected checkpoint `exp_ST20/checkpoints/1794253717` at 16880.9M (`st20_final`). Finals vs ST19r:
+
+| Metric | ST20 16880.9M | ST19r (BEST) |
+|---|---|---|
+| h2h | 54.4 | — |
+| FR4 | 73.6 | 71.6 |
+| pool | 91.88 | 92.62 |
+| botpack5 | 67.0 | 67.38 |
+| Galactus | 33.0 | 34.2 |
+| Megabyte (report-only) | 78.8 | — |
+| gen-panel min / mean | 0.33 / 0.7954 | 0.342 / 0.800 |
+
+The panel is mixed. Ripple's ST20 share was toml weight 1.286. `RIPPLE_WEIGHT` was not in the env.
+
+ST21 is the next designed run, queued after the running ST20r (`indococo_ppo_bot/experiments/st_ST21.env`, `train_st21.toml`). It keeps Ripple at 5% (toml weight 1.286) and Megabyte at 7.8% (`MEGA_WEIGHT=2.0`). `RIPPLE_DEVICE=cuda` is exported in the env. `RIPPLE_WEIGHT` is not set. The one change is Galactus from 20% to 25% (`GAL_WEIGHT` 6.429, was 5.143). The extra 5% comes from past versions, FR4, and EXTRA_OPPS scaled to 0.816 each. League total 15.427 at OPPCH 0.60. Evals stay against ST19r. Binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-e429d1a`.
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):
