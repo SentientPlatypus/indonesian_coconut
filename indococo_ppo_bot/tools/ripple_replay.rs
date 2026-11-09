@@ -129,18 +129,40 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
             .collect(),
         boost_pads: {
             // Populate from dumped pad states to test pad-timer parity
+            // Problem: arena_state.pads are in Python order (obs.py BOOST_LOCATIONS)
+            // but GameState.boost_pads must be in RocketSim order (by y then x)
             use rlgymppo::rlgym::rocketsim::BoostPadState;
-            let mut pads = vec![];
-            for pad_data in &arena_state.pads {
-                // Get the RocketSim pad config
-                let config = *arena.get_boost_pad_config(pad_data.index);
-                // Construct state from dump: cooldown = 0 if active, else timer value
-                let state = BoostPadState {
+            
+            // Get all RocketSim pad configs first
+            let num_pads = 34;
+            let mut pads = Vec::with_capacity(num_pads);
+            for rs_idx in 0..num_pads {
+                let config = *arena.get_boost_pad_config(rs_idx);
+                pads.push((config, BoostPadState {
                     touching_car_idxs: vec![],
-                    cooldown: if pad_data.is_active { 0.0 } else { pad_data.timer },
-                };
-                pads.push((config, state));
+                    cooldown: 0.0,  // Will be set below
+                }));
             }
+            
+            // Now map Python indices to RocketSim indices using coordinate matching
+            // arena_state.pads are in Python order (index 0..33)
+            for (python_idx, pad_data) in arena_state.pads.iter().enumerate() {
+                // Find which RocketSim pad matches this Python pad by position
+                let target_pos = indococo_bot::obs::BOOST_LOCATIONS[python_idx];
+                let rs_idx = (0..num_pads)
+                    .min_by(|&a, &b| {
+                        let pa = pads[a].0.pos;
+                        let pb = pads[b].0.pos;
+                        let da = (pa.x - target_pos.0).powi(2) + (pa.y - target_pos.1).powi(2);
+                        let db = (pb.x - target_pos.0).powi(2) + (pb.y - target_pos.1).powi(2);
+                        da.partial_cmp(&db).unwrap()
+                    })
+                    .unwrap();
+                
+                // Set the cooldown for this RocketSim pad
+                pads[rs_idx].1.cooldown = if pad_data.is_active { 0.0 } else { pad_data.timer };
+            }
+            
             pads
         },
         events: Vec::new(),

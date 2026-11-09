@@ -101,9 +101,11 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
         }
 
         // Flips + jumps
+        // Python act.py:29,62: starts at 0, not TAU/16
+        // angles = [np.nan] + [i/16 * 2*pi for i in range(16)]
         let mut angles = vec![f32::NAN];
         for i in 0..16 {
-            angles.push((i as f32 / 16.0 + 1.0 / 16.0) * std::f32::consts::TAU);
+            angles.push((i as f32 / 16.0) * std::f32::consts::TAU);
         }
         for ang in angles {
             let (pi, ro) = if ang.is_nan() {
@@ -379,9 +381,12 @@ impl RipplePolicy {
             st.has_jumped = false;
         }
 
+        // Jump timer logic reads queue[5] (about_to_execute) to match Python obs.py
+        // at obs-build time, BEFORE queue shifts
+        // Edge detection: about_to_execute (new) vs prev_action (old)
         if st.is_jumping {
-            st.is_jumping = st.jump_time < 3.0 || (prev_action[5] > 0.5 && st.jump_time < 24.0);
-        } else if prev_action[5] > 0.5 && st.prev_prev_action[5] <= 0.5 && st.prev_on_ground {
+            st.is_jumping = st.jump_time < 3.0 || (about_to_execute[5] > 0.5 && st.jump_time < 24.0);
+        } else if about_to_execute[5] > 0.5 && prev_action[5] <= 0.5 && st.prev_on_ground {
             st.is_jumping = true;
             st.jump_time = 0.0;
         }
@@ -1631,5 +1636,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_action_lookup_table() {
+        // Verify action lookup table matches Python act.py formula
+        // The table has ground + aerial actions first, then flips/jumps at the end
+        // Python flip formula: angles = [np.nan] + [i/16 * 2*pi for i in range(16)]
+        // Then for each angle: [boost, 0, pitch, 0, roll, 1, boost, 1]
+        // where pitch=sin(angle)/max(abs), roll=cos(angle)/max(abs)
+        
+        let actions = action_table();
+        
+        // User verified: step 12 index 273 executed row
+        // Python: [1,0,-1,0,1,1,1,1]  (boost, throttle, pitch, yaw, roll, jump, boost_flag, handbrake)
+        // This is angle 14: 14/16 * 2pi = 315 degrees (angle_idx 15 in the array including NaN at 0)
+        // sin(315°) = -sqrt(2)/2, cos(315°) = sqrt(2)/2
+        // pitch = sin/max = -1, roll = cos/max = 1
+        // Format: [boost, throttle, pitch, yaw, roll, jump, boost_flag, handbrake]
+        let idx273 = actions[273];
+        assert!((idx273[0] - 1.0).abs() < 1e-5, "273[0] boost: got {}, expected 1.0", idx273[0]);
+        assert!((idx273[1] - 0.0).abs() < 1e-5, "273[1] throttle: got {}, expected 0.0", idx273[1]);
+        assert!((idx273[2] - (-1.0)).abs() < 1e-3, "273[2] pitch: got {}, expected -1.0", idx273[2]);
+        assert!((idx273[3] - 0.0).abs() < 1e-5, "273[3] yaw: got {}, expected 0.0", idx273[3]);
+        assert!((idx273[4] - 1.0).abs() < 1e-3, "273[4] roll: got {}, expected 1.0", idx273[4]);
+        assert!((idx273[5] - 1.0).abs() < 1e-5, "273[5] jump: got {}, expected 1.0", idx273[5]);
+        assert!((idx273[6] - 1.0).abs() < 1e-5, "273[6] boost_flag: got {}, expected 1.0", idx273[6]);
+        assert!((idx273[7] - 1.0).abs() < 1e-5, "273[7] handbrake: got {}, expected 1.0", idx273[7]);
     }
 }
