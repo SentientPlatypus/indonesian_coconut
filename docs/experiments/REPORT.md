@@ -83,7 +83,7 @@ All rounds build on the E8B2 reward set (`indococo_ppo_bot/config/e8b2_1v1.toml`
 
 `tools/pool_eval/` plays headless RocketSim matches through RLGym v2. Each game is a 1v1 Octane game from a kickoff, played to the first goal. It counts as a timeout after 30 s with no touch or after 300 s.
 
-- **Opponent pool:** `1v1.pt` (our Python E8B2 policy), `ppo_430M` (R0 checkpoint), **Nexto**, **Necto** (VirxEC/NectoFamily), **Element** (VirxEC/Elementv5) and **Immortal** (RLBotPack, tick skip 6). Public bots run their own obs builders, models and kickoff code through an RLGym v1 compatibility view. Nexto keeps its stochastic sampling. Seer, Ripple and Tecko are not in the pool, because Seer has no packet shim and the other two have no public weights. (Update 2026-11-01: the RLBot v5 botpack now ships Ripple v1.1 and the GigaLearn bots Kira, Dice, Chronos and GalactusV2; they form a second pool, `pool_botpack5.toml`. Results in `indococo_ppo_bot/EXPERIMENTS.md`, "Benchmark: RLBot v5 botpack ML bots", and `figures/botpack5_bench.png`. GalactusV2 beats FR6-final 338-62. Seer was added later with a packet shim; FR6-final beats it 400-0.)
+- **Opponent pool:** `1v1.pt` (our Python E8B2 policy), `ppo_430M` (R0 checkpoint), **Nexto**, **Necto** (VirxEC/NectoFamily), **Element** (VirxEC/Elementv5) and **Immortal** (RLBotPack, tick skip 6). Public bots run their own obs builders, models and kickoff code through an RLGym v1 compatibility view. Nexto keeps its stochastic sampling. Seer, Ripple and Tecko are not in the pool, because Seer has no packet shim and the other two have no public weights. (Update 2026-11-01: the RLBot v5 botpack now ships Ripple v1.1 and the GigaLearn bots Kira, Dice, Chronos and GalactusV2; they form a second pool, `pool_botpack5.toml`. Results in `indococo_ppo_bot/EXPERIMENTS.md`, "Benchmark: RLBot v5 botpack ML bots", and `figures/botpack5_bench.png`. GalactusV2 beats FR6-final 338-62. Seer was added later with a packet shim; FR6-final beats it 400-0. Update 2026-11-09: Ripple v1.1 also joins the training game split at 5% of iterations in ST20; see §11.8p.)
 - **Pool score:** the mean decisive win rate over the six opponents.
 - **H2H:** each seed is played twice, with the candidate blue and then orange. Our policy plays greedily (argmax). The standard error is √(p(1−p)/n): about ±2.5 pts at 400 games, ±1.6 at 1000 and ±5 at 100. R0 used seed 10000; R1 onward used seed 424242 and `nice 19`.
 - **Air-time clamp:** on by default, because that is what the deployed bot sees. Master's `h2h_1v1.py` ran without it. Unclamped, 430M scored 51.0% against `1v1.pt` with both sides unclamped, and 52.5% with only 430M unclamped, against 57.2% clamped (400 games each).
@@ -1257,6 +1257,26 @@ Finals checkpoint = best mid chunk 11089.7M (`exp_ST11/checkpoints/1794000457`):
 | gen panel min / mean | **30.0** / 79.25 | 24.4 / 79.43 |
 
 Auto `promote=true` vs ST10 on every gate (bp5 −0.92 within −1.0 tol; Galactus +5.6). Note: launch BESTF was still `st9_final` (ST11 started before the ST10 manual override); h2h already played ST10 via patched `opp_BEST.toml`. PROMOTE.json was re-scored vs `st10_final` and still promotes. bp5 gave back Kira (−8.5) and Dice (−6.25) while Chronos (+2.5), Galactus-in-bp5 (+4.25), and Ripple (+1.75) rose. Mid-run (200 g) peak Galactus 34.0% at 10889.3M (<40%). Shipped as `checkpoints_to_test/st11_11090M.bpk`. ST12 (ST9_final + mega2@2.0) auto-started from this chunk at 8:29 PM ET measuring against ST11; queue ST13 (ST10+ST11 in EXTRA_OPPS, mega2) then ST14 (OPPCH 0.50).
+
+### 11.8p Ripple v1.1 joins the training split (ST20 queued, 2026-11-09)
+
+Ripple v1.1 (Rolv-Arild/Ripple-RLBot @ 7ca4273a, CC BY-NC-SA 4.0) was an eval-only botpack5 opponent through ST19. ST20, queued after ST19r, puts the Rust port (`indococo_ppo_bot/src/ripple.rs`) in the training game split. Weights stay outside the repo and load from `RIPPLE_DIR` (default `/home/ubuntu/eval_bots/ripple/bots/v1.1`).
+
+The split is Ripple 5% of iterations (toml weight 1.286), Galactus 20%, Megabyte 7.8%, with `RIPPLE_DEVICE=cuda`. Trainer binary md5 `3c6dbe7c`. A 10% Ripple share estimates +15% to +28% slower, which is over the 15% slowdown budget. At 5% the estimate is +7.6% to +13.8%. The pools=2 trainer smoke measured a Ripple iteration at about 2.1× a normal one and saved a checkpoint. That smoke, and the trainer, have to be started in a working directory that contains `collision_meshes` (RocketSim loads `collision_meshes/soccar` from the cwd).
+
+`RIPPLE_WEIGHT` and `RIPPLE_DEVICE` are set in the variant env sourced by `experiments/st_launch.sh`. A set weight appends `[[opponents.external]]` with `kind = "ripple"`. At process start a positive `RIPPLE_WEIGHT` overrides the toml ripple weight or adds the opponent; `0` removes it; unset leaves the toml weight. `RIPPLE_DEVICE=cuda` runs the LibTorch policy and base nets and errors if CUDA or the safetensors are missing. `RIPPLE_DEVICE=cpu` keeps ONNX. Unset prefers CUDA when both are available.
+
+GPU-box verification of `e429d1a` (rip33), before ST20 was queued:
+
+| Check | Result |
+|---|---|
+| Build and link | clean |
+| Lib tests | 87/87 on CPU and with Ripple on CUDA |
+| GPU vs ONNX actions | 100% agreement |
+| Replay | 197/197 blue, 195/197 orange |
+| Idle | 100/100 |
+| Bench | 0.0118 ms/row at 1024 rows, 0.0237 ms/row at 256; forward about 5 ms per call |
+| Trainer smoke | pools=2, checkpoint saved; Ripple iteration about 2.1× normal |
 
 ## Appendix A: data and figures
 

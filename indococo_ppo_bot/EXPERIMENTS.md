@@ -1514,13 +1514,27 @@ Total setter weight auto-normalizes. A typical recipe: reduce kickoff from 0.45 
   - The `demo_threat.supersonic` field is unused.
   - Both drills always defend blue.
 
-## Ripple v1.1 Integration (2026-11-08)
+## Ripple v1.1 in the training split (verified rip33, 2026-11-09): ST20 queued at 5%
 
-Ripple v1.1 (Rolv-Arild/Ripple-RLBot @ 7ca4273a, CC BY-NC-SA 4.0) is now available as an external training opponent, following the Galactus and Megabyte pattern (see `RIPPLE.md`).
+Ripple v1.1 (Rolv-Arild/Ripple-RLBot @ 7ca4273a, CC BY-NC-SA 4.0) joins the training game split as an external opponent, same mechanism as Galactus and Megabyte (`src/ripple.rs`, README "Ripple v1.1 as a league opponent"). Weights are not vendored. They load from `RIPPLE_DIR`, default `/home/ubuntu/eval_bots/ripple/bots/v1.1`.
 
-- **Status:** Implementation scaffold complete, observation builder and ONNX inference need completion on GPU box.
-- **Architecture:** 5-tensor observation (main, others, ball w/ prediction, actions queue, boosts), 276-action lookup, tick skip 4, KL selection (policy + BC base).
-- **Usage:** Set `RIPPLE_WEIGHT` and `RIPPLE_DIR` in the variant's `.env` file. Default 0 = off. Existing configs unchanged.
-- **Eval:** Per-chunk 200 games (logged as `ripple_200` in `mid.jsonl`), finals 500 games (`ripple_final.jsonl`).
-- **License:** CC BY-NC-SA 4.0 NonCommercial. Assets load from `~/eval_bots/ripple/bots/v1.1/` at runtime, not vendored.
-- **Next steps:** Complete obs builder (~250 lines from `obs.py`), ONNX inference with KL selection, parity validation (`ripple_parity.py`), tune weight in ST20+.
+ST20 is queued after ST19r. Ripple is 5% of iterations, toml weight 1.286. Galactus stays 20% and Megabyte 7.8%. `RIPPLE_DEVICE=cuda`. Trainer binary md5 `3c6dbe7c`.
+
+Why 5% and not 10%: the slowdown budget is 15%. On rip33 a Ripple iteration took about 2.1× a normal one (pools=2 real trainer smoke, checkpoint saved). The estimated slowdown is +7.6% to +13.8% at a 5% share and +15% to +28% at a 10% share. The 10% share is over the budget.
+
+`RIPPLE_WEIGHT` and `RIPPLE_DEVICE` go in the variant env that `st_launch.sh` sources. A set `RIPPLE_WEIGHT` appends `[[opponents.external]]` (`kind = "ripple"`, path `RIPPLE_DIR`). At load, a positive `RIPPLE_WEIGHT` overrides a toml ripple weight or adds the opponent; `0` removes it; unset leaves the toml entry. `RIPPLE_DEVICE=cuda` selects the LibTorch nets (build `--features torch,ripple`, plus `cuda` on the training box) and fails if CUDA or the safetensors are missing. `RIPPLE_DEVICE=cpu` forces ONNX. Unset uses CUDA when the safetensors and a CUDA device are available.
+
+```sh
+RIPPLE_WEIGHT=1.286
+RIPPLE_DEVICE=cuda
+RIPPLE_DIR=/home/ubuntu/eval_bots/ripple/bots/v1.1
+```
+
+Verification on the GPU box, rip33, commit `e429d1a`:
+
+- Clean build and link. 87/87 lib tests pass on CPU and with Ripple on CUDA.
+- GPU vs ONNX action agreement 100%. Replay 197/197 blue and 195/197 orange. Idle 100/100.
+- Bench: 0.0118 ms/row at 1024 rows and 0.0237 ms/row at 256. Forward cost about 5 ms per call.
+- The pools=2 trainer smoke saved a checkpoint. RocketSim loads `collision_meshes/soccar` from the working directory, so the trainer has to be started in a directory that contains `collision_meshes`.
+
+Per-chunk eval when `RIPPLE_WEIGHT` is set: 200 games (`ripple_200` in `mid.jsonl`). Finals: 500 games (`ripple_final.jsonl`). License: CC BY-NC-SA 4.0, NonCommercial, assets loaded at runtime.

@@ -370,6 +370,37 @@ decision, and holds Galactus's previous controls for 7 ticks before applying the
 [dump.jsonl]` plays a checkpoint against the port and dumps states, then `tools/galactus/parity.py dump.jsonl`
 re-runs the Python eval adapter on them (see EXPERIMENTS.md "Galactus in the league").
 
+### Ripple v1.1 as a league opponent
+`src/ripple.rs` ports Ripple v1.1 (Rolv-Arild/Ripple-RLBot @ 7ca4273a, CC BY-NC-SA 4.0) as another
+`ExternalPolicy`. Weights stay outside the repo and load from `RIPPLE_DIR` (default
+`/home/ubuntu/eval_bots/ripple/bots/v1.1`). ST20, queued after ST19r, is the first training run that
+plays it: 5% of iterations (toml weight 1.286), with Galactus at 20% and Megabyte at 7.8%, and
+`RIPPLE_DEVICE=cuda`. The trainer binary md5 is `3c6dbe7c`.
+
+A 10% share was the other candidate. On rip33 (`e429d1a`) a Ripple iteration took about 2.1× a normal
+one in the pools=2 trainer smoke, and the estimated slowdown is +7.6% to +13.8% at 5% of iterations
+and +15% to +28% at 10%. 10% is over the 15% slowdown budget, so the share is 5%.
+
+Set the share and the device in the variant env that `experiments/st_launch.sh` sources. A set
+`RIPPLE_WEIGHT` appends `[[opponents.external]]` with `kind = "ripple"`. The trainer also reads the
+variable at load: a positive value overrides a toml ripple weight, or adds the opponent when the toml
+has none; `0` removes it; unset leaves the toml weight. `RIPPLE_DEVICE=cuda` runs the LibTorch policy
+and base nets (binary built with `--features torch,ripple`, and `torch,cuda` on the training box) and
+errors if CUDA or the safetensors are missing. `RIPPLE_DEVICE=cpu` keeps the ONNX sessions. Unset
+prefers CUDA when the device and `ripple-v1.1.safetensors` / `ripple-v1.1-bcm.safetensors` are present.
+
+```sh
+RIPPLE_WEIGHT=1.286
+RIPPLE_DEVICE=cuda
+RIPPLE_DIR=/home/ubuntu/eval_bots/ripple/bots/v1.1
+```
+
+rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
+GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench
+0.0118 ms/row at 1024 rows and 0.0237 ms/row at 256, with the forward at about 5 ms per call. The
+pools=2 smoke saved a checkpoint. RocketSim reads `collision_meshes/soccar` from the working directory,
+so that smoke and the trainer have to be started in a directory that contains `collision_meshes`.
+
 ### Real-play snapshots (FR7)
 `indococo-train snapshots <setters.toml> <ckpt> <steps> <threads> <out.f32>`
 self-plays a checkpoint (greedy, 5% random actions) over a setter mix and,
