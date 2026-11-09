@@ -113,7 +113,14 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
         car_state.has_double_jumped = car_data.has_double_jumped;
         car_state.has_flipped = car_data.has_flipped;
         
+        // set_car_state(core) clears wheel contacts. Write the dump's on_ground
+        // into the contact cache afterwards, before GameState is copied for build.
+        // flags() treats on_ground as >=3 wheels, so all four follow the dump flag.
         arena.set_car_state(arena_idx, car_state.core());
+        let grounded = car_data.on_ground;
+        arena.edit_car_state_full(arena_idx, |s| {
+            s.set_contact_flags(grounded, [grounded; 4]);
+        });
     }
     
     // Build GameState from Arena

@@ -10,7 +10,7 @@ use rand::prelude::*;
 
 use rlgymppo::ExternalPolicy;
 use rlgymppo::rlgym::GameState;
-use rlgymppo::rlgym::rocketsim::{Arena, BallState, CarControls, GameMode, Team, Vec3A};
+use rlgymppo::rlgym::rocketsim::{Arena, ArenaConfig, BallState, CarControls, GameMode, Team, Vec3A};
 
 use crate::obs::{flags, BOOST_LOCATIONS};
 
@@ -132,6 +132,11 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
 #[derive(Clone)]
 struct RippleState {
     queue: [[f32; 8]; QUEUE_LEN],
+    /// Side-flip flag in effect when each queue slot was selected.
+    /// Execution un-mirrors with this slot's flag, not the current frame's.
+    queue_flipped: [bool; QUEUE_LEN],
+    /// Model decision index for the newest slot (queue[0]), before any world un-mirror.
+    last_selected: Option<usize>,
     demo_timer: f32,
     boost_time: f32,
     jump_time: f32,
@@ -162,6 +167,8 @@ impl RippleState {
     fn new() -> Self {
         Self {
             queue: [[f32::NAN; 8]; QUEUE_LEN],
+            queue_flipped: [false; QUEUE_LEN],
+            last_selected: None,
             demo_timer: 0.0,
             boost_time: 0.0,
             jump_time: 0.0,
@@ -275,15 +282,13 @@ impl RipplePolicy {
     // Reset detection is now handled in build() with edge-triggered logic
 
     fn update_ball_pred(&self, state: &GameState, st: &mut RippleState) {
-        // Ball prediction arena config (per user review):
-        // - GameMode::Soccar (standard field with goals)
-        // - Ball-only (no cars to interact with)
-        // - Default mutators (no custom physics)
-        // - 120 Hz tick rate (RocketSim default)
-        // - Predicts 5 steps × 120 ticks = 5 seconds ahead
-        // Python obs.py should use identical config
+        // Prediction arena only: Python rocketsim 2.1.1 sets no_ball_rot=true.
+        // rocketsim 0.3.3 exposes the same flag on ArenaConfig::with_no_ball_rot.
+        // Soccar, ball-only, default mutators, 120 Hz. 5 steps × 120 ticks.
         thread_local! {
-            static ARENA: RefCell<Arena> = RefCell::new(Arena::new(GameMode::Soccar));
+            static ARENA: RefCell<Arena> = RefCell::new(Arena::new_with_config(
+                ArenaConfig::new(GameMode::Soccar).with_no_ball_rot(true),
+            ));
         }
         
         ARENA.with(|arena| {
@@ -489,10 +494,10 @@ impl RipplePolicy {
         main[18] = if !me.has_jumped { 1.0 } else { 0.0 };
         main[19] = if f.has_flip { 1.0 } else { 0.0 };
         main[20] = (me.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
-        main[21] = st.boost_time / 12.0;   // Normalize boost timer
-        main[22] = st.jump_time / 24.0;    // Normalize jump timer
-        main[23] = st.air_time / 150.0;    // Normalize air timer
-        main[24] = st.flip_time / 120.0;   // Normalize flip timer
+        main[21] = st.boost_time;
+        main[22] = st.jump_time;
+        main[23] = st.air_time;
+        main[24] = st.flip_time;
         main[25] = st.handbrake;
         main[26..28].copy_from_slice(&st.flip_dir);
         // is_reset: True if action queue contains NaN (indicates next action will fill queue)
@@ -686,8 +691,13 @@ impl RipplePolicy {
                 boost[1] *= -1.0;
             }
             
-            // Actions: queue already stores actions in observation space (flipped for Orange),
-            // so no flipping needed here (fixed per user report: Orange action history was wrong)
+            // Actions: INVERT_SIDE_ACTIONS = [1,-1,1,-1,-1,1,1,1]
+            // Inverts: steer(1), yaw(3), roll(4)
+            for a in &mut actions {
+                a[1] *= -1.0;  // steer
+                a[3] *= -1.0;  // yaw
+                a[4] *= -1.0;  // roll
+            }
             main[30] = 1.0; // is_flipped
         }
 
@@ -1048,19 +1058,19 @@ impl ExternalPolicy for RipplePolicy {
                 // KL selection from upstream Rolv-Arild/Ripple-RLBot @ 7ca4273a agent.py:87-88
                 // weight = log_policy if mode == ActionMode.KL else log_base
                 // return (np.exp(weight) * (log_policy-log_base)).argmax(-1)
+                // np.argmax keeps the first maximum.
                 let log_base = log_softmax(&base_logits);
-                let mut kl_scores = vec![0.0f32; N_ACTIONS];
+                let mut best = 0usize;
+                let mut best_score = f32::NEG_INFINITY;
                 for j in 0..N_ACTIONS {
-                    // weight = log_policy for KL mode
                     let weight = log_policy[j];
-                    kl_scores[j] = weight.exp() * (log_policy[j] - log_base[j]);
+                    let score = weight.exp() * (log_policy[j] - log_base[j]);
+                    if score > best_score {
+                        best_score = score;
+                        best = j;
+                    }
                 }
-                kl_scores
-                    .iter()
-                    .enumerate()
-                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                    .map(|(idx, _)| idx)
-                    .unwrap()
+                best
             };
 
             // Update delayed action queue
@@ -1079,40 +1089,33 @@ impl ExternalPolicy for RipplePolicy {
                 //   4. Put new_action at queue[0]
                 //   5. Return to_execute
                 
-                // Check for NaN and fill if needed
-                // Queue stores actions in observation space (flipped for Orange)
-                let mut fill_action = new_action;
-                if st.was_flipped {
-                    fill_action[1] *= -1.0;  // steer
-                    fill_action[3] *= -1.0;  // yaw
-                    fill_action[4] *= -1.0;  // roll
-                }
+                // Queue stores the raw lookup row. Python has no orange-only
+                // mirror inside the queue. The side-flip flag is stored per slot
+                // so a delayed action is un-mirrored with the flag from the frame
+                // it was selected, not the flag of the frame that executes it.
                 if st.queue[0][0].is_nan() {
-                    for slot in &mut st.queue {
-                        *slot = fill_action;
+                    for i in 0..QUEUE_LEN {
+                        st.queue[i] = new_action;
+                        st.queue_flipped[i] = st.was_flipped;
                     }
                 }
                 
-                // Save action to execute (from queue[5])
+                // Save action to execute (from queue[5]) and that slot's mirror flag
                 let to_execute = st.queue[QUEUE_LEN - 1];
+                let execute_flipped = st.queue_flipped[QUEUE_LEN - 1];
                 
                 // Shift right: move queue[0..5] to queue[1..6]
                 st.queue.rotate_right(1);
+                st.queue_flipped.rotate_right(1);
                 
-                // Put new action at front, flipped to observation space if needed
-                // Python stores actions in observation space (flipped for Orange)
-                let mut queue_action = new_action;
-                if st.was_flipped {
-                    queue_action[1] *= -1.0;  // steer
-                    queue_action[3] *= -1.0;  // yaw
-                    queue_action[4] *= -1.0;  // roll
-                }
-                st.queue[0] = queue_action;
+                // Newest selection is the raw model row
+                st.queue[0] = new_action;
+                st.queue_flipped[0] = st.was_flipped;
+                st.last_selected = Some(action);
                 
-                // UN-FLIP the action if observation was flipped (side inversion)
-                // The action was chosen in flipped space, so steer/yaw/roll must be inverted back
+                // Un-mirror with the flag stored alongside this slot
                 let mut applied_action_controls = to_execute;
-                if st.was_flipped {
+                if execute_flipped {
                     applied_action_controls[1] *= -1.0; // steer
                     applied_action_controls[3] *= -1.0; // yaw
                     applied_action_controls[4] *= -1.0; // roll
@@ -1174,16 +1177,8 @@ impl RipplePolicy {
         let key = (state_ptr, car);
         let states = self.states.lock().unwrap();
         let st = states.get(&key)?;
-        
-        if st.queue[0][0].is_nan() {
-            return None;
-        }
-        
-        // Find action index that matches queue[0] (newest selected)
-        let table = action_table();
-        table.iter().position(|&a| {
-            a.iter().zip(st.queue[0].iter()).all(|(x, y)| (x - y).abs() < 0.001)
-        })
+        // The index the model returned, not a re-decoded world-space row.
+        st.last_selected
     }
     
     /// Debug accessor: get the EXECUTED controls (prev_action) for a given GameState+car
@@ -1199,12 +1194,28 @@ impl RipplePolicy {
     }
 }
 
+/// numpy `np.logaddexp` on float32, including the x == y branch (`x + ln2`).
+fn logaddexp_f32(x: f32, y: f32) -> f32 {
+    if x == y {
+        x + std::f32::consts::LN_2
+    } else if x > y {
+        x + (y - x).exp().ln_1p()
+    } else if y > x {
+        y + (x - y).exp().ln_1p()
+    } else {
+        x + y
+    }
+}
+
+/// `logits - np.logaddexp.reduce(logits)` in float32, left-to-right.
+/// Matches python_parity_dump.py / agent.py normalization (not a max-shift logsumexp).
 fn log_softmax(logits: &[f32]) -> Vec<f32> {
-    let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let shifted: Vec<f32> = logits.iter().map(|&x| x - max_logit).collect();
-    let sum_exp: f32 = shifted.iter().map(|&x| x.exp()).sum();
-    let log_sum_exp = sum_exp.ln();
-    shifted.iter().map(|&x| x - log_sum_exp).collect()
+    let log_sum_exp = if logits.is_empty() {
+        f32::NEG_INFINITY
+    } else {
+        logits[1..].iter().fold(logits[0], |acc, &x| logaddexp_f32(acc, x))
+    };
+    logits.iter().map(|&x| x - log_sum_exp).collect()
 }
 
 impl RipplePolicy {
@@ -1498,9 +1509,18 @@ mod tests {
         }
         let policy = RipplePolicy::load(&path).expect("Load");
         
-        // Create fixed non-kickoff state
+        // Create fixed non-kickoff state (ball off center with velocity)
         let mut arena = Arena::new(GameMode::Soccar);
         arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+        
+        // Move ball off center and give it velocity to avoid kickoff detection
+        let mut ball_state = BallState::default();
+        ball_state.phys.pos.x = 500.0;
+        ball_state.phys.pos.y = 500.0;
+        ball_state.phys.pos.z = 100.0;
+        ball_state.phys.vel.x = 100.0;
+        ball_state.phys.vel.y = 100.0;
+        arena.set_ball_state(ball_state);
         
         let mut car_state = CarState::default();
         car_state.phys.pos.x = 1000.0;  // Not kickoff position
@@ -1508,6 +1528,7 @@ mod tests {
         car_state.phys.pos.z = 17.0;
         car_state.has_jumped = false;
         arena.set_car_state(0, car_state.core());
+        arena.edit_car_state_full(0, |s| s.set_contact_flags(true, [true; 4]));
         
         let state = {
             use rlgymppo::rlgym::GameState;
@@ -1691,6 +1712,23 @@ mod tests {
     }
 
     #[test]
+    fn test_logaddexp_reduce_matches_numpy_f32() {
+        // np.logaddexp.reduce(float32([1.25, -0.5, 3.0, 0.1, -2.0, 4.5])) == 4.748751163482666
+        let x = [1.25f32, -0.5, 3.0, 0.1, -2.0, 4.5];
+        let reduced = x[1..].iter().fold(x[0], |acc, &v| logaddexp_f32(acc, v));
+        // Exact bits of np.logaddexp.reduce on that float32 vector.
+        assert_eq!(reduced.to_bits(), 1083700677, "got {reduced} bits {}", reduced.to_bits());
+        assert_eq!(logaddexp_f32(1.0, 1.0).to_bits(), (1.0f32 + std::f32::consts::LN_2).to_bits());
+        let ls = log_softmax(&x);
+        let mut sum = 0.0f32;
+        for v in &ls {
+            sum += v.exp();
+        }
+        // float32 cumsum of exp(log_softmax) ends at 1.0000001192092896 (numpy)
+        assert!((sum - 1.0000001192092896).abs() < 1e-6, "cumsum end {sum}");
+    }
+
+    #[test]
     fn test_jump_timer_hold() {
         // User requirement: start on the ground, hold jump for 1 decision, assert Python value
         // Python: at step 18, queue[5].jump=1, prev_action.jump=0, main[22]=0.1667 (=4/24)
@@ -1703,9 +1741,16 @@ mod tests {
         }
         let policy = RipplePolicy::load(&path).expect("Load");
         
-        // Create non-kickoff state with car on ground
+        // Create non-kickoff state with car on ground (with wheel contacts)
         let mut arena = Arena::new(GameMode::Soccar);
         arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+        
+        // Move ball off center to avoid kickoff detection
+        let mut ball_state = BallState::default();
+        ball_state.phys.pos.x = 500.0;
+        ball_state.phys.pos.y = 500.0;
+        ball_state.phys.pos.z = 100.0;
+        arena.set_ball_state(ball_state);
         
         let mut car_state = CarState::default();
         car_state.phys.pos.x = 1000.0;  // Not kickoff
@@ -1713,6 +1758,8 @@ mod tests {
         car_state.phys.pos.z = 17.0;
         car_state.has_jumped = false;
         arena.set_car_state(0, car_state.core());
+        // flags() counts wheels, not CarState::is_on_ground. Four contacts => grounded.
+        arena.edit_car_state_full(0, |s| s.set_contact_flags(true, [true; 4]));
         
         let state = {
             use rlgymppo::rlgym::GameState;
