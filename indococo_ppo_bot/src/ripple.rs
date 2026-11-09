@@ -2,7 +2,6 @@
 
 #![cfg(feature = "train")]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -36,9 +35,13 @@ pub fn controls_of(action: usize) -> CarControls {
 }
 const QUEUE_LEN: usize = 6;
 const BALL_PRED_STEPS: usize = 5;
-// Python: ball_step_size_ticks = 30 iterations, each stepping tick_skip=4 ticks
-// Total: 30 * 4 = 120 ticks = 1.0 sec between prediction slices
-const BALL_STEP_TICKS: usize = 120;
+// obs.py: ball_step_size_ticks = round(1 * 120) // tick_skip = 30.
+// The cache holds every 4-tick slice (151 rows). The obs emits [::30].
+const BALL_CACHE_STRIDE: usize = 30;
+const BALL_CACHE_LEN: usize = 1 + BALL_PRED_STEPS * BALL_CACHE_STRIDE;
+// obs.py BALL_PRED_TOLERANCE: pos/vel 1 uu, ang vel 0.1 rad/s. Strict `<`.
+const BALL_PRED_TOL_LIN: f32 = 1.0;
+const BALL_PRED_TOL_ANG: f32 = 0.1;
 const DOUBLEJUMP_MAX_DELAY: f32 = 1.25;
 const GOAL_Y: f32 = 5215.5;
 const DEFAULT_DODGE_DEADZONE: f32 = 0.5;
@@ -149,7 +152,13 @@ struct RippleState {
     has_flipped: bool,
     prev_action: [f32; 8],
     prev_prev_action: [f32; 8],  // Action from 2 steps ago for timer edge detection
+    /// Every 4-tick forecast row. Obs reads indices 0, 30, ..., 150.
+    ball_cache: [[f32; 9]; BALL_CACHE_LEN],
+    /// Emitted 1-second slices, copied from `ball_cache` at stride 30.
     ball_preds: [[f32; 9]; 1 + BALL_PRED_STEPS],
+    /// Unquantized ball-only arena left where the cache ended.
+    /// Owned by this car's state so batched games do not share it.
+    forecast_arena: Option<Arena>,
     pad_timers: [f32; 34],
     // Edge-trigger reset detection
     was_kickoff: bool,
@@ -179,7 +188,9 @@ impl RippleState {
             has_flipped: false,
             prev_action: [0.0; 8],
             prev_prev_action: [0.0; 8],
+            ball_cache: [[0.0; 9]; BALL_CACHE_LEN],
             ball_preds: [[0.0; 9]; 6],
+            forecast_arena: None,
             pad_timers: [0.0; 34],
             was_kickoff: false,
             was_demoed: false,
@@ -198,6 +209,64 @@ impl RippleState {
 /// at step 0 is True. A later press or release stays True.
 fn numpy_bool_shift(current: bool, delta: f32) -> bool {
     (f32::from(current) + delta) != 0.0
+}
+
+fn ball_row(pos: Vec3A, vel: Vec3A, ang: Vec3A) -> [f32; 9] {
+    [pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, ang.x, ang.y, ang.z]
+}
+
+/// obs.py `(abs(slice_ball - state_ball) < BALL_PRED_TOLERANCE).all()`.
+fn ball_within_pred_tolerance(pred: [f32; 9], actual: [f32; 9]) -> bool {
+    pred.iter().zip(actual).enumerate().all(|(i, (&p, a))| {
+        let tol = if i < 6 { BALL_PRED_TOL_LIN } else { BALL_PRED_TOL_ANG };
+        (p - a).abs() < tol
+    })
+}
+
+fn arena_ball_row(arena: &Arena) -> [f32; 9] {
+    let phys = &arena.get_ball_state().phys;
+    ball_row(phys.pos, phys.vel, phys.ang_vel)
+}
+
+fn set_arena_ball(arena: &mut Arena, ball: &BallState) {
+    let mut ball_state = BallState::default();
+    ball_state.phys.pos = ball.phys.pos;
+    ball_state.phys.vel = ball.phys.vel;
+    ball_state.phys.ang_vel = ball.phys.ang_vel;
+    arena.set_ball_state(ball_state);
+}
+
+/// obs.py reset_ball_slices. Does not write row 0; the caller stores the live ball there.
+fn reset_ball_cache(cache: &mut [[f32; 9]; BALL_CACHE_LEN], arena: &mut Arena, ball: &BallState) {
+    set_arena_ball(arena, ball);
+    for n in 1..BALL_CACHE_LEN {
+        for _ in 0..TICK_SKIP as usize {
+            arena.step_tick();
+        }
+        let row = arena_ball_row(arena);
+        if row[1].abs() >= GOAL_Y {
+            // The crossing state itself, not the previous slice.
+            for slot in &mut cache[n..] {
+                *slot = row;
+            }
+            break;
+        }
+        cache[n] = row;
+    }
+}
+
+/// obs.py add_ball_slices. Shift one 4-tick row and grow the horizon by 4 ticks.
+fn extend_ball_cache(cache: &mut [[f32; 9]; BALL_CACHE_LEN], arena: &mut Arena) {
+    cache.copy_within(1.., 0);
+    let last = cache[BALL_CACHE_LEN - 1];
+    if last[1].abs() >= GOAL_Y {
+        cache[BALL_CACHE_LEN - 1] = last;
+        return;
+    }
+    for _ in 0..TICK_SKIP as usize {
+        arena.step_tick();
+    }
+    cache[BALL_CACHE_LEN - 1] = arena_ball_row(arena);
 }
 
 /// Ripple policy with ONNX inference.
@@ -286,63 +355,44 @@ impl RipplePolicy {
     // Reset detection is now handled in build() with edge-triggered logic
 
     fn update_ball_pred(state: &GameState, st: &mut RippleState) {
-        // Ball-only Soccar, 120 Hz, one substep per tick (step_simulation(TICK_TIME)).
-        // Python rocketsim 2.1.1 Arena(SOCCAR) defaults (ArenaConfig.h noBallRot=true;
-        // RLConst.h): radius 91.25, mass 30, drag 0.03, friction 0.35, restitution
-        // 0.6, max ang vel 6. rocketsim 0.3.3 consts::ball matches those, and this
-        // arena sets no_ball_rot because 0.3.3's ArenaConfig default is false.
-        // set_ball_state copies pos, vel, and ang_vel (rad/s). 5×120 ticks matches
-        // obs.py reset_ball_slices (150 × arena.step(4), emit every 30).
-        // 0.3.3 quantizes pos/vel/angvel inside step_tick (base.rs, ANG_VEL_SCALE=10000).
-        // Python 2.1.1 removed that rounding. This arena is the only one that
-        // sets quantize_physics false. Arena::new / ArenaConfig::new leave it on,
-        // so the training arena still snaps.
-        thread_local! {
-            static ARENA: RefCell<Arena> = RefCell::new(Arena::new_with_config(
+        // obs.py update_ball_slices / reset_ball_slices / add_ball_slices.
+        // The cache is one row per 4 physics ticks (151 rows, 5 seconds).
+        // A goal is tested after every 4 ticks. The crossing row is copied
+        // through the rest of the cache. While the live ball stays within
+        // BALL_PRED_TOLERANCE of cache[1], the rows shift and the arena
+        // steps 4 more ticks. Otherwise the arena is rewound to the live
+        // ball and the cache is rebuilt. cache[0] is the exact live ball
+        // only on that rebuild.
+        //
+        // The arena is ball-only Soccar, no_ball_rot, quantize_physics false.
+        // It lives on this RippleState (game pointer + car), not in a
+        // thread-local, so batched games do not share a forecast.
+        // Arena::new leaves quantization on; training physics is untouched.
+        if st.forecast_arena.is_none() {
+            st.forecast_arena = Some(Arena::new_with_config(
                 ArenaConfig::new(GameMode::Soccar)
                     .with_no_ball_rot(true)
                     .with_quantize_physics(false),
             ));
         }
-        
-        ARENA.with(|arena| {
-        let mut arena = arena.borrow_mut();
-        let b = &state.ball;
-        let mut ball_state = BallState::default();
-        ball_state.phys.pos = b.phys.pos;
-        ball_state.phys.vel = b.phys.vel;
-        ball_state.phys.ang_vel = b.phys.ang_vel;
-        arena.set_ball_state(ball_state);
-
-        st.ball_preds[0] = [
-            b.phys.pos.x,
-            b.phys.pos.y,
-            b.phys.pos.z,
-            b.phys.vel.x,
-            b.phys.vel.y,
-            b.phys.vel.z,
-            b.phys.ang_vel.x,
-            b.phys.ang_vel.y,
-            b.phys.ang_vel.z,
-        ];
-
-        for i in 1..=BALL_PRED_STEPS {
-            for _ in 0..BALL_STEP_TICKS {
-                arena.step_tick();
-            }
-            let bs = arena.get_ball_state();
-            if bs.phys.pos.y.abs() >= GOAL_Y {
-                for j in i..=BALL_PRED_STEPS {
-                    st.ball_preds[j] = st.ball_preds[i - 1];
-                }
-                break;
-            }
-            st.ball_preds[i] = [
-                bs.phys.pos.x, bs.phys.pos.y, bs.phys.pos.z, bs.phys.vel.x, bs.phys.vel.y, bs.phys.vel.z, bs.phys.ang_vel.x,
-                bs.phys.ang_vel.y, bs.phys.ang_vel.z,
-            ];
+        let actual = ball_row(state.ball.phys.pos, state.ball.phys.vel, state.ball.phys.ang_vel);
+        let extend = ball_within_pred_tolerance(st.ball_cache[1], actual);
+        let RippleState {
+            ball_cache,
+            forecast_arena,
+            ball_preds,
+            ..
+        } = st;
+        let arena = forecast_arena.as_mut().unwrap();
+        if extend {
+            extend_ball_cache(ball_cache, arena);
+        } else {
+            reset_ball_cache(ball_cache, arena, &state.ball);
+            ball_cache[0] = actual;
         }
-        }); // end ARENA.with
+        for i in 0..=BALL_PRED_STEPS {
+            ball_preds[i] = ball_cache[i * BALL_CACHE_STRIDE];
+        }
     }
 
     fn update_timers(&self, state: &GameState, car: usize, st: &mut RippleState) {
@@ -873,11 +923,10 @@ impl ExternalPolicy for RipplePolicy {
             }
             // else: leave queue as NaN (RippleState::new() default)
             
-            // Restore tracking
+            // Restore tracking. The new state has a zero forecast cache, so
+            // the update below takes the recompute path (obs.py reset leaves
+            // the next pre_step to rebuild when the ball no longer matches).
             (st.was_kickoff, st.was_demoed, st.last_batch, st.last_tick_count, st.last_ball_pos, st.last_car_pos) = old_tracking;
-            
-            // Initialize ball predictions on reset
-            Self::update_ball_pred(state, st);
         }
         
         // Update tracking for next call
@@ -2134,12 +2183,10 @@ mod tests {
         }
     }
 
-    /// Obs the second Ripple decision would build, flattened the same way as `build`.
-    fn decision_obs(state: &GameState, car: usize) -> Vec<f32> {
-        let mut st = RippleState::new();
-        RipplePolicy::update_ball_pred(state, &mut st);
+    /// Flatten the obs `build` would write from an already updated forecast.
+    fn flatten_decision_obs(state: &GameState, car: usize, st: &RippleState) -> Vec<f32> {
         let (main, others, ball, actions, boosts, _) =
-            RipplePolicy::build_obs_internal(state, car, &st);
+            RipplePolicy::build_obs_internal(state, car, st);
         let mut obs = vec![0.0f32; 32 + 5 * 21 + 6 * 9 + 6 * 8 + 34 * 5];
         let mut offset = 0;
         obs[offset..offset + 32].copy_from_slice(&main);
@@ -2163,6 +2210,15 @@ mod tests {
         obs
     }
 
+    fn ball_slice_delta(a: &[f32], b: &[f32]) -> f32 {
+        let ball_at = 32 + 5 * 21;
+        (0..3)
+            .map(|i| a[ball_at + i] - b[ball_at + i])
+            .map(|d| d * d)
+            .sum::<f32>()
+            .sqrt()
+    }
+
     #[test]
     #[cfg(feature = "ripple")]
     fn test_second_decision_obs_sees_post_4_tick_state() {
@@ -2184,8 +2240,11 @@ mod tests {
         // Same local the h2h worker assigns into. The address is the queue key.
         let state_ptr = &state as *const GameState;
         let before = state.clone();
-        let obs_before = decision_obs(&before, 0);
-        let ball_at = 32 + 5 * 21;
+        let mut ripple = RippleState::new();
+        RipplePolicy::update_ball_pred(&before, &mut ripple);
+        let obs_first = flatten_decision_obs(&before, 0, &ripple);
+        // The bug feeds this same pre-step state to the second decision.
+        let mut stale_ripple = ripple.clone();
 
         let acts = vec![0usize; state.cars.len()];
         env.pre_step(&state, &acts);
@@ -2203,25 +2262,216 @@ mod tests {
             state.ball.phys.pos.x - before.ball.phys.pos.x
         );
 
-        let obs_after = decision_obs(&state, 0);
-        let obs_if_stale = decision_obs(&before, 0);
-        let moved = (0..3)
-            .map(|i| obs_after[ball_at + i] - obs_before[ball_at + i])
-            .map(|d| d * d)
-            .sum::<f32>()
-            .sqrt();
-        assert!(
-            moved > 1e-3,
-            "second-decision ball obs should move with the 4-tick state, delta {moved}"
+        RipplePolicy::update_ball_pred(&state, &mut ripple);
+        RipplePolicy::update_ball_pred(&before, &mut stale_ripple);
+        let obs_second = flatten_decision_obs(&state, 0, &ripple);
+        let obs_stale = flatten_decision_obs(&before, 0, &stale_ripple);
+
+        let pred = Vec3A::new(ripple.ball_preds[0][0], ripple.ball_preds[0][1], ripple.ball_preds[0][2]);
+        let stale_pred = Vec3A::new(
+            stale_ripple.ball_preds[0][0],
+            stale_ripple.ball_preds[0][1],
+            stale_ripple.ball_preds[0][2],
         );
-        let stale_delta = (0..9)
-            .map(|i| obs_if_stale[ball_at + i] - obs_before[ball_at + i])
-            .map(|d| d * d)
-            .sum::<f32>()
-            .sqrt();
         assert!(
-            stale_delta < 1e-6,
-            "building on the pre-step state repeats the first obs, delta {stale_delta}"
+            (pred - state.ball.phys.pos).length() < 5.0,
+            "second decision forecast {:?} should sit on the post-4-tick ball {:?}",
+            pred,
+            state.ball.phys.pos
+        );
+        assert!(
+            (stale_pred - before.ball.phys.pos).length() < 1e-3,
+            "a second build on the pre-step state stays on that ball, got {stale_pred:?}"
+        );
+        assert!(
+            (pred - stale_pred).length() > 20.0,
+            "post-4-tick forecast {pred:?} must not match the stale one {stale_pred:?}"
+        );
+        assert!(
+            ball_slice_delta(&obs_second, &obs_first) > 1e-3,
+            "second-decision ball obs should move off the first decision"
+        );
+        assert!(
+            ball_slice_delta(&obs_second, &obs_stale) > 1e-3,
+            "second-decision ball obs must differ from one built on the pre-step state"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_goal_freeze_fills_crossing_state() {
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+
+        let mut env = crate::env::create_env(
+            &crate::rewards::RewardConfig::default(),
+            &crate::setters::default_mix(),
+        );
+        let _ = env.reset();
+        let mut ball = BallState::default();
+        // Enters the goal between 4 and 8 ticks, not on a 120-tick boundary.
+        ball.phys.pos = Vec3A::new(0.0, 5100.0, 300.0);
+        ball.phys.vel = Vec3A::new(0.0, 3000.0, 0.0);
+        ball.phys.ang_vel = Vec3A::new(0.2, -0.1, 0.05);
+        env.arena.set_ball_state(ball);
+        let state = env.current_state();
+
+        let mut reference = Arena::new_with_config(
+            ArenaConfig::new(GameMode::Soccar)
+                .with_no_ball_rot(true)
+                .with_quantize_physics(false),
+        );
+        set_arena_ball(&mut reference, &state.ball);
+        let mut crossing = None;
+        for _ in 1..BALL_CACHE_LEN {
+            for _ in 0..TICK_SKIP as usize {
+                reference.step_tick();
+            }
+            let row = arena_ball_row(&reference);
+            if row[1].abs() >= GOAL_Y {
+                crossing = Some(row);
+                break;
+            }
+        }
+        let crossing = crossing.expect("ball should cross the goal line");
+        assert!(
+            (crossing[1] - 5100.0).abs() < 400.0,
+            "crossing sample should be the first 4-tick step past the line, y={}",
+            crossing[1]
+        );
+
+        let mut rushed = Arena::new_with_config(
+            ArenaConfig::new(GameMode::Soccar)
+                .with_no_ball_rot(true)
+                .with_quantize_physics(false),
+        );
+        set_arena_ball(&mut rushed, &state.ball);
+        for _ in 0..120 {
+            rushed.step_tick();
+        }
+        let after_120 = arena_ball_row(&rushed);
+        assert!(
+            (after_120[1] - crossing[1]).abs() > 1.0,
+            "a 120-tick sample y={} is not the crossing state y={}",
+            after_120[1],
+            crossing[1]
+        );
+
+        let mut st = RippleState::new();
+        RipplePolicy::update_ball_pred(&state, &mut st);
+        assert!(
+            (st.ball_preds[0][1] - 5100.0).abs() < 1e-3,
+            "slice 0 is the live ball, got {}",
+            st.ball_preds[0][1]
+        );
+        for i in 1..=BALL_PRED_STEPS {
+            let row = st.ball_preds[i];
+            for (k, (&got, &want)) in row.iter().zip(crossing.iter()).enumerate() {
+                assert!(
+                    (got - want).abs() < 1e-4,
+                    "slice {i} col {k}: {got} != crossing {want}"
+                );
+            }
+            assert!(
+                (row[1] - after_120[1]).abs() > 1.0,
+                "slice {i} repeated the 120-tick state instead of the crossing state"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_forecast_cache_extends_until_ball_leaves_tolerance() {
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+
+        let mut env = crate::env::create_env(
+            &crate::rewards::RewardConfig::default(),
+            &crate::setters::default_mix(),
+        );
+        let _ = env.reset();
+        let mut ball = BallState::default();
+        ball.phys.pos = Vec3A::new(100.0, 200.0, 400.0);
+        ball.phys.vel = Vec3A::new(500.0, -200.0, 50.0);
+        ball.phys.ang_vel = Vec3A::new(0.3, 0.1, -0.2);
+        env.arena.set_ball_state(ball);
+        let state = env.current_state();
+
+        let mut game_a = RippleState::new();
+        RipplePolicy::update_ball_pred(&state, &mut game_a);
+        let predicted_next = game_a.ball_cache[1];
+        // Private copy of A's arena at the 5-second horizon. A shared arena
+        // would be moved by game B before A extends, and the new last row
+        // would no longer match these 4 ticks.
+        let mut horizon_arena = game_a.forecast_arena.clone().expect("forecast arena");
+        for _ in 0..TICK_SKIP as usize {
+            horizon_arena.step_tick();
+        }
+        let expected_horizon = arena_ball_row(&horizon_arena);
+
+        // A second game's recompute must not reuse game A's arena or cache.
+        let mut game_b = RippleState::new();
+        let mut far = state.clone();
+        far.ball.phys.pos.x += 800.0;
+        far.ball.phys.vel = Vec3A::new(-100.0, 50.0, 0.0);
+        RipplePolicy::update_ball_pred(&far, &mut game_b);
+        assert!(
+            (game_b.ball_cache[0][0] - far.ball.phys.pos.x).abs() < 1e-4,
+            "game B rebuilds from its own ball"
+        );
+
+        // Live ball within tolerance of cache[1], but not equal to it.
+        let mut nudged = state.clone();
+        nudged.ball.phys.pos = Vec3A::new(predicted_next[0], predicted_next[1], predicted_next[2]);
+        nudged.ball.phys.vel = Vec3A::new(predicted_next[3], predicted_next[4], predicted_next[5]);
+        nudged.ball.phys.ang_vel = Vec3A::new(predicted_next[6], predicted_next[7], predicted_next[8]);
+        nudged.ball.phys.vel.x += 0.25;
+        RipplePolicy::update_ball_pred(&nudged, &mut game_a);
+        assert_eq!(
+            game_a.ball_cache[0], predicted_next,
+            "extend keeps the cached row; it does not snap to the nudged ball"
+        );
+        assert!(
+            (game_a.ball_cache[0][3] - nudged.ball.phys.vel.x).abs() > 0.2,
+            "extended row 0 should not be the nudged velocity"
+        );
+        let grown = game_a.ball_cache[BALL_CACHE_LEN - 1];
+        for (k, (&got, &want)) in grown.iter().zip(expected_horizon.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-3,
+                "extended horizon col {k}: {got} != {want}; games must not share a forecast arena"
+            );
+        }
+        assert!(
+            (game_a.ball_cache[0][0] - game_b.ball_cache[0][0]).abs() > 100.0,
+            "game B must not overwrite game A's cache"
+        );
+
+        // Outside tolerance: recompute and snap row 0 to the live ball.
+        let mut departed = nudged.clone();
+        departed.ball.phys.pos.x += 50.0;
+        RipplePolicy::update_ball_pred(&departed, &mut game_a);
+        assert!(
+            (game_a.ball_cache[0][0] - departed.ball.phys.pos.x).abs() < 1e-4,
+            "a ball outside tolerance rebuilds from the live state, got {}",
+            game_a.ball_cache[0][0]
+        );
+
+        // Kickoff/reset drops the cache. The next build recomputes.
+        game_a = RippleState::new();
+        let mut kickoff = state.clone();
+        kickoff.ball.phys.pos = Vec3A::new(0.0, 0.0, 93.15);
+        kickoff.ball.phys.vel = Vec3A::ZERO;
+        kickoff.ball.phys.ang_vel = Vec3A::ZERO;
+        RipplePolicy::update_ball_pred(&kickoff, &mut game_a);
+        assert!(
+            (game_a.ball_preds[0][2] - 93.15).abs() < 1e-3,
+            "a reset forecast starts at the new ball, got {}",
+            game_a.ball_preds[0][2]
+        );
+        assert!(
+            (game_a.ball_preds[0][0] - departed.ball.phys.pos.x).abs() > 10.0,
+            "a reset must not keep extending the previous episode"
         );
     }
 
