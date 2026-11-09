@@ -58,22 +58,15 @@ void ripple_stream_set(void* stream) {
 #endif
 }
 
-void ripple_stream_synchronize(void* stream) {
-#if defined(RIPPLE_LIBTORCH_CUDA)
-    if (stream != nullptr) {
-        static_cast<c10::cuda::CUDAStream*>(stream)->synchronize();
-    }
-#else
-    (void)stream;
-#endif
-}
-
 // `dst` and `src` are tch `torch::Tensor*` values. The destination is pinned
-// host memory. non_blocking queues the DMA on the caller's current stream.
-void ripple_copy_nonblocking(void* dst, void* src) {
+// host memory. A blocking copy (non_blocking == 0) waits for the current
+// stream inside libtorch. torch 2.9 implements c10::cuda::stream_synchronize
+// and at::cuda::CUDAEvent::synchronize inline, and both call cudart directly,
+// so this file must not call them.
+void ripple_copy(void* dst, void* src, int non_blocking) {
     auto* destination = static_cast<at::Tensor*>(dst);
     auto* source = static_cast<at::Tensor*>(src);
-    destination->copy_(*source, /*non_blocking=*/true);
+    destination->copy_(*source, non_blocking != 0);
 }
 
 size_t ripple_cuda_stat(int device, bool reserved) {

@@ -53,8 +53,7 @@ unsafe extern "C" {
     fn ripple_set_allow_tf32_cudnn(enabled: i32);
     fn ripple_stream_create(device: i32) -> *mut c_void;
     fn ripple_stream_set(stream: *mut c_void);
-    fn ripple_stream_synchronize(stream: *mut c_void);
-    fn ripple_copy_nonblocking(dst: *mut c_void, src: *mut c_void);
+    fn ripple_copy(dst: *mut c_void, src: *mut c_void, non_blocking: i32);
     fn ripple_cuda_allocated(device: i32) -> usize;
     fn ripple_cuda_reserved(device: i32) -> usize;
 }
@@ -104,9 +103,9 @@ impl Drop for Tf32Guard {
     }
 }
 
-fn with_stream<R>(device: Device, f: impl FnOnce(*mut c_void) -> R) -> R {
+fn with_stream<R>(device: Device, f: impl FnOnce() -> R) -> R {
     let Device::Cuda(index) = device else {
-        return f(std::ptr::null_mut());
+        return f();
     };
     std::thread_local! {
         static STREAM: std::cell::RefCell<Option<(usize, *mut c_void)>> = const { std::cell::RefCell::new(None) };
@@ -123,7 +122,7 @@ fn with_stream<R>(device: Device, f: impl FnOnce(*mut c_void) -> R) -> R {
         if !ptr.is_null() {
             unsafe { ripple_stream_set(ptr) };
         }
-        f(ptr)
+        f()
     })
 }
 
@@ -181,10 +180,14 @@ fn upload(pinned: &Tensor, data: &[f32], shape: &[i64], device: Device) -> Tenso
     view.to_device_(device, Kind::Float, true, true)
 }
 
-fn queue_download(pinned: &Tensor, gpu: &Tensor, rows: i64) -> Tensor {
+fn copy_to_host(pinned: &Tensor, gpu: &Tensor, rows: i64, non_blocking: bool) -> Tensor {
     let view = pinned.narrow(0, 0, rows);
     unsafe {
-        ripple_copy_nonblocking(view.as_ptr() as *mut c_void, gpu.as_ptr() as *mut c_void);
+        ripple_copy(
+            view.as_ptr() as *mut c_void,
+            gpu.as_ptr() as *mut c_void,
+            i32::from(non_blocking),
+        );
     }
     view
 }
@@ -472,7 +475,7 @@ impl RippleGpu {
         let device = self.device;
         let _tf32 = Tf32Guard::enter();
         with_stage(rows, device, |stage| {
-            with_stream(device, |stream| {
+            with_stream(device, || {
                 tch::no_grad(|| {
                     let rows_i = rows as i64;
                     let main = upload(&stage.main, &packed[0], &[rows_i, 32], device);
@@ -481,19 +484,11 @@ impl RippleGpu {
                     let actions = upload(&stage.actions, &packed[3], &[rows_i, 6, 8], device);
                     let boosts = upload(&stage.boosts, &packed[4], &[rows_i, 34, 5], device);
                     let policy_gpu = self.policy.forward(&main, &others, &ball, &actions, &boosts);
-                    // One stream, so this D2H finishes before the base forward starts.
-                    // Pinned memory skips the pageable bounce buffer, and the CPU
-                    // waits once at the end instead of on every copy.
-                    let policy_host = queue_download(&stage.policy, &policy_gpu, rows_i);
+                    // Queued on this stream. The blocking base copy below waits
+                    // for it inside libtorch, without a direct cudart call.
+                    let policy_host = copy_to_host(&stage.policy, &policy_gpu, rows_i, true);
                     let base_gpu = self.base.forward(&main, &others, &ball, &actions, &boosts);
-                    let base_host = queue_download(&stage.base, &base_gpu, rows_i);
-                    if stream.is_null() {
-                        if let Device::Cuda(index) = device {
-                            tch::Cuda::synchronize(index as i64);
-                        }
-                    } else {
-                        unsafe { ripple_stream_synchronize(stream) };
-                    }
+                    let base_host = copy_to_host(&stage.base, &base_gpu, rows_i, false);
                     drop(policy_gpu);
                     drop(base_gpu);
                     let policy = copy_logits(&policy_host, rows)?;

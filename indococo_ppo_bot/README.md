@@ -79,10 +79,15 @@ On the training box, `/opt/dlami/nvme/ic_env.sh` sets `LIBTORCH`
 (torch 2.9 site-packages), `LD_LIBRARY_PATH` and `CARGO_TARGET_DIR`.
 
 Ripple's CUDA helper (`src/ripple_tf32.cpp`) includes the CUDA runtime
-headers. `build.rs` looks for them in `RIPPLE_CUDA_INCLUDE`, then
-`$CUDA_HOME/include`, then `$CUDA_PATH/include`, and finally
-`/usr/local/cuda/include` when that directory exists. torch-sys links as
-`tch`, so the LibTorch library directory is `DEP_TCH_LIBTORCH_LIB`.
+headers. The training box has no CUDA toolkit and no `CUDA_HOME`; set
+`RIPPLE_CUDA_INCLUDE` to the header directory (the pip torch wheel does
+not ship `cuda_runtime_api.h`). Otherwise `build.rs` tries
+`$CUDA_HOME/include`, `$CUDA_PATH/include`, then `/usr/local/cuda/include`
+when that directory exists. torch-sys links as `tch`, so the LibTorch
+library directory is `DEP_TCH_LIBTORCH_LIB`. The helper does not link
+libcudart: torch 2.9's `c10::cuda::stream_synchronize` and
+`at::cuda::CUDAEvent::synchronize` are inline and call cudart themselves.
+A blocking LibTorch copy waits for Ripple's stream instead.
 
 ```sh
 cargo build --release --features torch,cuda --bin indococo-train   # trainer
