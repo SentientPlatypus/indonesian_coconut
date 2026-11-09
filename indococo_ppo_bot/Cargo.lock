@@ -3802,6 +3802,7 @@ version = "0.1.0"
 dependencies = [
  "burn",
  "burn-store",
+ "cc",
  "glam",
  "ndarray 0.16.1",
  "ort",
@@ -3816,6 +3817,7 @@ dependencies = [
  "serde_json",
  "tch",
  "toml",
+ "torch-sys",
 ]
 
 [[package]]

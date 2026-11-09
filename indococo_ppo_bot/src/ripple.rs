@@ -13,6 +13,10 @@ use rlgymppo::rlgym::rocketsim::{Arena, ArenaConfig, BallState, CarControls, Gam
 
 use crate::obs::{flags, BOOST_LOCATIONS};
 
+#[cfg(all(feature = "ripple", feature = "torch"))]
+#[path = "ripple_gpu.rs"]
+mod gpu;
+
 // Big pad indices (z > 72)
 const BIG_PADS: [usize; 6] = [3, 4, 15, 18, 29, 30];
 
@@ -351,14 +355,77 @@ pub struct RipplePolicy {
     // Only available with ripple-replay feature, never in training
     #[cfg(feature = "ripple-replay")]
     replay_rng_override: Mutex<Option<f32>>,
+    /// LibTorch policy and base. `None` keeps the ONNX sessions above.
+    #[cfg(all(feature = "ripple", feature = "torch"))]
+    gpu: Option<gpu::RippleGpu>,
+}
+
+#[cfg(all(feature = "ripple", feature = "torch"))]
+fn attach_gpu(path: &Path) -> Result<Option<gpu::RippleGpu>, Box<dyn std::error::Error>> {
+    let pref = std::env::var("RIPPLE_DEVICE").unwrap_or_default();
+    let pref = pref.trim().to_ascii_lowercase();
+    match pref.as_str() {
+        "cpu" => {
+            eprintln!("ripple device=cpu (ONNX)");
+            return Ok(None);
+        }
+        "" | "cuda" => {}
+        other => return Err(format!("RIPPLE_DEVICE={other:?} is not cpu or cuda").into()),
+    }
+    let explicit = pref == "cuda";
+    let Some(device) = gpu::cuda_device() else {
+        if explicit {
+            return Err("RIPPLE_DEVICE=cuda but CUDA is not available".into());
+        }
+        eprintln!("ripple device=cpu (ONNX); CUDA is not available");
+        return Ok(None);
+    };
+    let missing = ["ripple-v1.1.safetensors", "ripple-v1.1-bcm.safetensors"]
+        .into_iter()
+        .any(|name| !path.join(name).is_file());
+    if missing {
+        let msg = format!(
+            "missing safetensors in {} — run: python3 tools/ripple_export_torch.py {}",
+            path.display(),
+            path.display()
+        );
+        if explicit {
+            return Err(msg.into());
+        }
+        eprintln!("ripple device=cpu (ONNX); {msg}");
+        return Ok(None);
+    }
+    gpu::RippleGpu::load(path, device)
+        .map(Some)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })
 }
 
 impl RipplePolicy {
     #[cfg(feature = "ripple")]
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        #[cfg(not(feature = "torch"))]
+        if std::env::var("RIPPLE_DEVICE").ok().as_deref() == Some("cuda") {
+            return Err("RIPPLE_DEVICE=cuda needs a binary built with --features torch,ripple".into());
+        }
+        #[allow(unused_mut)]
+        let mut policy = Self::load_cpu(path)?;
+        #[cfg(feature = "torch")]
+        {
+            policy.gpu = attach_gpu(path)?;
+            if let Some(gpu) = &policy.gpu {
+                let mb = gpu.weight_bytes as f64 / 1e6;
+                eprintln!("ripple device=cuda weights={mb:.2} MB (TF32 off for these launches)");
+            }
+        }
+        Ok(policy)
+    }
+
+    /// ONNX sessions only. The bitwise batched-vs-per-row test uses this.
+    #[cfg(feature = "ripple")]
+    pub fn load_cpu(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         use std::sync::OnceLock;
         static ORT_ENV: OnceLock<ort::environment::Environment> = OnceLock::new();
-        
+
         let policy_path = path.join("ripple-v1.1.onnx");
         let base_path = path.join("ripple-v1.1-bcm.onnx");
 
@@ -392,7 +459,33 @@ impl RipplePolicy {
             batch_counter: Mutex::new(0),
             #[cfg(feature = "ripple-replay")]
             replay_rng_override: Mutex::new(None),
+            #[cfg(feature = "torch")]
+            gpu: None,
         })
+    }
+
+    pub fn uses_cuda(&self) -> bool {
+        #[cfg(all(feature = "ripple", feature = "torch"))]
+        {
+            self.gpu.is_some()
+        }
+        #[cfg(not(all(feature = "ripple", feature = "torch")))]
+        {
+            false
+        }
+    }
+
+    /// Live LibTorch weight bytes, and `(allocated, reserved)` from the CUDA
+    /// caching allocator when the nets are on a GPU.
+    pub fn gpu_memory(&self) -> Option<(u64, Option<(u64, u64)>)> {
+        #[cfg(all(feature = "ripple", feature = "torch"))]
+        {
+            self.gpu.as_ref().map(|gpu| (gpu.weight_bytes, gpu.allocator_bytes()))
+        }
+        #[cfg(not(all(feature = "ripple", feature = "torch")))]
+        {
+            None
+        }
     }
 
     #[cfg(not(feature = "ripple"))]
@@ -1276,6 +1369,10 @@ impl RipplePolicy {
         obs: &[f32],
         rows: usize,
     ) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
+        #[cfg(feature = "torch")]
+        if let Some(gpu) = &self.gpu {
+            return gpu.logits(obs, rows).map_err(|e| -> Box<dyn std::error::Error> { e.into() });
+        }
         let width = self.obs_width();
         let mut policy = Vec::with_capacity(rows * N_ACTIONS);
         let mut base = Vec::with_capacity(rows * N_ACTIONS);
@@ -2658,8 +2755,8 @@ mod tests {
             eprintln!("Skipping test: Ripple models not found");
             return;
         }
-        let batched = RipplePolicy::load(&path).expect("load batched");
-        let per_row = RipplePolicy::load(&path).expect("load per-row");
+        let batched = RipplePolicy::load_cpu(&path).expect("load batched");
+        let per_row = RipplePolicy::load_cpu(&path).expect("load per-row");
         batched.set_seed(0x5171);
         per_row.set_seed(0x5171);
 
@@ -2769,6 +2866,122 @@ mod tests {
                     states_b[g] = envs_b[g].current_state();
                 }
             }
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "ripple", feature = "torch"))]
+    fn test_cuda_logits_agree_with_onnx() {
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.join("ripple-v1.1.safetensors").is_file() {
+            eprintln!("Skipping CUDA agreement: safetensors not exported");
+            return;
+        }
+        let gpu = RipplePolicy::load(&path).expect("load");
+        if !gpu.uses_cuda() {
+            eprintln!("Skipping CUDA agreement: device is not cuda");
+            return;
+        }
+        let cpu = RipplePolicy::load_cpu(&path).expect("load onnx");
+        let mut rows = Vec::new();
+        // In-distribution obs from a short multi-game rollout, driven by ONNX.
+        init_from_default(true).expect("load collision meshes");
+        const N_GAMES: usize = 8;
+        const N_STEPS: usize = 32;
+        let mut envs: Vec<_> = (0..N_GAMES)
+            .map(|_| {
+                crate::env::create_env(
+                    &crate::rewards::RewardConfig::default(),
+                    &crate::setters::default_mix(),
+                )
+            })
+            .collect();
+        let mut states: Vec<GameState> = envs.iter_mut().map(|e| e.reset().0).collect();
+        let n_cars = states[0].cars.len();
+        let width = cpu.obs_width();
+        for _step in 0..N_STEPS {
+            for _half in 0..2 {
+                let mut obs = vec![0.0f32; N_GAMES * n_cars * width];
+                let mut mask = vec![true; N_GAMES * n_cars * N_ACTIONS];
+                for g in 0..N_GAMES {
+                    for c in 0..n_cars {
+                        let i = g * n_cars + c;
+                        cpu.build(
+                            &states[g],
+                            c,
+                            &mut obs[i * width..(i + 1) * width],
+                            &mut mask[i * N_ACTIONS..(i + 1) * N_ACTIONS],
+                        );
+                    }
+                }
+                rows.extend_from_slice(&obs);
+                let actions = cpu.infer(&obs, &mask, N_GAMES * n_cars);
+                for g in 0..N_GAMES {
+                    for c in 0..n_cars {
+                        envs[g].arena.set_car_controls(c, controls_of(actions[g * n_cars + c]));
+                    }
+                    envs[g].step_physics(4);
+                    states[g] = envs[g].current_state();
+                }
+            }
+        }
+        if let Ok(dump) = std::env::var("RIPPLE_PARITY_JSONL") {
+            let text = std::fs::read_to_string(&dump).unwrap_or_else(|e| panic!("{dump}: {e}"));
+            for line in text.lines().filter(|l| !l.is_empty()) {
+                let v: serde_json::Value = serde_json::from_str(line).expect("parity line");
+                for key in ["rust_main", "rust_others", "rust_ball", "rust_actions", "rust_boosts"] {
+                    for x in v[key].as_array().unwrap() {
+                        rows.push(x.as_f64().unwrap() as f32);
+                    }
+                }
+            }
+        }
+        let n = rows.len() / width;
+        let (cpu_p, cpu_b) = cpu.run_obs_batched(&rows, n).expect("onnx logits");
+        let (gpu_p, gpu_b) = gpu.run_obs_batched(&rows, n).expect("cuda logits");
+        let mut max_diff = 0.0f32;
+        for (a, b) in cpu_p.iter().zip(&gpu_p).chain(cpu_b.iter().zip(&gpu_b)) {
+            max_diff = max_diff.max((a - b).abs());
+        }
+        let mut agree = 0usize;
+        let mut margins = Vec::new();
+        let u = 0.37f32;
+        for i in 0..n {
+            let kickoff = rows[i * width + 29].abs() > 0.5;
+            let cpu_pol = &cpu_p[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+            let cpu_base = &cpu_b[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+            let gpu_pol = &gpu_p[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+            let gpu_base = &gpu_b[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+            let cpu_lp = log_softmax(cpu_pol);
+            let cpu_lb = log_softmax(cpu_base);
+            let gpu_lp = log_softmax(gpu_pol);
+            let gpu_lb = log_softmax(gpu_base);
+            let cpu_a = if kickoff { inverse_cdf(&cpu_lp, u) } else { kl_argmax(&cpu_lp, &cpu_lb) };
+            let gpu_a = if kickoff { inverse_cdf(&gpu_lp, u) } else { kl_argmax(&gpu_lp, &gpu_lb) };
+            if cpu_a == gpu_a {
+                agree += 1;
+            } else if kickoff {
+                let margin = (cpu_lp[cpu_a].exp() - cpu_lp[gpu_a].exp()).abs();
+                margins.push(margin);
+            } else {
+                let score = |j: usize| cpu_lp[j].exp() * (cpu_lp[j] - cpu_lb[j]);
+                margins.push((score(cpu_a) - score(gpu_a)).abs());
+            }
+        }
+        let rate = agree as f64 / n as f64;
+        let worst_margin = margins.iter().copied().fold(0.0f32, f32::max);
+        eprintln!(
+            "cuda vs onnx: rows={n} max |logit diff|={max_diff:.4e} selected agreement={rate:.6} disagreements={} worst near-tie margin={worst_margin:.4e}",
+            margins.len()
+        );
+        assert!(max_diff < 1.0, "logit diff {max_diff} is a wrong graph, not GPU noise");
+        assert!(rate >= 0.999, "selected agreement {rate} is under 99.9%");
+        for margin in &margins {
+            assert!(
+                *margin < 1e-2,
+                "disagreement margin {margin} is not a near-tie"
+            );
         }
     }
 }

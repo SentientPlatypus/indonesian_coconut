@@ -53,6 +53,7 @@ rlgymppo = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "22
 serde_json = { version = "1", optional = true }
 # Use the same tch version as burn-tch (0.22.0) to avoid links conflicts
 tch = { version = "0.22.0", optional = true, default-features = false }
+torch-sys = { version = "0.22.0", optional = true }
 # Ripple ONNX inference  
 ort = { version = "2.0.0-rc.15", optional = true, default-features = false, features = ["std", "download-binaries", "half", "tls-native-vendored"] }
 ndarray = { version = "0.16", optional = true }
@@ -71,10 +72,13 @@ default = []
 train = ["dep:rlgymppo", "dep:burn", "dep:burn-store", "dep:serde_json", "burn/autodiff", "burn/flex"]
 cuda = ["train", "rlgymppo/cuda"]
 fusion = ["train", "rlgymppo/fusion"]
-torch = ["train", "rlgymppo/torch", "burn/tch", "dep:tch"]
+torch = ["train", "rlgymppo/torch", "burn/tch", "dep:tch", "dep:torch-sys"]
 ripple = ["train", "dep:ort", "dep:ndarray"]
 ripple-replay = []  # Enables RNG override for deterministic replay (not for training)
 rlbot = ["dep:burn-store", "dep:rlgymppo-model", "dep:rlgymppo-rlbot", "dep:rlbot-rocketsim", "dep:rustc-hash", "dep:burn", "burn/flex"]
+
+[build-dependencies]
+cc = "1"
 
 [patch.crates-io]
 # Same 0.3.3 sources. quantize_physics defaults on, so training arenas keep
