@@ -390,6 +390,8 @@ fn main() {
     let mut ball_first_div: Option<(usize, (usize, usize))> = None;
     let mut actions_first_div: Option<(usize, (usize, usize))> = None;
     let mut boosts_first_div: Option<(usize, (usize, usize))> = None;
+    // obs[25] is the live handbrake. It is not overwritten with the dump.
+    let mut handbrake_mismatches = 0usize;
     
     // Allocate obs buffer
     let mut obs = vec![0.0f32; ripple.obs_width()];
@@ -426,10 +428,24 @@ fn main() {
         // Build Rust Ripple obs
         ripple.build(&state, car_idx, &mut obs, &mut mask);
         
-        // Inject the controlled player's own on_ground/handbrake into main.
-        // Others gets the opponent, not the controlled car.
+        // Live handbrake (obs[25]) is what the model sees. Report it next to
+        // the dump value; do not overwrite it. on_ground stays injected.
+        let computed_handbrake = obs[25];
+        if (computed_handbrake - record.python_handbrake).abs() > 1e-4 {
+            handbrake_mismatches += 1;
+            if handbrake_mismatches == 1 || idx == 0 {
+                println!(
+                    "handbrake step {idx}: live={computed_handbrake:.6} python={:.6} (not injected)",
+                    record.python_handbrake
+                );
+            }
+        } else if idx == 0 {
+            println!(
+                "handbrake step 0: live={computed_handbrake:.6} python={:.6} (not injected)",
+                record.python_handbrake
+            );
+        }
         obs[17] = if record.python_on_ground { 1.0 } else { 0.0 };
-        obs[25] = record.python_handbrake;
         
         // Others tensor: each player is 21 floats, on_ground at 17. Main is 32.
         if let Some(grounded) = record.python_opponent_on_ground {
@@ -709,6 +725,11 @@ fn main() {
     println!("Action selected match: {} / {} ({:.1}%)", 
              action_selected_matches, records.len(),
              100.0 * action_selected_matches as f32 / records.len() as f32);
+    println!(
+        "Handbrake live vs python (>1e-4): {} / {} mismatches (obs[25] compared, not injected)",
+        handbrake_mismatches,
+        records.len()
+    );
     println!("Action executed match: {} / {} ({:.1}%)",
              action_executed_matches, records.len(),
              100.0 * action_executed_matches as f32 / records.len() as f32);

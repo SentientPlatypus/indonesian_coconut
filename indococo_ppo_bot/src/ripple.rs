@@ -139,7 +139,8 @@ struct RippleState {
     jump_time: f32,
     air_time: f32,
     flip_time: f32,
-    handbrake: f32,
+    /// Numpy bool (obs.py:154). In-place add/sub casts back to bool before the clip.
+    handbrake: bool,
     flip_dir: [f32; 2],
     prev_on_ground: bool,
     is_jumping: bool,
@@ -169,7 +170,7 @@ impl RippleState {
             jump_time: 0.0,
             air_time: 0.0,
             flip_time: 0.0,
-            handbrake: 0.0,
+            handbrake: false,
             flip_dir: [0.0; 2],
             prev_on_ground: false,
             is_jumping: false,
@@ -188,6 +189,15 @@ impl RippleState {
             last_car_pos: Vec3A::ZERO,
         }
     }
+}
+
+/// Numpy `bool` in-place `+=`/`-=` (obs.py:443-444).
+///
+/// The float result is cast back to bool before `min`/`max`. Any nonzero
+/// value becomes True, so the clip cannot restore False. `False - 2*4/120`
+/// at step 0 is True. A later press or release stays True.
+fn numpy_bool_shift(current: bool, delta: f32) -> bool {
+    (f32::from(current) + delta) != 0.0
 }
 
 /// Ripple policy with ONNX inference.
@@ -276,9 +286,15 @@ impl RipplePolicy {
     // Reset detection is now handled in build() with edge-triggered logic
 
     fn update_ball_pred(&self, state: &GameState, st: &mut RippleState) {
-        // Prediction arena only: Python rocketsim 2.1.1 sets no_ball_rot=true.
-        // rocketsim 0.3.3 exposes the same flag on ArenaConfig::with_no_ball_rot.
-        // Soccar, ball-only, default mutators, 120 Hz. 5 steps × 120 ticks.
+        // Ball-only Soccar, 120 Hz, one substep per tick (step_simulation(TICK_TIME)).
+        // Python rocketsim 2.1.1 Arena(SOCCAR) defaults (ArenaConfig.h noBallRot=true;
+        // RLConst.h): radius 91.25, mass 30, drag 0.03, friction 0.35, restitution
+        // 0.6, max ang vel 6. rocketsim 0.3.3 consts::ball matches those, and this
+        // arena sets no_ball_rot because 0.3.3's ArenaConfig default is false.
+        // set_ball_state copies pos, vel, and ang_vel (rad/s). 5×120 ticks matches
+        // obs.py reset_ball_slices (150 × arena.step(4), emit every 30).
+        // 0.3.3 still quantizes pos/vel/angvel inside step_tick (ANG_VEL_SCALE=10000).
+        // Python 2.1.1 removed that rounding. The ~0.003 spin gap is that residual.
         thread_local! {
             static ARENA: RefCell<Arena> = RefCell::new(Arena::new_with_config(
                 ArenaConfig::new(GameMode::Soccar).with_no_ball_rot(true),
@@ -366,12 +382,13 @@ impl RipplePolicy {
         // Python reads action_queue[-1] at obs-build time, BEFORE queue shifts
         // This is queue[5] in Rust before infer() shifts and inserts new action
         // Verified: step 6 Python main[21]=0.3333 with current queue[5].boost=1
+        // obs.py update_player_timers: last_actions = nan_to_num(action_queue[-1]).
+        // That is queue[5] on this build, before infer shifts the queue.
         let about_to_execute = if !st.queue[QUEUE_LEN - 1][0].is_nan() {
             st.queue[QUEUE_LEN - 1]
         } else {
             [0.0; 8]
         };
-        let prev_action = st.prev_action;
         
         // Increment by TICK_SKIP per decision (counts ticks, not decisions)
         // After 1 decision with boost held: boost_time = 4, normalized = 4/12 = 0.333
@@ -405,8 +422,20 @@ impl RipplePolicy {
             st.jump_time = 0.0;
         }
 
-        // Air/flip timers
-        if f.on_ground {
+        // Flip guard and handbrake both read the queued action (obs.py:420-444),
+        // not the previously executed row.
+        Self::update_flip_and_handbrake(st, about_to_execute, f.on_ground);
+
+        st.prev_on_ground = f.on_ground;
+    }
+
+    /// Air/flip timers plus the numpy-bool handbrake.
+    ///
+    /// Flip direction and the dodge-deadzone sum use `last_actions` (queue[5]
+    /// on this build). `prev_prev_action[5]` is still the jump from two
+    /// decisions back. This does not write `boost_time` (main[21]).
+    fn update_flip_and_handbrake(st: &mut RippleState, last_actions: [f32; 8], on_ground: bool) {
+        if on_ground {
             st.has_double_jumped = false;
             st.has_flipped = false;
             st.air_time = 0.0;
@@ -420,18 +449,20 @@ impl RipplePolicy {
             }
 
             if st.has_jumped
-                && prev_action[5] > 0.5
+                && last_actions[5] > 0.5
                 && st.prev_prev_action[5] <= 0.5
                 && st.air_time < 150.0
                 && !st.has_double_jumped
                 && !st.has_flipped
             {
-                let should_flip = prev_action[2].abs() + prev_action[3].abs() + prev_action[4].abs()
+                let should_flip = last_actions[2].abs()
+                    + last_actions[3].abs()
+                    + last_actions[4].abs()
                     >= DEFAULT_DODGE_DEADZONE;
                 if should_flip {
                     st.flip_time = 0.0;
                     st.has_flipped = true;
-                    let mut flipdir = [-prev_action[2], prev_action[3] + prev_action[4]];
+                    let mut flipdir = [-last_actions[2], last_actions[3] + last_actions[4]];
                     let norm = (flipdir[0] * flipdir[0] + flipdir[1] * flipdir[1]).sqrt();
                     if norm > 0.0 {
                         flipdir[0] /= norm;
@@ -448,14 +479,14 @@ impl RipplePolicy {
             }
         }
 
-        // Handbrake
-        if prev_action[7] > 0.5 {
-            st.handbrake = (st.handbrake + 5.0 * TICK_SKIP as f32 / 120.0).min(1.0);
+        // obs.py:443-444. `handbrakes` is dtype=bool, so the in-place subtract
+        // casts the negative float back to True before `max(..., 0)`.
+        let delta = if last_actions[7] != 0.0 {
+            5.0 * TICK_SKIP as f32 / 120.0
         } else {
-            st.handbrake = (st.handbrake - 2.0 * TICK_SKIP as f32 / 120.0).max(0.0);
-        }
-
-        st.prev_on_ground = f.on_ground;
+            -2.0 * TICK_SKIP as f32 / 120.0
+        };
+        st.handbrake = numpy_bool_shift(st.handbrake, delta);
     }
 
     #[cfg(feature = "ripple")]
@@ -492,7 +523,7 @@ impl RipplePolicy {
         main[22] = st.jump_time;
         main[23] = st.air_time;
         main[24] = st.flip_time;
-        main[25] = st.handbrake;
+        main[25] = f32::from(st.handbrake);
         main[26..28].copy_from_slice(&st.flip_dir);
         // is_reset: True if action queue contains NaN (indicates next action will fill queue)
         // Python: is_reset = queue has NaN AND not kickoff
@@ -1862,6 +1893,134 @@ mod tests {
         policy.build(&state, 0, &mut obs, &mut mask);
         assert!(obs[22].abs() < 0.01,
                 "step-20 pattern: main[22] should stay 0 when two-back jump is held, got {}", obs[22]);
+    }
+
+    #[test]
+    fn test_handbrake_numpy_bool_step0_and_transition() {
+        // obs.py:154 zeros dtype=bool. The subtract at :443-444 casts first.
+        let sub = -2.0 * TICK_SKIP as f32 / 120.0;
+        let add = 5.0 * TICK_SKIP as f32 / 120.0;
+        let step0 = numpy_bool_shift(false, sub);
+        assert!(step0, "step 0, handbrake released: False - delta is True");
+        assert!(numpy_bool_shift(step0, sub), "a later release stays True");
+        assert!(numpy_bool_shift(step0, add), "a later press stays True");
+        assert!(numpy_bool_shift(false, add), "press from False is True");
+        // The float clip Rust used to do stays 0. Numpy's two-statement form does not.
+        assert_eq!((0.0f32 + sub).max(0.0), 0.0);
+
+        let mut released = RippleState::new();
+        RipplePolicy::update_flip_and_handbrake(&mut released, [0.0; 8], true);
+        assert!(released.handbrake, "step 0 through the timer is True");
+        assert_eq!(released.boost_time, 0.0, "handbrake update does not write boost_time");
+        RipplePolicy::update_flip_and_handbrake(&mut released, [0.0; 8], true);
+        assert!(released.handbrake, "second release stays True");
+        let mut pressing = [0.0f32; 8];
+        pressing[7] = 1.0;
+        RipplePolicy::update_flip_and_handbrake(&mut released, pressing, true);
+        assert!(released.handbrake, "press after the cast stays True");
+    }
+
+    #[test]
+    fn test_flip_guard_uses_queued_action() {
+        // obs.py:420-427. Airborne, has jumped, two-back jump is 0.
+        // Queued action has jump + pitch. Previously executed action does not.
+        let mut st = RippleState::new();
+        st.has_jumped = true;
+        st.is_jumping = false;
+        st.air_time = 8.0;
+        st.prev_action = [0.0; 8];
+        st.prev_prev_action = [0.0; 8];
+        let mut queued = [0.0f32; 8];
+        queued[2] = -1.0;
+        queued[5] = 1.0;
+        RipplePolicy::update_flip_and_handbrake(&mut st, queued, false);
+        assert!(st.has_flipped, "flip must follow queue[5], not prev_action");
+        assert!((st.flip_dir[0] - 1.0).abs() < 1e-5, "flipdir from queued pitch, got {}", st.flip_dir[0]);
+        assert!((st.flip_time - TICK_SKIP as f32).abs() < 1e-5, "flip starts then increments this build, got {}", st.flip_time);
+        assert_eq!(st.boost_time, 0.0, "flip latch does not write main[21] boost_time");
+
+        // The old bug: prev_action has the flip, the queued action does not.
+        let mut st = RippleState::new();
+        st.has_jumped = true;
+        st.is_jumping = false;
+        st.air_time = 8.0;
+        st.prev_action = queued;
+        st.prev_prev_action = [0.0; 8];
+        RipplePolicy::update_flip_and_handbrake(&mut st, [0.0; 8], false);
+        assert!(!st.has_flipped, "prev_action must not start the flip");
+        assert_eq!(st.boost_time, 0.0);
+    }
+
+    #[test]
+    fn test_handbrake_obs_step0() {
+        // First build, queue still NaN → last action 0 → main[25] == 1.
+        // A following release and a following press both stay 1.
+        use rlgymppo::rlgym::rocketsim::{init_from_default, Arena, CarBodyConfig, CarState, GameMode, Team};
+        init_from_default(true).expect("load meshes");
+
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            return;
+        }
+        let policy = RipplePolicy::load(&path).expect("Load");
+
+        let mut arena = Arena::new(GameMode::Soccar);
+        arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+        let mut ball_state = BallState::default();
+        ball_state.phys.pos.x = 500.0;
+        ball_state.phys.pos.y = 500.0;
+        ball_state.phys.pos.z = 100.0;
+        arena.set_ball_state(ball_state);
+        let mut car_state = CarState::default();
+        car_state.phys.pos.x = 1000.0;
+        car_state.phys.pos.z = 17.0;
+        arena.set_car_state(0, car_state.core());
+        arena.edit_car_state_full(0, |s| s.set_contact_flags(true, [true; 4]));
+
+        let state = {
+            use rlgymppo::rlgym::GameState;
+            GameState {
+                game_mode: GameMode::Soccar,
+                tick_count: 0,
+                ball: *arena.get_ball_state(),
+                cars: vec![{
+                    let (info, state) = arena.get_car_info_and_state(0);
+                    (*info, *state)
+                }],
+                boost_pads: (0..34).map(|i| {
+                    let config = *arena.get_boost_pad_config(i);
+                    let state = arena.get_boost_pad_state(i);
+                    (config, state)
+                }).collect(),
+                events: Vec::new(),
+            }
+        };
+
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        policy.build(&state, 0, &mut obs, &mut mask);
+        assert!((obs[25] - 1.0).abs() < 1e-6, "step 0 main[25] should be 1, got {}", obs[25]);
+
+        {
+            let key = (&state as *const _ as usize, 0usize);
+            let mut states = policy.states.lock().unwrap();
+            let st = states.get_mut(&key).expect("state");
+            st.queue = [[0.0; 8]; QUEUE_LEN];
+        }
+        policy.build(&state, 0, &mut obs, &mut mask);
+        assert!((obs[25] - 1.0).abs() < 1e-6, "release stays 1, got {}", obs[25]);
+
+        {
+            let key = (&state as *const _ as usize, 0usize);
+            let mut states = policy.states.lock().unwrap();
+            let st = states.get_mut(&key).expect("state");
+            for slot in &mut st.queue {
+                *slot = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+            }
+        }
+        policy.build(&state, 0, &mut obs, &mut mask);
+        assert!((obs[25] - 1.0).abs() < 1e-6, "press stays 1, got {}", obs[25]);
+        assert!(obs[21].abs() < 1e-6, "these builds must not move boost_time, got {}", obs[21]);
     }
 
     #[test]
