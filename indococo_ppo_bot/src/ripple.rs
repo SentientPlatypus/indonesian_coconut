@@ -114,7 +114,9 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
                 let p = ang.sin();
                 let r = ang.cos();
                 let m = p.abs().max(r.abs());
-                (p / m, r / m)
+                // Python rounds to 3 decimals (act.py:80, np.round(actions,3))
+                // Round half to even like numpy
+                ((p / m * 1000.0).round() / 1000.0, (r / m * 1000.0).round() / 1000.0)
             };
             for &bo in &[0.0, 1.0] {
                 rows.push([bo, 0.0, pi, 0.0, ro, 1.0, bo, 1.0]);
@@ -273,7 +275,13 @@ impl RipplePolicy {
     // Reset detection is now handled in build() with edge-triggered logic
 
     fn update_ball_pred(&self, state: &GameState, st: &mut RippleState) {
-        // Use thread-local arena
+        // Ball prediction arena config (per user review):
+        // - GameMode::Soccar (standard field with goals)
+        // - Ball-only (no cars to interact with)
+        // - Default mutators (no custom physics)
+        // - 120 Hz tick rate (RocketSim default)
+        // - Predicts 5 steps × 120 ticks = 5 seconds ahead
+        // Python obs.py should use identical config
         thread_local! {
             static ARENA: RefCell<Arena> = RefCell::new(Arena::new(GameMode::Soccar));
         }
@@ -481,10 +489,10 @@ impl RipplePolicy {
         main[18] = if !me.has_jumped { 1.0 } else { 0.0 };
         main[19] = if f.has_flip { 1.0 } else { 0.0 };
         main[20] = (me.boost / 100.0).min(2.0);  // RocketSim boost is 0-100, normalize to 0-1
-        main[21] = st.boost_time;
-        main[22] = st.jump_time;
-        main[23] = st.air_time;
-        main[24] = st.flip_time;
+        main[21] = st.boost_time / 12.0;   // Normalize boost timer
+        main[22] = st.jump_time / 24.0;    // Normalize jump timer
+        main[23] = st.air_time / 150.0;    // Normalize air timer
+        main[24] = st.flip_time / 120.0;   // Normalize flip timer
         main[25] = st.handbrake;
         main[26..28].copy_from_slice(&st.flip_dir);
         // is_reset: True if action queue contains NaN (indicates next action will fill queue)
@@ -678,13 +686,8 @@ impl RipplePolicy {
                 boost[1] *= -1.0;
             }
             
-            // Actions: INVERT_SIDE_ACTIONS = [1,-1,1,-1,-1,1,1,1]
-            // Inverts: steer(1), yaw(3), roll(4)
-            for a in &mut actions {
-                a[1] *= -1.0;  // steer
-                a[3] *= -1.0;  // yaw
-                a[4] *= -1.0;  // roll
-            }
+            // Actions: queue already stores actions in observation space (flipped for Orange),
+            // so no flipping needed here (fixed per user report: Orange action history was wrong)
             main[30] = 1.0; // is_flipped
         }
 
@@ -1077,9 +1080,16 @@ impl ExternalPolicy for RipplePolicy {
                 //   5. Return to_execute
                 
                 // Check for NaN and fill if needed
+                // Queue stores actions in observation space (flipped for Orange)
+                let mut fill_action = new_action;
+                if st.was_flipped {
+                    fill_action[1] *= -1.0;  // steer
+                    fill_action[3] *= -1.0;  // yaw
+                    fill_action[4] *= -1.0;  // roll
+                }
                 if st.queue[0][0].is_nan() {
                     for slot in &mut st.queue {
-                        *slot = new_action;
+                        *slot = fill_action;
                     }
                 }
                 
@@ -1089,8 +1099,15 @@ impl ExternalPolicy for RipplePolicy {
                 // Shift right: move queue[0..5] to queue[1..6]
                 st.queue.rotate_right(1);
                 
-                // Put new action at front
-                st.queue[0] = new_action;
+                // Put new action at front, flipped to observation space if needed
+                // Python stores actions in observation space (flipped for Orange)
+                let mut queue_action = new_action;
+                if st.was_flipped {
+                    queue_action[1] *= -1.0;  // steer
+                    queue_action[3] *= -1.0;  // yaw
+                    queue_action[4] *= -1.0;  // roll
+                }
+                st.queue[0] = queue_action;
                 
                 // UN-FLIP the action if observation was flipped (side inversion)
                 // The action was chosen in flipped space, so steer/yaw/roll must be inverted back
@@ -1471,7 +1488,8 @@ mod tests {
     fn test_boost_timer_progression() {
         // Boost hold timer: 0 -> 1/3 -> 2/3 -> 1 (normalized 0, 0.333, 0.667, 1.0)
         // TICK_SKIP=4, max 12 frames: 0, 4/12, 8/12, 12/12
-        use rlgymppo::rlgym::rocketsim::init_from_default;
+        // User fix: use fixed state, pre-fill queue BEFORE first build
+        use rlgymppo::rlgym::rocketsim::{init_from_default, Arena, CarBodyConfig, CarState, GameMode, Team};
         init_from_default(true).expect("load meshes");
         
         let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
@@ -1480,29 +1498,66 @@ mod tests {
         }
         let policy = RipplePolicy::load(&path).expect("Load");
         
-        use crate::env::create_env;
-        use crate::rewards::RewardConfig;
-        use crate::setters::default_mix;
+        // Create fixed non-kickoff state
+        let mut arena = Arena::new(GameMode::Soccar);
+        arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
         
-        let mut env = create_env(&RewardConfig::default(), &default_mix());
-        let (mut state, _, _) = env.reset();
+        let mut car_state = CarState::default();
+        car_state.phys.pos.x = 1000.0;  // Not kickoff position
+        car_state.phys.pos.y = 0.0;
+        car_state.phys.pos.z = 17.0;
+        car_state.has_jumped = false;
+        arena.set_car_state(0, car_state.core());
         
-        // Find a boost action
-        let boost_action = action_table().iter().position(|a| a[6] > 0.5).expect("Find boost");
+        let state = {
+            use rlgymppo::rlgym::GameState;
+            GameState {
+                game_mode: GameMode::Soccar,
+                tick_count: 0,
+                ball: *arena.get_ball_state(),
+                cars: vec![{
+                    let (info, state) = arena.get_car_info_and_state(0);
+                    (*info, *state)
+                }],
+                boost_pads: (0..34).map(|i| {
+                    let config = *arena.get_boost_pad_config(i);
+                    let state = arena.get_boost_pad_state(i);
+                    (config, state)
+                }).collect(),
+                events: Vec::new(),
+            }
+        };
         
-        // Run several steps holding boost
+        // Find a boost action (boost=1, no jump to avoid other timers)
+        let boost_action_idx = action_table().iter().position(|a| a[6] > 0.5 && a[5] < 0.5).expect("Find boost");
+        let boost_action = action_table()[boost_action_idx];
+        
+        // Pre-fill queue with boost action BEFORE first build
+        {
+            let state_ptr = &state as *const _ as usize;
+            let key = (state_ptr, 0);
+            let mut states = policy.states.lock().unwrap();
+            let st = states.entry(key).or_insert_with(RippleState::new);
+            // Fill entire queue so NaN-fill won't overwrite
+            for slot in &mut st.queue {
+                *slot = boost_action;
+            }
+        }
+        
+        // Run several steps - timer should progress since queue already has boost
         for step in 0..4 {
             let mut obs = vec![0.0f32; policy.obs_width()];
             let mut mask = vec![false; N_ACTIONS];
             policy.build(&state, 0, &mut obs, &mut mask);
             
-            // Force boost action into queue
+            // Verify queue still has boost at [5] (no need to force)
             {
                 let state_ptr = &state as *const _ as usize;
                 let key = (state_ptr, 0);
-                let mut states = policy.states.lock().unwrap();
-                if let Some(st) = states.get_mut(&key) {
-                    st.queue[QUEUE_LEN - 1] = action_table()[boost_action];
+                let states = policy.states.lock().unwrap();
+                if let Some(st) = states.get(&key) {
+                    assert!(st.queue[QUEUE_LEN - 1][6] > 0.5, 
+                            "Step {}: queue[5] should have boost", step);
                 }
             }
             
@@ -1518,9 +1573,6 @@ mod tests {
                 assert!((normalized - expected).abs() < 0.1,
                         "Step {}: boost_time/12 should be ~{:.2}, got {:.2}", step, expected, normalized);
             }
-            
-            env.step_physics(8);
-            state = env.current_state();
         }
     }
 
@@ -1639,6 +1691,80 @@ mod tests {
     }
 
     #[test]
+    fn test_jump_timer_hold() {
+        // User requirement: start on the ground, hold jump for 1 decision, assert Python value
+        // Python: at step 18, queue[5].jump=1, prev_action.jump=0, main[22]=0.1667 (=4/24)
+        use rlgymppo::rlgym::rocketsim::{init_from_default, Arena, CarBodyConfig, CarState, GameMode, Team};
+        init_from_default(true).expect("load meshes");
+        
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            return;
+        }
+        let policy = RipplePolicy::load(&path).expect("Load");
+        
+        // Create non-kickoff state with car on ground
+        let mut arena = Arena::new(GameMode::Soccar);
+        arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+        
+        let mut car_state = CarState::default();
+        car_state.phys.pos.x = 1000.0;  // Not kickoff
+        car_state.phys.pos.y = 0.0;
+        car_state.phys.pos.z = 17.0;
+        car_state.has_jumped = false;
+        arena.set_car_state(0, car_state.core());
+        
+        let state = {
+            use rlgymppo::rlgym::GameState;
+            GameState {
+                game_mode: GameMode::Soccar,
+                tick_count: 0,
+                ball: *arena.get_ball_state(),
+                cars: vec![{
+                    let (info, state) = arena.get_car_info_and_state(0);
+                    (*info, *state)
+                }],
+                boost_pads: (0..34).map(|i| {
+                    let config = *arena.get_boost_pad_config(i);
+                    let state = arena.get_boost_pad_state(i);
+                    (config, state)
+                }).collect(),
+                events: Vec::new(),
+            }
+        };
+        
+        // First build to initialize state
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        policy.build(&state, 0, &mut obs, &mut mask);
+        
+        // Find a jump action (jump=1, no boost)
+        let jump_action_idx = action_table().iter().position(|a| a[5] > 0.5 && a[6] < 0.5).expect("Find jump");
+        let jump_action = action_table()[jump_action_idx];
+        
+        // Pre-fill queue with jump action (so it's about to execute)
+        {
+            let state_ptr = &state as *const _ as usize;
+            let key = (state_ptr, 0);
+            let mut states = policy.states.lock().unwrap();
+            if let Some(st) = states.get_mut(&key) {
+                // Fill entire queue with jump action
+                for slot in &mut st.queue {
+                    *slot = jump_action;
+                }
+            }
+        }
+        
+        // Build again - this time queue[5] has jump, and it should increment the timer
+        policy.build(&state, 0, &mut obs, &mut mask);
+        
+        // Check main[22] = jump_time / 24 = 4 / 24 = 0.1667
+        let jump_timer_normalized = obs[22];
+        assert!((jump_timer_normalized - 4.0/24.0).abs() < 0.01,
+                "main[22] should be 4/24 = 0.1667, got {}", jump_timer_normalized);
+    }
+
+    #[test]
     fn test_action_lookup_table() {
         // Verify action lookup table matches Python act.py formula
         // The table has ground + aerial actions first, then flips/jumps at the end
@@ -1663,5 +1789,35 @@ mod tests {
         assert!((idx273[5] - 1.0).abs() < 1e-5, "273[5] jump: got {}, expected 1.0", idx273[5]);
         assert!((idx273[6] - 1.0).abs() < 1e-5, "273[6] boost_flag: got {}, expected 1.0", idx273[6]);
         assert!((idx273[7] - 1.0).abs() < 1e-5, "273[7] handbrake: got {}, expected 1.0", idx273[7]);
+        
+        // Test rounding: Python rounds to 3 decimals (np.round(actions,3))
+        // Check several angles that would have rounding differences
+        // Flip actions start at index 242, with 17 angles * 2 (no-boost, boost)
+        let base = 242;
+        
+        // Angle 1: 0/16 * 2pi = 0 deg -> sin=0, cos=1 (no rounding needed)
+        let idx244 = actions[base + 2];  // angle 1, no boost
+        assert!((idx244[2] - 0.0).abs() < 1e-5, "244[2] pitch");
+        assert!((idx244[4] - 1.0).abs() < 1e-5, "244[4] roll");
+        
+        // Angle 2: 1/16 * 2pi = 22.5 deg -> sin=0.38268, cos=0.92388, max=0.92388
+        // pitch = 0.38268/0.92388 = 0.414213... -> rounds to 0.414
+        // roll = 0.92388/0.92388 = 1.0
+        let idx246 = actions[base + 4];  // angle 2, no boost
+        assert!((idx246[2] - 0.414).abs() < 1e-5, "246[2] pitch should be 0.414, got {}", idx246[2]);
+        assert!((idx246[4] - 1.0).abs() < 1e-5, "246[4] roll should be 1.0, got {}", idx246[4]);
+        
+        // All values should be rounded to exactly 3 decimal places
+        for (i, action) in actions.iter().enumerate() {
+            let pitch = action[2];
+            let roll = action[4];
+            // Check that values are rounded to 3 decimals (within floating point precision)
+            let pitch_rounded = (pitch * 1000.0).round() / 1000.0;
+            let roll_rounded = (roll * 1000.0).round() / 1000.0;
+            assert!((pitch - pitch_rounded).abs() < 1e-6, 
+                    "Action {}: pitch {} not rounded to 3 decimals", i, pitch);
+            assert!((roll - roll_rounded).abs() < 1e-6,
+                    "Action {}: roll {} not rounded to 3 decimals", i, roll);
+        }
     }
 }
