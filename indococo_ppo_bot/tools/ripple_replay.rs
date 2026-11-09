@@ -129,13 +129,16 @@ fn apply_arena_state_and_get_gamestate(arena: &mut Arena, arena_state: &ArenaSta
             .collect(),
         boost_pads: {
             // Populate from dumped pad states to test pad-timer parity
+            use rlgymppo::rlgym::rocketsim::BoostPadState;
             let mut pads = vec![];
             for pad_data in &arena_state.pads {
-                // Get the RocketSim pad config and state
+                // Get the RocketSim pad config
                 let config = *arena.get_boost_pad_config(pad_data.index);
-                let mut state = arena.get_boost_pad_state(pad_data.index);
-                // Override is_active from dump
-                state.set_is_active(pad_data.is_active);
+                // Construct state from dump: cooldown = 0 if active, else timer value
+                let state = BoostPadState {
+                    touching_car_idxs: vec![],
+                    cooldown: if pad_data.is_active { 0.0 } else { pad_data.timer },
+                };
                 pads.push((config, state));
             }
             pads
@@ -375,6 +378,16 @@ fn main() {
                      state.cars.get(car_idx).map(|(_, c)| c.phys.pos.x).unwrap_or(0.0),
                      state.cars.get(car_idx).map(|(_, c)| c.phys.pos.y).unwrap_or(0.0),
                      state.cars.get(car_idx).map(|(_, c)| c.phys.pos.z).unwrap_or(0.0));
+        }
+        
+        // Set replay RNG override if this is a kickoff step (python_uniform_u is present)
+        #[cfg(feature = "ripple-replay")]
+        {
+            if let Some(u) = record.python_uniform_u {
+                ripple.set_replay_rng_override(Some(u));
+            } else {
+                ripple.set_replay_rng_override(None);
+            }
         }
         
         // Build Rust Ripple obs

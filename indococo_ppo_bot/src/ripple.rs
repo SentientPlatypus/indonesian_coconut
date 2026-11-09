@@ -209,8 +209,8 @@ pub struct RipplePolicy {
     // Batch counter: increments after each infer() for edge-trigger reset detection
     batch_counter: Mutex<usize>,
     // Replay-only: deterministic RNG override for testing (None = use normal RNG)
-    // Only available in cfg(test) to prevent use in training
-    #[cfg(test)]
+    // Only available with ripple-replay feature, never in training
+    #[cfg(feature = "ripple-replay")]
     replay_rng_override: Mutex<Option<f32>>,
 }
 
@@ -244,7 +244,7 @@ impl RipplePolicy {
             rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
             build_records: Mutex::new(HashMap::new()),
             batch_counter: Mutex::new(0),
-            #[cfg(test)]
+            #[cfg(feature = "ripple-replay")]
             replay_rng_override: Mutex::new(None),
         })
     }
@@ -259,10 +259,10 @@ impl RipplePolicy {
         *self.rng.lock().unwrap() = rand::rngs::StdRng::seed_from_u64(seed);
     }
     
-    /// Set replay-only RNG override for deterministic kickoff sampling in tests
+    /// Set replay-only RNG override for deterministic kickoff sampling
     /// Pass the python_uniform_u value to force the same kickoff action
-    /// Only available in cfg(test) to prevent use in training
-    #[cfg(test)]
+    /// Only available with ripple-replay feature, never in training
+    #[cfg(feature = "ripple-replay")]
     pub fn set_replay_rng_override(&self, u: Option<f32>) {
         *self.replay_rng_override.lock().unwrap() = u;
     }
@@ -354,15 +354,21 @@ impl RipplePolicy {
         st.demo_timer = (st.demo_timer - TICK_SKIP as f32 / 120.0).max(0.0);
 
         // Boost timer (obs.py:368-379, normalized /12 at :67,:277)
-        // Read from prev_action (the executed action from previous step)
-        // Python reads from executed queue[-1] after the queue has advanced
+        // Python reads action_queue[-1] at obs-build time, BEFORE queue shifts
+        // This is queue[5] in Rust before infer() shifts and inserts new action
+        // Verified: step 6 Python main[21]=0.3333 with current queue[5].boost=1
+        let about_to_execute = if !st.queue[QUEUE_LEN - 1][0].is_nan() {
+            st.queue[QUEUE_LEN - 1]
+        } else {
+            [0.0; 8]
+        };
         let prev_action = st.prev_action;
         
         // Increment by TICK_SKIP per decision (counts ticks, not decisions)
         // After 1 decision with boost held: boost_time = 4, normalized = 4/12 = 0.333
-        if prev_action[6] == 0.0 && st.boost_time >= 12.0 {
+        if about_to_execute[6] == 0.0 && st.boost_time >= 12.0 {
             st.boost_time = 0.0;
-        } else if st.boost_time > 0.0 || prev_action[6] > 0.5 {
+        } else if st.boost_time > 0.0 || about_to_execute[6] > 0.5 {
             st.boost_time = (st.boost_time + TICK_SKIP as f32).min(12.0);
         } else {
             st.boost_time = 0.0;
@@ -782,17 +788,18 @@ impl ExternalPolicy for RipplePolicy {
         let kickoff_edge = !st.was_kickoff && is_kickoff_geometry;
         
         // Teleport detection: movement > physically possible per tick
-        // Per EC2 rip16: normalize by elapsed batches
-        let batches_elapsed = if st.last_batch > 0 && current_batch > st.last_batch {
-            (current_batch - st.last_batch) as f32
+        // Normalize by elapsed tick_count (valid even across episode resets since tick_count doesn't rewind)
+        let ticks_elapsed = if st.last_tick_count > 0 && state.tick_count >= st.last_tick_count {
+            (state.tick_count - st.last_tick_count) as f32
         } else {
-            1.0
+            8.0  // First call or wrapped: assume one decision worth of ticks
         };
-        // Ball max ~75uu/tick, car max ~50uu/tick @ 120Hz, times 8 ticks per decision
-        let ball_max = 600.0 * batches_elapsed;
-        let car_max = 400.0 * batches_elapsed;
-        let ball_teleported = st.last_batch > 0 && (ball_pos - st.last_ball_pos).length() > ball_max;
-        let car_teleported = st.last_batch > 0 && (car_pos - st.last_car_pos).length() > car_max;
+        // Ball max ~75uu/tick, car max ~50uu/tick @ 120Hz
+        // Threshold = max_speed * ticks_elapsed
+        let ball_max = 75.0 * ticks_elapsed;
+        let car_max = 50.0 * ticks_elapsed;
+        let ball_teleported = st.last_tick_count > 0 && (ball_pos - st.last_ball_pos).length() > ball_max;
+        let car_teleported = st.last_tick_count > 0 && (car_pos - st.last_car_pos).length() > car_max;
         
         // Demo respawn detection per EC2 rip16:
         // RocketSim respawns when timer reaches 0 (rocketsim base.rs:962-965)
@@ -993,9 +1000,9 @@ impl ExternalPolicy for RipplePolicy {
                 // cdf = np.cumsum(np.exp(log_policy))
                 // return min((random >= cdf).sum(), N-1)
                 
-                // Check for replay RNG override first (test-only)
+                // Check for replay RNG override first (ripple-replay feature only)
                 let u: f32 = {
-                    #[cfg(test)]
+                    #[cfg(feature = "ripple-replay")]
                     {
                         let override_guard = self.replay_rng_override.lock().unwrap();
                         if let Some(override_u) = *override_guard {
@@ -1006,7 +1013,7 @@ impl ExternalPolicy for RipplePolicy {
                             (rng.next_u64() as f64 / std::u64::MAX as f64) as f32
                         }
                     }
-                    #[cfg(not(test))]
+                    #[cfg(not(feature = "ripple-replay"))]
                     {
                         let mut rng = self.rng.lock().unwrap();
                         (rng.next_u64() as f64 / std::u64::MAX as f64) as f32
@@ -1364,12 +1371,37 @@ mod tests {
         }
         let policy = RipplePolicy::load(&path).expect("Load");
         
-        use crate::env::create_env;
-        use crate::rewards::RewardConfig;
-        use crate::setters::default_mix;
+        // Create forced kickoff state (not default_mix which is only 34% kickoff)
+        use rlgymppo::rlgym::rocketsim::{Arena, CarBodyConfig, GameMode, Team};
+        use rlgymppo_utils::rlgym::StateSetter;
+        use rlgymppo_utils::state_setters::KickoffState;
         
-        let mut env = create_env(&RewardConfig::default(), &default_mix());
-        let (state, _, _) = env.reset();
+        let mut arena = Arena::new(GameMode::Soccar);
+        arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+        arena.add_car(Team::Orange, CarBodyConfig::OCTANE);
+        
+        let mut shared_info = crate::env::SharedInfo::default();
+        let mut kickoff_setter = KickoffState;
+        kickoff_setter.apply(&mut arena, &mut shared_info);
+        
+        let state = {
+            use rlgymppo::rlgym::GameState;
+            GameState {
+                game_mode: GameMode::Soccar,
+                tick_count: 0,
+                ball: *arena.get_ball_state(),
+                cars: (0..2).map(|i| {
+                    let (info, state) = arena.get_car_info_and_state(i);
+                    (*info, *state)
+                }).collect(),
+                boost_pads: (0..34).map(|i| {
+                    let config = *arena.get_boost_pad_config(i);
+                    let state = arena.get_boost_pad_state(i);
+                    (config, state)
+                }).collect(),
+                events: Vec::new(),
+            }
+        };
         
         let mut obs = vec![0.0f32; policy.obs_width()];
         let mut mask = vec![false; N_ACTIONS];
