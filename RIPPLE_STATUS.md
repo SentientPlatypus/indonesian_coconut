@@ -112,19 +112,9 @@ Check logs for Ripple opponent presence, no panics, reasonable inference through
 
 ## Environment Variables
 
-When ready to use Ripple in a training run, set these in the variant's `.env` file:
+ST20 sets the share with `weight = 1.286` on the ripple entry in `train_st20.toml` (about 5% of iterations). `experiments/st_ST20.env` exports `RIPPLE_DEVICE=cuda` and does not set `RIPPLE_WEIGHT`, so the launcher does not run per-chunk Ripple evals.
 
-```sh
-RIPPLE_WEIGHT=1.5          # Opponent sampling weight (0 = disabled)
-RIPPLE_DIR=/home/ubuntu/eval_bots/ripple/bots/v1.1  # Path to ONNX models
-```
-
-Example `experiments/st_ST20.env`:
-```sh
-# ... existing ST20 config ...
-RIPPLE_WEIGHT=1.5
-RIPPLE_DIR=/home/ubuntu/eval_bots/ripple/bots/v1.1
-```
+`RIPPLE_WEIGHT` is an optional override at trainer load (positive replaces the toml weight, `0` removes the opponent, unset leaves the toml weight). `RIPPLE_DIR` overrides the default `/home/ubuntu/eval_bots/ripple/bots/v1.1` when the trainer adds an entry the toml does not already have.
 
 ## Known Limitations
 
@@ -178,7 +168,7 @@ If ONNX Runtime linking fails, check that `ort` crate's `download-binaries` feat
 5. Implement parity tool
 6. Build and validate
 7. Run integration test
-8. Tune RIPPLE_WEIGHT in ST20+
+8. ST20 uses weight 1.286 in train_st20.toml. RIPPLE_WEIGHT stays unset.
 
 ## License & Attribution
 

@@ -14,7 +14,20 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
-### st10_10629M.bpk (current best)
+### st19r_15919M.bpk (current best)
+
+| | |
+|---|---|
+| Lineage | ST19r (ST19 recipe continued from ST19 15307.4M: aerial_defense 0.15 + demo_threat 0.05, GAL_WEIGHT 4.5, MEGA_WEIGHT 2.0, OPPCH 0.60, ENT 0.016), chunk `1794217094` (15918.8M steps). 106-input obs (`INDOCOCO_OBS_EXT=1`). **Manual promote** 2026-11-09: auto gate failed on h2h vs ST16 (50.4%, needs ≥52) and FR4 (−3.0 vs −1.0 tol). Galactus, Megabyte, pool, botpack5 and the gen panel improved |
+| H2H | 50.4% vs ST16 (252-248), **71.6%** vs FR4 (ST16 74.6%), over 500 games each |
+| Pool | **92.62** on pool400 (ST16 92.04): 1v1.pt 82.5, 430M 83.75, Nexto 93.0, Necto 97.25, Element 99.75, Immortal 99.5 |
+| Botpack5 | **67.38** avg (ST16 65.83): Ripple 65.0, Kira 67.5, Dice 60.5, Chronos 77.25, Galactus 34.0, Seer 100.0 |
+| Galactus | **34.2%** over 500 games (ST16 25.0%) |
+| Megabyte | **81.0%** over 500 games (report-only; ST16 71.6%) |
+| Gen panel | min **0.342** / mean **0.800** (ST16 0.250 / 0.788) |
+| sha256 | `5a2405ebf11dc72131ad964518366df3dad22e8487c8707f167c631845d6fe6a` |
+
+### st10_10629M.bpk
 
 | | |
 |---|---|

@@ -1514,21 +1514,27 @@ Total setter weight auto-normalizes. A typical recipe: reduce kickoff from 0.45 
   - The `demo_threat.supersonic` field is unused.
   - Both drills always defend blue.
 
-## Ripple v1.1 in the training split (verified rip33, 2026-11-09): ST20 queued at 5%
+## Ripple v1.1 in the training split (ST20, 2026-11-09): about 5% from train_st20.toml
 
 Ripple v1.1 (Rolv-Arild/Ripple-RLBot @ 7ca4273a, CC BY-NC-SA 4.0) joins the training game split as an external opponent, same mechanism as Galactus and Megabyte (`src/ripple.rs`, README "Ripple v1.1 as a league opponent"). Weights are not vendored. They load from `RIPPLE_DIR`, default `/home/ubuntu/eval_bots/ripple/bots/v1.1`.
 
-ST20 is queued after ST19r. Ripple is 5% of iterations, toml weight 1.286. Galactus stays 20% and Megabyte 7.8%. `RIPPLE_DEVICE=cuda`. Trainer binary md5 `3c6dbe7c`.
+On the EC2 launcher the Ripple share is the ripple entry's weight in `train_st20.toml`: `1.286`, about 5% of iterations. Galactus stays 20% and Megabyte 7.8%. `st_ST20.env` exports `RIPPLE_DEVICE=cuda` and does not set `RIPPLE_WEIGHT`. With `RIPPLE_WEIGHT` unset, `st_launch.sh` does not run per-chunk Ripple evals. Trainer binary md5 `3c6dbe7c`.
 
-Why 5% and not 10%: the slowdown budget is 15%. On rip33 a Ripple iteration took about 2.1× a normal one (pools=2 real trainer smoke, checkpoint saved). The estimated slowdown is +7.6% to +13.8% at a 5% share and +15% to +28% at a 10% share. The 10% share is over the budget.
-
-`RIPPLE_WEIGHT` and `RIPPLE_DEVICE` go in the variant env that `st_launch.sh` sources. A set `RIPPLE_WEIGHT` appends `[[opponents.external]]` (`kind = "ripple"`, path `RIPPLE_DIR`). At load, a positive `RIPPLE_WEIGHT` overrides a toml ripple weight or adds the opponent; `0` removes it; unset leaves the toml entry. `RIPPLE_DEVICE=cuda` selects the LibTorch nets (build `--features torch,ripple`, plus `cuda` on the training box) and fails if CUDA or the safetensors are missing. `RIPPLE_DEVICE=cpu` forces ONNX. Unset uses CUDA when the safetensors and a CUDA device are available.
+`RIPPLE_WEIGHT` is an optional override at trainer load. A positive value replaces the toml ripple weight or adds the opponent; `0` removes it; unset leaves the toml weight. `RIPPLE_DEVICE=cuda` selects the LibTorch nets (build `--features torch,ripple`, plus `cuda` on the training box) and fails if CUDA or the safetensors are missing. `RIPPLE_DEVICE=cpu` forces ONNX. Unset uses CUDA when the safetensors and a CUDA device are available.
 
 ```sh
-RIPPLE_WEIGHT=1.286
+# st_ST20.env
 RIPPLE_DEVICE=cuda
-RIPPLE_DIR=/home/ubuntu/eval_bots/ripple/bots/v1.1
 ```
+
+```toml
+# train_st20.toml
+[[opponents.external]]
+kind = "ripple"
+weight = 1.286   # about 5% of iterations
+```
+
+The 10% share was estimated at +15% to +28%, over the 15% slowdown budget, so the toml weight targets about 5% (pre-run estimate +7.6% to +13.8%). The rip33 pools=2 smoke measured a Ripple iteration at about 2.1× a normal one. Early ST20 production does not: Ripple was the opponent in 17/346 iterations (4.9%), the median Ripple iteration took about 5.5 s (the same as other iterations), and throughput is 51.2k steps/s vs 54.5k for ST19r (about −6%).
 
 Verification on the GPU box, rip33, commit `e429d1a`:
 
@@ -1537,7 +1543,7 @@ Verification on the GPU box, rip33, commit `e429d1a`:
 - Bench: 0.0118 ms/row at 1024 rows and 0.0237 ms/row at 256. Forward cost about 5 ms per call.
 - The pools=2 trainer smoke saved a checkpoint. RocketSim loads `collision_meshes/soccar` from the working directory, so the trainer has to be started in a directory that contains `collision_meshes`.
 
-Per-chunk eval when `RIPPLE_WEIGHT` is set: 200 games (`ripple_200` in `mid.jsonl`). Finals: 500 games (`ripple_final.jsonl`). License: CC BY-NC-SA 4.0, NonCommercial, assets loaded at runtime.
+License: CC BY-NC-SA 4.0, NonCommercial, assets loaded at runtime.
 
 ## ST19r results (Nov 9, 2026, ~8:02 AM ET): MANUAL PROMOTE, new best ST19r 15918.8M
 Finals ckpt = selected mid 15918.8M (exp_ST19r/checkpoints/1794217094; mid 200 g: 54.0% vs ST16, Galactus 37.0%). ST19 recipe (gal4 setters: aerial_defense 0.15 + demo_threat 0.05, GAL_WEIGHT 4.5 ≈ 20%, MEGA_WEIGHT 2.0, OPPCH 0.60, ENT 0.016), continued from ST19 15307.4M.

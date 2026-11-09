@@ -373,27 +373,36 @@ re-runs the Python eval adapter on them (see EXPERIMENTS.md "Galactus in the lea
 ### Ripple v1.1 as a league opponent
 `src/ripple.rs` ports Ripple v1.1 (Rolv-Arild/Ripple-RLBot @ 7ca4273a, CC BY-NC-SA 4.0) as another
 `ExternalPolicy`. Weights stay outside the repo and load from `RIPPLE_DIR` (default
-`/home/ubuntu/eval_bots/ripple/bots/v1.1`). ST20, queued after ST19r, is the first training run that
-plays it: 5% of iterations (toml weight 1.286), with Galactus at 20% and Megabyte at 7.8%, and
-`RIPPLE_DEVICE=cuda`. The trainer binary md5 is `3c6dbe7c`.
+`/home/ubuntu/eval_bots/ripple/bots/v1.1`). ST20, after ST19r, is the first training run that plays it.
+On the EC2 launcher the share is the ripple entry's weight in `train_st20.toml`: `1.286`, about 5% of
+iterations, with Galactus at 20% and Megabyte at 7.8%. `st_ST20.env` exports `RIPPLE_DEVICE=cuda` and
+does not set `RIPPLE_WEIGHT`. With that variable unset, `st_launch.sh` does not run per-chunk Ripple
+evals. The trainer binary md5 is `3c6dbe7c`.
 
-A 10% share was the other candidate. On rip33 (`e429d1a`) a Ripple iteration took about 2.1× a normal
-one in the pools=2 trainer smoke, and the estimated slowdown is +7.6% to +13.8% at 5% of iterations
-and +15% to +28% at 10%. 10% is over the 15% slowdown budget, so the share is 5%.
-
-Set the share and the device in the variant env that `experiments/st_launch.sh` sources. A set
-`RIPPLE_WEIGHT` appends `[[opponents.external]]` with `kind = "ripple"`. The trainer also reads the
-variable at load: a positive value overrides a toml ripple weight, or adds the opponent when the toml
-has none; `0` removes it; unset leaves the toml weight. `RIPPLE_DEVICE=cuda` runs the LibTorch policy
-and base nets (binary built with `--features torch,ripple`, and `torch,cuda` on the training box) and
-errors if CUDA or the safetensors are missing. `RIPPLE_DEVICE=cpu` keeps the ONNX sessions. Unset
-prefers CUDA when the device and `ripple-v1.1.safetensors` / `ripple-v1.1-bcm.safetensors` are present.
+`RIPPLE_WEIGHT` is an optional override, read when the trainer loads. A positive value replaces the
+toml ripple weight, or adds the opponent when the toml has none. `0` removes it. Unset leaves the toml
+weight. `RIPPLE_DEVICE=cuda` runs the LibTorch policy and base nets (binary built with
+`--features torch,ripple`, and `torch,cuda` on the training box) and errors if CUDA or the safetensors
+are missing. `RIPPLE_DEVICE=cpu` keeps the ONNX sessions. Unset prefers CUDA when the device and
+`ripple-v1.1.safetensors` / `ripple-v1.1-bcm.safetensors` are present.
 
 ```sh
-RIPPLE_WEIGHT=1.286
+# st_ST20.env
 RIPPLE_DEVICE=cuda
-RIPPLE_DIR=/home/ubuntu/eval_bots/ripple/bots/v1.1
 ```
+
+```toml
+# train_st20.toml
+[[opponents.external]]
+kind = "ripple"
+weight = 1.286   # about 5% of iterations
+```
+
+A 10% share was estimated at +15% to +28%, over the 15% slowdown budget, so the toml weight targets
+about 5% (pre-run estimate +7.6% to +13.8%). The rip33 pools=2 smoke (`e429d1a`) measured a Ripple
+iteration at about 2.1× a normal one. Early ST20 production does not: Ripple was the opponent in
+17/346 iterations (4.9%), the median Ripple iteration took about 5.5 s (the same as other iterations),
+and throughput is 51.2k steps/s against 54.5k for ST19r (about −6%).
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench

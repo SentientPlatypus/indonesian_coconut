@@ -37,7 +37,7 @@ Ripple v1.1 (Rolv-Arild/Ripple-RLBot @ 7ca4273a891ab1d04d001b48cb86f1bc8914aa85,
 ## Files
 
 - `src/ripple.rs` — Rust port of RippleObs, RippleAction, Agent (ONNX + KL selection). **Status:** Scaffold complete, observation builder and inference need completion.
-- `experiments/st_launch.sh` — Updated with `RIPPLE_WEIGHT` / `RIPPLE_DIR` plumbing (default 0 = off).
+- `experiments/st_launch.sh` — Appends a ripple opponent and runs Ripple evals only when `RIPPLE_WEIGHT` is set. ST20 leaves it unset and puts the weight in `train_st20.toml`.
 - `tools/ripple_parity.py` — Parity tool comparing Rust vs Python Ripple on recorded states.
 - `RIPPLE.md` — This file.
 - `EXPERIMENTS.md` — Updated with Ripple notes.
@@ -64,25 +64,9 @@ cargo build --release --features torch --bin indococo-train
 
 ## Training with Ripple
 
-Set `RIPPLE_WEIGHT` and `RIPPLE_DIR` in the variant's `.env` file:
+ST20 sets the share with the ripple entry in `train_st20.toml` (`weight = 1.286`, about 5% of iterations). `experiments/st_ST20.env` exports `RIPPLE_DEVICE=cuda` and does not set `RIPPLE_WEIGHT`, so `st_launch.sh` does not run per-chunk Ripple evals.
 
-```sh
-# experiments/st_ST20.env
-RIPPLE_WEIGHT=1.5
-RIPPLE_DIR=/home/ubuntu/eval_bots/ripple/bots/v1.1
-```
-
-Then `st_launch.sh` appends:
-
-```toml
-[[opponents.external]]
-name = "ripple"
-kind = "ripple"
-path = "/home/ubuntu/eval_bots/ripple/bots/v1.1"
-weight = 1.5
-```
-
-Every chunk, the candidate is evaluated against Ripple (200 games), logged in `mid.jsonl` as `ripple_200`. Finals include 500 games, logged in `ripple_final.jsonl`.
+`RIPPLE_WEIGHT` is an optional override read at trainer load. A positive value replaces the toml weight (or adds the opponent when the toml has none). `0` removes it. Unset leaves the toml weight. `RIPPLE_DIR` overrides the default `/home/ubuntu/eval_bots/ripple/bots/v1.1` when the trainer adds an entry that the toml does not already have.
 
 ## Parity Validation
 
