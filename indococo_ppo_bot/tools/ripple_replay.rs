@@ -33,6 +33,10 @@ struct Record {
     python_controls: Vec<f32>,
     python_on_ground: bool,
     python_handbrake: f32,
+    #[serde(default)]
+    python_opponent_on_ground: Option<bool>,
+    #[serde(default)]
+    python_opponent_handbrake: Option<f32>,
     arena_state: ArenaState,
 }
 
@@ -422,17 +426,16 @@ fn main() {
         // Build Rust Ripple obs
         ripple.build(&state, car_idx, &mut obs, &mut mask);
         
-        // CRITICAL: Inject ALL Python values BEFORE infer() (EC2 rip16: third request!)
-        // Main tensor: [17]=on_ground, [25]=handbrake
+        // Inject the controlled player's own on_ground/handbrake into main.
+        // Others gets the opponent, not the controlled car.
         obs[17] = if record.python_on_ground { 1.0 } else { 0.0 };
         obs[25] = record.python_handbrake;
         
-        // Opponent's on_ground (others[0] index 17)
-        // Others tensor layout: each player is 21 floats, on_ground at 17
-        // Main is 32 floats, so others starts at 32
-        if record.python_others.len() > 0 && record.python_others[0].len() > 17 {
-            let opponent_on_ground = record.python_others[0][17];
-            obs[32 + 17] = opponent_on_ground;
+        // Others tensor: each player is 21 floats, on_ground at 17. Main is 32.
+        if let Some(grounded) = record.python_opponent_on_ground {
+            obs[32 + 17] = if grounded { 1.0 } else { 0.0 };
+        } else if record.python_others.len() > 0 && record.python_others[0].len() > 17 {
+            obs[32 + 17] = record.python_others[0][17];
         }
         
         // Call infer() with fully injected obs

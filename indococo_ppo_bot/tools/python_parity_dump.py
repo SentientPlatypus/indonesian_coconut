@@ -114,11 +114,13 @@ def main():
     idle = ZeroAgent()
     arena = Arena(jitter=False)
     
-    # Determine player index (0 or 1)
-    main_idx = 0 if side == "blue" else 1
+    # _v1/players_for puts the controlled player first on both sides.
+    # Index 1 is the other car. Do not use side to pick these.
+    controlled_idx = 0
+    opponent_idx = 1
     main_car_id = 1 if side == "blue" else 4  # Car IDs start at 1
     
-    print(f"Recording {side} side (player {main_idx}, car ID {main_car_id}) for {max_steps} steps")
+    print(f"Recording {side} side (controlled player {controlled_idx}, car ID {main_car_id}) for {max_steps} steps")
     print(f"Output: {output_path}\n")
     
     # Hook into the arena to capture tensors during play
@@ -193,13 +195,17 @@ def main():
         # Dump arena state from GameState
         arena_state = dump_arena_state(gs, tick, ripple.obs)
         
-        # Extract main player's on_ground and handbrake for replay injection
-        main_player = gs.players[main_idx]
-        
-        # Get handbrake from obs builder state (after pre_step, before normalization)
-        # The normalized value is in main_tensor[25], but we need the raw value
-        # obs.handbrakes is a numpy array that gets updated by update_player_timers
-        handbrake_raw = float(ripple.obs.handbrakes[main_idx])
+        # Controlled player is gs.players[0] after _v1. Opponent is players[1].
+        # handbrakes follows that same order (update_player_timers enumerates state.players).
+        controlled = gs.players[controlled_idx]
+        opponent = gs.players[opponent_idx] if len(gs.players) > opponent_idx else None
+        handbrake_raw = float(ripple.obs.handbrakes[controlled_idx])
+        opponent_on_ground = bool(opponent.on_ground) if opponent is not None else False
+        opponent_handbrake = (
+            float(ripple.obs.handbrakes[opponent_idx])
+            if opponent is not None and len(ripple.obs.handbrakes) > opponent_idx
+            else 0.0
+        )
         
         # Compute probabilities for deterministic comparison
         log_probs = policy_logits - np.logaddexp.reduce(policy_logits)
@@ -223,8 +229,10 @@ def main():
             'python_action': int(chosen_action),
             'python_agent_mode': str(ripple.agent.mode),
             'python_controls': ripple.actions[0].tolist(),  # Actual 8-element control vector
-            'python_on_ground': main_player.on_ground,
+            'python_on_ground': bool(controlled.on_ground),
             'python_handbrake': handbrake_raw,
+            'python_opponent_on_ground': opponent_on_ground,
+            'python_opponent_handbrake': opponent_handbrake,
             'arena_state': arena_state,
         }
         records.append(record)

@@ -132,10 +132,7 @@ pub fn action_table() -> &'static [[f32; 8]; N_ACTIONS] {
 #[derive(Clone)]
 struct RippleState {
     queue: [[f32; 8]; QUEUE_LEN],
-    /// Side-flip flag in effect when each queue slot was selected.
-    /// Execution un-mirrors with this slot's flag, not the current frame's.
-    queue_flipped: [bool; QUEUE_LEN],
-    /// Model decision index for the newest slot (queue[0]), before any world un-mirror.
+    /// Model decision index for the newest slot (queue[0]).
     last_selected: Option<usize>,
     demo_timer: f32,
     boost_time: f32,
@@ -153,7 +150,6 @@ struct RippleState {
     prev_prev_action: [f32; 8],  // Action from 2 steps ago for timer edge detection
     ball_preds: [[f32; 9]; 1 + BALL_PRED_STEPS],
     pad_timers: [f32; 34],
-    was_flipped: bool,
     // Edge-trigger reset detection
     was_kickoff: bool,
     was_demoed: bool,  // For demo respawn detection (EC2 rip16)
@@ -167,7 +163,6 @@ impl RippleState {
     fn new() -> Self {
         Self {
             queue: [[f32::NAN; 8]; QUEUE_LEN],
-            queue_flipped: [false; QUEUE_LEN],
             last_selected: None,
             demo_timer: 0.0,
             boost_time: 0.0,
@@ -185,7 +180,6 @@ impl RippleState {
             prev_prev_action: [0.0; 8],
             ball_preds: [[0.0; 9]; 6],
             pad_timers: [0.0; 34],
-            was_flipped: false,
             was_kickoff: false,
             was_demoed: false,
             last_batch: 0,
@@ -394,12 +388,12 @@ impl RipplePolicy {
             st.has_jumped = false;
         }
 
-        // Jump timer logic reads queue[5] (about_to_execute) to match Python obs.py
-        // at obs-build time, BEFORE queue shifts
-        // Edge detection: about_to_execute (new) vs prev_action (old)
+        // Jump timer reads queue[5] at obs-build time, before the queue shifts.
+        // obs.py update_player_timers starts a jump only when last_actions[5] is set
+        // and prev_prev_actions[5] (two decisions back) is not.
         if st.is_jumping {
             st.is_jumping = st.jump_time < 3.0 || (about_to_execute[5] > 0.5 && st.jump_time < 24.0);
-        } else if about_to_execute[5] > 0.5 && prev_action[5] <= 0.5 && st.prev_on_ground {
+        } else if about_to_execute[5] > 0.5 && st.prev_prev_action[5] <= 0.5 && st.prev_on_ground {
             st.is_jumping = true;
             st.jump_time = 0.0;
         }
@@ -691,7 +685,9 @@ impl RipplePolicy {
                 boost[1] *= -1.0;
             }
             
-            // Actions: INVERT_SIDE_ACTIONS = [1,-1,1,-1,-1,1,1,1]
+            // obs.py side flip, only when the (post-orange) x < 0:
+            // actions[i] *= INVERT_SIDE_ACTIONS = [1,-1,1,-1,-1,1,1,1]
+            // Orange INVERT_TEAM is a 180° rotation and does not touch actions.
             // Inverts: steer(1), yaw(3), roll(4)
             for a in &mut actions {
                 a[1] *= -1.0;  // steer
@@ -861,10 +857,7 @@ impl ExternalPolicy for RipplePolicy {
         self.update_timers(state, car, st);
         self.update_ball_pred(state, st);
 
-        let (main, mut others, ball, mut actions, boosts, is_flipped) = self.build_obs_internal(state, car, st);
-        
-        // Store flip state for later un-flipping
-        st.was_flipped = is_flipped;
+        let (main, mut others, ball, mut actions, boosts, _is_flipped) = self.build_obs_internal(state, car, st);
 
         // Flatten into obs
         let mut offset = 0;
@@ -1089,47 +1082,30 @@ impl ExternalPolicy for RipplePolicy {
                 //   4. Put new_action at queue[0]
                 //   5. Return to_execute
                 
-                // Queue stores the raw lookup row. Python has no orange-only
-                // mirror inside the queue. The side-flip flag is stored per slot
-                // so a delayed action is un-mirrored with the flag from the frame
-                // it was selected, not the flag of the frame that executes it.
+                // act.py DelayedAction.parse_actions:114-117 returns the raw
+                // queue[-1] row. There is no side un-mirror on execution.
                 if st.queue[0][0].is_nan() {
-                    for i in 0..QUEUE_LEN {
-                        st.queue[i] = new_action;
-                        st.queue_flipped[i] = st.was_flipped;
+                    for slot in &mut st.queue {
+                        *slot = new_action;
                     }
                 }
                 
-                // Save action to execute (from queue[5]) and that slot's mirror flag
                 let to_execute = st.queue[QUEUE_LEN - 1];
-                let execute_flipped = st.queue_flipped[QUEUE_LEN - 1];
                 
                 // Shift right: move queue[0..5] to queue[1..6]
                 st.queue.rotate_right(1);
-                st.queue_flipped.rotate_right(1);
                 
                 // Newest selection is the raw model row
                 st.queue[0] = new_action;
-                st.queue_flipped[0] = st.was_flipped;
                 st.last_selected = Some(action);
                 
-                // Un-mirror with the flag stored alongside this slot
-                let mut applied_action_controls = to_execute;
-                if execute_flipped {
-                    applied_action_controls[1] *= -1.0; // steer
-                    applied_action_controls[3] *= -1.0; // yaw
-                    applied_action_controls[4] *= -1.0; // roll
-                }
-                // Update action history for timer edge detection
+                // Timer history sees the raw executed row, same as Python's self.actions.
                 st.prev_prev_action = st.prev_action;
-                st.prev_action = applied_action_controls;
+                st.prev_action = to_execute;
                 
-                // Return the EXECUTED action (queue[5] with orange unflip)
-                // Per EC2 rip15: batch_sim :1261 applies controls() directly (action_delay 0)
-                // Must return executed to respect 6-decision delay, matching upstream act.py:106-117
-                // For replay selected-vs-selected: use get_selected_action() accessor
+                // Return the executed raw row's table index.
                 let applied_action = table.iter().position(|&a| {
-                    a.iter().zip(applied_action_controls.iter()).all(|(x, y)| (x - y).abs() < 0.001)
+                    a.iter().zip(to_execute.iter()).all(|(x, y)| (x - y).abs() < 0.001)
                 }).unwrap_or(action);
                 actions.push(applied_action);
             } else {
@@ -1590,7 +1566,10 @@ mod tests {
             let states = policy.states.lock().unwrap();
             if let Some(st) = states.get(&key) {
                 let normalized = st.boost_time / 12.0;
-                let expected = (step as f32 * 4.0 / 12.0).min(1.0);
+                // obs.py update_player_timers increments on the build where
+                // action_queue[-1] already has boost (`elif boost_times != 0 or last_actions[6]: += tick_skip`).
+                // The first such build is 4 ticks, normalized 4/12, not 0.
+                let expected = ((step as f32 + 1.0) * 4.0 / 12.0).min(1.0);
                 assert!((normalized - expected).abs() < 0.1,
                         "Step {}: boost_time/12 should be ~{:.2}, got {:.2}", step, expected, normalized);
             }
@@ -1812,6 +1791,80 @@ mod tests {
     }
 
     #[test]
+    fn test_jump_timer_two_back_edge() {
+        // Blue step 20: queue jump is 1 and the immediately previous jump is 0,
+        // but the jump from two decisions back is 1. Python (obs.py
+        // update_player_timers) compares against prev_prev_actions, so main[22] stays 0.
+        use rlgymppo::rlgym::rocketsim::{init_from_default, Arena, CarBodyConfig, CarState, GameMode, Team};
+        init_from_default(true).expect("load meshes");
+
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.exists() {
+            return;
+        }
+        let policy = RipplePolicy::load(&path).expect("Load");
+
+        let mut arena = Arena::new(GameMode::Soccar);
+        arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+        let mut ball_state = BallState::default();
+        ball_state.phys.pos.x = 500.0;
+        ball_state.phys.pos.y = 500.0;
+        ball_state.phys.pos.z = 100.0;
+        arena.set_ball_state(ball_state);
+        let mut car_state = CarState::default();
+        car_state.phys.pos.x = 1000.0;
+        car_state.phys.pos.z = 17.0;
+        car_state.has_jumped = false;
+        arena.set_car_state(0, car_state.core());
+        arena.edit_car_state_full(0, |s| s.set_contact_flags(true, [true; 4]));
+
+        let state = {
+            use rlgymppo::rlgym::GameState;
+            GameState {
+                game_mode: GameMode::Soccar,
+                tick_count: 0,
+                ball: *arena.get_ball_state(),
+                cars: vec![{
+                    let (info, state) = arena.get_car_info_and_state(0);
+                    (*info, *state)
+                }],
+                boost_pads: (0..34).map(|i| {
+                    let config = *arena.get_boost_pad_config(i);
+                    let state = arena.get_boost_pad_state(i);
+                    (config, state)
+                }).collect(),
+                events: Vec::new(),
+            }
+        };
+
+        let jump_action_idx = action_table().iter().position(|a| a[5] > 0.5 && a[6] < 0.5).expect("Find jump");
+        let jump_action = action_table()[jump_action_idx];
+        let mut two_back = [0.0f32; 8];
+        two_back[5] = 1.0;
+
+        {
+            let state_ptr = &state as *const _ as usize;
+            let key = (state_ptr, 0);
+            let mut states = policy.states.lock().unwrap();
+            let st = states.entry(key).or_insert_with(RippleState::new);
+            for slot in &mut st.queue {
+                *slot = jump_action;
+            }
+            st.prev_action = [0.0; 8];
+            st.prev_prev_action = two_back;
+            st.prev_on_ground = true;
+            st.is_jumping = false;
+            st.jump_time = 0.0;
+        }
+
+        let mut obs = vec![0.0f32; policy.obs_width()];
+        let mut mask = vec![false; N_ACTIONS];
+        policy.build(&state, 0, &mut obs, &mut mask);
+        assert!(obs[22].abs() < 0.01,
+                "step-20 pattern: main[22] should stay 0 when two-back jump is held, got {}", obs[22]);
+    }
+
+    #[test]
     fn test_action_lookup_table() {
         // Verify action lookup table matches Python act.py formula
         // The table has ground + aerial actions first, then flips/jumps at the end
@@ -1820,6 +1873,17 @@ mod tests {
         // where pitch=sin(angle)/max(abs), roll=cos(angle)/max(abs)
         
         let actions = action_table();
+
+        // All 276 rows against act.py make_lookup_table + np.round(..., 3).
+        let fixture: Vec<Vec<f32>> = serde_json::from_str(include_str!("../tests/data/ripple_actions.json"))
+            .expect("ripple action fixture");
+        assert_eq!(fixture.len(), N_ACTIONS);
+        for (i, (got, want)) in actions.iter().zip(fixture.iter()).enumerate() {
+            assert_eq!(want.len(), 8, "row {i}");
+            for (k, (&g, &w)) in got.iter().zip(want.iter()).enumerate() {
+                assert!((g - w).abs() < 5e-4, "row {i} col {k}: rust {g} python {w}");
+            }
+        }
         
         // User verified: step 12 index 273 executed row
         // Python: [1,0,-1,0,1,1,1,1]  (boost, throttle, pitch, yaw, roll, jump, boost_flag, handbrake)
