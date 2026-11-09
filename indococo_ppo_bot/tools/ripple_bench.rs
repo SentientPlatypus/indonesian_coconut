@@ -5,8 +5,9 @@
 //! ```
 //!
 //! CPU (ONNX) prints ms/row for N = 1, 64, 256, 1024. Target: under 0.05 ms/row
-//! at N >= 256. CUDA (LibTorch, TF32 off) prints N = 64, 256, 1024, 4096 and
-//! the extra weight bytes. Target: under 0.01 ms/row at N >= 1024.
+//! at N >= 256. CUDA (LibTorch, TF32 off) prints N = 64, 256, 1024, 4096,
+//! split into forward and CPU post, plus the extra weight bytes. Target:
+//! under 0.01 ms/row total at N >= 1024.
 //! `RIPPLE_BENCH_CHECK=1` exits non-zero when a run misses its target.
 //! `RIPPLE_DEVICE=cpu|cuda` selects the backend (default cuda when the
 //! safetensors export and a GPU are both available).
@@ -55,10 +56,13 @@ fn main() -> ExitCode {
     let (min_n, limit) = if cuda { (1024, 0.01) } else { (256, 0.05) };
     let mut failed = false;
     for &rows in sizes {
-        let (ms, per_row) = policy.bench_infer(rows, 1, 3);
-        println!("N={rows} ms_per_decision={ms:.4} ms_per_row={per_row:.5}");
-        if check && rows >= min_n && per_row >= limit {
-            eprintln!("N={rows} {per_row:.5} ms/row is not under {limit}");
+        let times = policy.bench_profile(rows, 1, 3);
+        println!(
+            "N={rows} ms_per_row={:.5} forward_ms_per_row={:.5} post_ms_per_row={:.5}",
+            times.total_ms_per_row, times.forward_ms_per_row, times.post_ms_per_row
+        );
+        if check && rows >= min_n && times.total_ms_per_row >= limit {
+            eprintln!("N={rows} {:.5} ms/row is not under {limit}", times.total_ms_per_row);
             failed = true;
         }
     }

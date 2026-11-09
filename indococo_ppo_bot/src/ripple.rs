@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use rand::prelude::*;
+use rayon::prelude::*;
 
 use rlgymppo::ExternalPolicy;
 use rlgymppo::rlgym::GameState;
@@ -328,6 +329,79 @@ pub fn merged_ripple_weight(toml_weight: Option<f32>, env_weight: Option<f32>) -
     }
 }
 
+/// obs-row pointer → (GameState pointer, car). Shared by every collector pool.
+/// `infer` removes only the pointers it consumed. A later `build` for the same
+/// car drops any pointer left behind by a reset.
+struct BuildRecords {
+    map: Mutex<HashMap<usize, (usize, usize)>>,
+}
+
+impl BuildRecords {
+    fn new() -> Self {
+        Self { map: Mutex::new(HashMap::new()) }
+    }
+
+    fn note(&self, ptr: usize, key: (usize, usize)) {
+        let mut map = self.map.lock().unwrap();
+        map.retain(|_, existing| *existing != key);
+        map.insert(ptr, key);
+    }
+
+    fn keys_for(&self, ptrs: &[usize]) -> Vec<(usize, usize)> {
+        let map = self.map.lock().unwrap();
+        ptrs.iter()
+            .enumerate()
+            .map(|(i, ptr)| {
+                *map.get(ptr).unwrap_or_else(|| {
+                    panic!(
+                        "infer() row {i} (ptr {ptr:x}) has no recorded key - build() must be called first"
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn release(&self, ptrs: &[usize]) {
+        let mut map = self.map.lock().unwrap();
+        for ptr in ptrs {
+            map.remove(ptr);
+        }
+    }
+
+    #[cfg(test)]
+    fn contains(&self, ptr: usize) -> bool {
+        self.map.lock().unwrap().contains_key(&ptr)
+    }
+}
+
+fn obs_ptrs(obs: &[f32], rows: usize, width: usize) -> Vec<usize> {
+    (0..rows)
+        .map(|i| obs[i * width..(i + 1) * width].as_ptr() as usize)
+        .collect()
+}
+
+/// Below this, the per-row post stays on the caller thread. The result matches
+/// the rayon path; only the scheduling changes.
+const PAR_ROWS: usize = 64;
+
+/// Milliseconds per row for one batched decision, split into the device
+/// forward and the CPU post-processing.
+#[cfg(feature = "ripple")]
+pub struct RippleBenchTimes {
+    pub total_ms_per_row: f64,
+    pub forward_ms_per_row: f64,
+    pub post_ms_per_row: f64,
+}
+
+#[cfg(feature = "ripple")]
+fn time_repeats(repeats: usize, mut once: impl FnMut()) -> f64 {
+    let started = std::time::Instant::now();
+    for _ in 0..repeats.max(1) {
+        once();
+    }
+    started.elapsed().as_secs_f64() * 1e3 / repeats.max(1) as f64
+}
+
 /// Ripple policy with ONNX inference.
 pub struct RipplePolicy {
     #[cfg(feature = "ripple")]
@@ -347,8 +421,9 @@ pub struct RipplePolicy {
     // Build records: maps obs slice pointer -> key (self-identifying rows)
     // Per EC2 rip15: fetch_add used completion order (wrong under thread pool)
     // Fix: batch_sim :1211-1219 allocates slices in game order before spawn
-    // Use obs slice start pointer as deterministic key regardless of execution order
-    build_records: Mutex<HashMap<usize, (usize, usize)>>,
+    // Use obs slice start pointer as deterministic key regardless of execution order.
+    // Pools share this map. infer() must not clear another pool's rows.
+    build_records: BuildRecords,
     // Batch counter: increments after each infer() for edge-trigger reset detection
     batch_counter: Mutex<usize>,
     // Replay-only: deterministic RNG override for testing (None = use normal RNG)
@@ -455,7 +530,7 @@ impl RipplePolicy {
             base: Mutex::new(base),
             states: Mutex::new(HashMap::new()),
             rng: Mutex::new(rand::rngs::StdRng::seed_from_u64(rand::random())),
-            build_records: Mutex::new(HashMap::new()),
+            build_records: BuildRecords::new(),
             batch_counter: Mutex::new(0),
             #[cfg(feature = "ripple-replay")]
             replay_rng_override: Mutex::new(None),
@@ -1142,23 +1217,25 @@ impl ExternalPolicy for RipplePolicy {
         // Record key by obs slice pointer (self-identifying rows)
         // Per EC2 rip15: batch_sim :1211-1219 pre-allocates slices in game order
         // Obs pointer is deterministic regardless of parallel execution order
-        let obs_ptr = obs.as_ptr() as usize;
-        let mut records = self.build_records.lock().unwrap();
-        records.insert(obs_ptr, key);
+        self.build_records.note(obs.as_ptr() as usize, key);
     }
 
     #[cfg(feature = "ripple")]
     fn infer(&self, obs: &[f32], _masks: &[bool], rows: usize) -> Vec<usize> {
         if rows == 0 {
-            return self.finish_infer(Vec::new());
+            self.bump_batch();
+            return Vec::new();
         }
-        match self.infer_batched(obs, rows) {
-            Ok(actions) => self.finish_infer(actions),
+        let actions = match self.infer_batched(obs, rows) {
+            Ok(actions) => actions,
             Err(err) => {
                 eprintln!("ripple batched infer failed ({err}); using the per-row path");
-                self.infer_per_row(obs, rows)
+                self.infer_per_row_body(obs, rows)
             }
-        }
+        };
+        self.release_rows(obs, rows);
+        self.bump_batch();
+        actions
     }
 
     #[cfg(not(feature = "ripple"))]
@@ -1288,9 +1365,8 @@ fn kl_argmax(log_policy: &[f32], log_base: &[f32]) -> usize {
     best
 }
 
-fn commit_queue(st: &mut RippleState, action: usize) -> usize {
-    let table = action_table();
-    let new_action = table[action];
+fn push_queue(st: &mut RippleState, action: usize) -> [f32; 8] {
+    let new_action = action_table()[action];
     if st.queue[0][0].is_nan() {
         for slot in &mut st.queue {
             *slot = new_action;
@@ -1302,40 +1378,61 @@ fn commit_queue(st: &mut RippleState, action: usize) -> usize {
     st.last_selected = Some(action);
     st.prev_prev_action = st.prev_action;
     st.prev_action = to_execute;
-    table
+    to_execute
+}
+
+fn decode_action(row: [f32; 8], fallback: usize) -> usize {
+    action_table()
         .iter()
-        .position(|&a| a.iter().zip(to_execute.iter()).all(|(x, y)| (x - y).abs() < 0.001))
-        .unwrap_or(action)
+        .position(|&a| a.iter().zip(row.iter()).all(|(x, y)| (x - y).abs() < 0.001))
+        .unwrap_or(fallback)
+}
+
+fn row_action(kickoff: bool, unit: f32, policy: &[f32], base: &[f32]) -> usize {
+    let log_policy = log_softmax(policy);
+    if kickoff {
+        inverse_cdf(&log_policy, unit)
+    } else {
+        kl_argmax(&log_policy, &log_softmax(base))
+    }
 }
 
 impl RipplePolicy {
-    fn finish_infer(&self, actions: Vec<usize>) -> Vec<usize> {
-        self.build_records.lock().unwrap().clear();
+    fn bump_batch(&self) {
         *self.batch_counter.lock().unwrap() += 1;
-        actions
     }
 
-    /// Per-row ONNX, one session run per row. Replay and the batched fallback use this.
-    #[cfg(feature = "ripple")]
+    fn release_rows(&self, obs: &[f32], rows: usize) {
+        self.build_records.release(&obs_ptrs(obs, rows, self.obs_width()));
+    }
+
+    /// Per-row ONNX, one session run per row. The batched-vs-per-row test uses this.
+    /// Training's fallback calls `infer_per_row_body` and releases the keys once.
+    #[cfg(all(feature = "ripple", test))]
     fn infer_per_row(&self, obs: &[f32], rows: usize) -> Vec<usize> {
-        self.finish_infer(self.infer_per_row_body(obs, rows))
+        let actions = self.infer_per_row_body(obs, rows);
+        self.release_rows(obs, rows);
+        self.bump_batch();
+        actions
     }
 
     #[cfg(feature = "ripple")]
     fn infer_per_row_body(&self, obs: &[f32], rows: usize) -> Vec<usize> {
         let width = self.obs_width();
         let keys = self.row_keys(obs, rows);
-        let mut chosen = Vec::with_capacity(rows);
+        let mut policy = vec![0.0f32; rows * N_ACTIONS];
+        let mut base = vec![0.0f32; rows * N_ACTIONS];
+        let mut valid = vec![false; rows];
         for i in 0..rows {
             let row = &obs[i * width..(i + 1) * width];
             let (main, others, ball, acts, boosts) = split_obs_row(row);
-            let Ok((policy, base)) = self.run_models(1, main, others, ball, acts, boosts) else {
-                chosen.push(None);
-                continue;
-            };
-            let is_kickoff = row[29].abs() > 0.5;
-            chosen.push(Some(self.choose_action(is_kickoff, &policy, &base)));
+            if let Ok((p, b)) = self.run_models(1, main, others, ball, acts, boosts) {
+                policy[i * N_ACTIONS..(i + 1) * N_ACTIONS].copy_from_slice(&p);
+                base[i * N_ACTIONS..(i + 1) * N_ACTIONS].copy_from_slice(&b);
+                valid[i] = true;
+            }
         }
+        let chosen = self.select_actions(obs, rows, &policy, &base, &valid);
         self.commit_chosen(&keys, &chosen)
     }
 
@@ -1352,14 +1449,8 @@ impl RipplePolicy {
             )
             .into());
         }
-        let width = self.obs_width();
-        let mut chosen = Vec::with_capacity(rows);
-        for i in 0..rows {
-            let is_kickoff = obs[i * width + 29].abs() > 0.5;
-            let p = &policy[i * N_ACTIONS..(i + 1) * N_ACTIONS];
-            let b = &base[i * N_ACTIONS..(i + 1) * N_ACTIONS];
-            chosen.push(Some(self.choose_action(is_kickoff, p, b)));
-        }
+        let valid = vec![true; rows];
+        let chosen = self.select_actions(obs, rows, &policy, &base, &valid);
         Ok(self.commit_chosen(&keys, &chosen))
     }
 
@@ -1439,26 +1530,49 @@ impl RipplePolicy {
     }
 
     fn row_keys(&self, obs: &[f32], rows: usize) -> Vec<(usize, usize)> {
-        let width = self.obs_width();
-        let records = self.build_records.lock().unwrap();
-        (0..rows)
-            .map(|i| {
-                let ptr = obs[i * width..(i + 1) * width].as_ptr() as usize;
-                *records.get(&ptr).unwrap_or_else(|| {
-                    panic!(
-                        "infer() row {i} (ptr {ptr:x}) has no recorded key - build() must be called first"
-                    )
-                })
-            })
-            .collect()
+        self.build_records.keys_for(&obs_ptrs(obs, rows, self.obs_width()))
     }
 
-    fn choose_action(&self, is_kickoff: bool, policy_logits: &[f32], base_logits: &[f32]) -> usize {
-        let log_policy = log_softmax(policy_logits);
-        if is_kickoff {
-            inverse_cdf(&log_policy, self.draw_unit_interval())
+    /// Kickoff draws happen in row order, on this thread, before any parallel
+    /// work. Log-softmax, KL, and the kickoff CDF then run per row.
+    fn select_actions(
+        &self,
+        obs: &[f32],
+        rows: usize,
+        policy: &[f32],
+        base: &[f32],
+        valid: &[bool],
+    ) -> Vec<Option<usize>> {
+        let width = self.obs_width();
+        let mut kickoff = vec![false; rows];
+        let mut draws = 0usize;
+        for i in 0..rows {
+            kickoff[i] = valid[i] && obs[i * width + 29].abs() > 0.5;
+            if kickoff[i] {
+                draws += 1;
+            }
+        }
+        let units: Vec<f32> = (0..draws).map(|_| self.draw_unit_interval()).collect();
+        let mut unit_at = vec![0.0f32; rows];
+        let mut drawn = 0usize;
+        for i in 0..rows {
+            if kickoff[i] {
+                unit_at[i] = units[drawn];
+                drawn += 1;
+            }
+        }
+        let one = |i: usize| -> Option<usize> {
+            if !valid[i] {
+                return None;
+            }
+            let p = &policy[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+            let b = &base[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+            Some(row_action(kickoff[i], unit_at[i], p, b))
+        };
+        if rows >= PAR_ROWS {
+            (0..rows).into_par_iter().map(one).collect()
         } else {
-            kl_argmax(&log_policy, &log_softmax(base_logits))
+            (0..rows).map(one).collect()
         }
     }
 
@@ -1475,52 +1589,90 @@ impl RipplePolicy {
     }
 
     fn commit_chosen(&self, keys: &[(usize, usize)], chosen: &[Option<usize>]) -> Vec<usize> {
-        let mut actions = Vec::with_capacity(chosen.len());
-        let mut states = self.states.lock().unwrap();
-        for (key, choice) in keys.iter().zip(chosen) {
-            match *choice {
-                Some(action) => {
-                    if let Some(st) = states.get_mut(key) {
-                        actions.push(commit_queue(st, action));
-                    } else {
-                        actions.push(action);
-                    }
-                }
-                None => actions.push(0),
-            }
+        // Queue updates stay in row order under the map lock. The action-table
+        // search does not touch that state, so it runs per row afterwards.
+        let pending: Vec<Option<([f32; 8], usize)>> = {
+            let mut states = self.states.lock().unwrap();
+            keys.iter()
+                .zip(chosen)
+                .map(|(key, choice)| match *choice {
+                    Some(action) => Some(match states.get_mut(key) {
+                        Some(st) => (push_queue(st, action), action),
+                        None => ([f32::NAN; 8], action),
+                    }),
+                    None => None,
+                })
+                .collect()
+        };
+        let decode = |slot: &Option<([f32; 8], usize)>| match *slot {
+            Some((row, fallback)) if row[0].is_nan() => fallback,
+            Some((row, fallback)) => decode_action(row, fallback),
+            None => 0,
+        };
+        if pending.len() >= PAR_ROWS {
+            pending.par_iter().map(decode).collect()
+        } else {
+            pending.iter().map(decode).collect()
         }
-        actions
     }
 
     /// Mean milliseconds for one batched decision, and that time divided by `rows`.
     #[cfg(feature = "ripple")]
     pub fn bench_infer(&self, rows: usize, warmup: usize, repeats: usize) -> (f64, f64) {
+        let times = self.bench_profile(rows, warmup, repeats);
+        (times.total_ms_per_row * rows as f64, times.total_ms_per_row)
+    }
+
+    /// Forward (pack + device copy + both nets) and per-row post (log-softmax,
+    /// KL or kickoff CDF, queue commit), each in ms/row. `total` is a full `infer`.
+    #[cfg(feature = "ripple")]
+    pub fn bench_profile(&self, rows: usize, warmup: usize, repeats: usize) -> RippleBenchTimes {
         let width = self.obs_width();
         let obs = vec![0.0f32; rows * width];
         let mask = vec![true; rows * N_ACTIONS];
-        let once = || {
-            {
-                let mut records = self.build_records.lock().unwrap();
-                for i in 0..rows {
-                    let ptr = obs[i * width..(i + 1) * width].as_ptr() as usize;
-                    records.insert(ptr, (0xBEEF, i));
-                }
+        let valid = vec![true; rows];
+        self.plant_bench_rows(&obs, rows);
+        {
+            let mut states = self.states.lock().unwrap();
+            for i in 0..rows {
+                states.entry((0xBEEF, i)).or_insert_with(RippleState::new);
             }
-            let started = std::time::Instant::now();
-            let actions = self.infer(&obs, &mask, rows);
-            let elapsed = started.elapsed();
-            assert_eq!(actions.len(), rows);
-            elapsed
-        };
+        }
         for _ in 0..warmup {
-            once();
+            self.plant_bench_rows(&obs, rows);
+            assert_eq!(self.infer(&obs, &mask, rows).len(), rows);
         }
-        let mut total = std::time::Duration::ZERO;
-        for _ in 0..repeats {
-            total += once();
+        let (policy, base) = self.run_obs_batched(&obs, rows).expect("bench forward");
+        let forward_ms = time_repeats(repeats, || {
+            let (p, b) = self.run_obs_batched(&obs, rows).expect("bench forward");
+            assert_eq!(p.len(), rows * N_ACTIONS);
+            assert_eq!(b.len(), rows * N_ACTIONS);
+        });
+        self.plant_bench_rows(&obs, rows);
+        let post_ms = time_repeats(repeats, || {
+            let keys = self.row_keys(&obs, rows);
+            let chosen = self.select_actions(&obs, rows, &policy, &base, &valid);
+            assert_eq!(self.commit_chosen(&keys, &chosen).len(), rows);
+        });
+        let total_ms = time_repeats(repeats, || {
+            self.plant_bench_rows(&obs, rows);
+            assert_eq!(self.infer(&obs, &mask, rows).len(), rows);
+        });
+        let rows_f = rows as f64;
+        RippleBenchTimes {
+            total_ms_per_row: total_ms / rows_f,
+            forward_ms_per_row: forward_ms / rows_f,
+            post_ms_per_row: post_ms / rows_f,
         }
-        let ms = total.as_secs_f64() * 1e3 / repeats as f64;
-        (ms, ms / rows as f64)
+    }
+
+    #[cfg(feature = "ripple")]
+    fn plant_bench_rows(&self, obs: &[f32], rows: usize) {
+        let width = self.obs_width();
+        for i in 0..rows {
+            let ptr = obs[i * width..(i + 1) * width].as_ptr() as usize;
+            self.build_records.note(ptr, (0xBEEF, i));
+        }
     }
 
     /// Get raw logits from both models given the 5 separate tensors (for Python tensor comparison)
@@ -1565,6 +1717,84 @@ impl RipplePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_two_pools_do_not_drop_each_others_build_records() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        let records = Arc::new(BuildRecords::new());
+        let barrier = Arc::new(Barrier::new(2));
+        thread::scope(|scope| {
+            for id in 0..2 {
+                let records = Arc::clone(&records);
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    let base = id * 100;
+                    records.note(base + 1, (id, 0));
+                    records.note(base + 2, (id, 1));
+                    barrier.wait();
+                    if id == 0 {
+                        assert_eq!(records.keys_for(&[base + 1, base + 2]), vec![(0, 0), (0, 1)]);
+                        records.release(&[base + 1, base + 2]);
+                    }
+                    barrier.wait();
+                    if id == 1 {
+                        assert_eq!(records.keys_for(&[base + 1, base + 2]), vec![(1, 0), (1, 1)]);
+                        records.release(&[base + 1, base + 2]);
+                    }
+                });
+            }
+        });
+        // A rebuilt car drops the obs pointer left from the previous build.
+        records.note(7, (4, 0));
+        records.note(8, (4, 0));
+        assert!(!records.contains(7));
+        assert_eq!(records.keys_for(&[8]), vec![(4, 0)]);
+        // Concurrent infer of two pools, after both have built.
+        records.note(11, (2, 0));
+        records.note(22, (3, 0));
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                assert_eq!(records.keys_for(&[11]), vec![(2, 0)]);
+                records.release(&[11]);
+            });
+            assert_eq!(records.keys_for(&[22]), vec![(3, 0)]);
+            records.release(&[22]);
+        });
+        assert!(!records.contains(11));
+        assert!(!records.contains(22));
+    }
+
+    #[test]
+    fn test_row_action_parallel_matches_sequential() {
+        use rayon::prelude::*;
+        let n = 128;
+        let mut policy = vec![0.0f32; n * N_ACTIONS];
+        let mut base = vec![0.0f32; n * N_ACTIONS];
+        let mut state = 0x1234_5678u32;
+        for value in policy.iter_mut().chain(base.iter_mut()) {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            *value = (state >> 8) as f32 / 16_777_216.0 - 0.5;
+        }
+        let kickoff: Vec<bool> = (0..n).map(|i| i % 5 == 0).collect();
+        let units: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+        let seq: Vec<usize> = (0..n)
+            .map(|i| {
+                let p = &policy[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+                let b = &base[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+                row_action(kickoff[i], units[i], p, b)
+            })
+            .collect();
+        let par: Vec<usize> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let p = &policy[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+                let b = &base[i * N_ACTIONS..(i + 1) * N_ACTIONS];
+                row_action(kickoff[i], units[i], p, b)
+            })
+            .collect();
+        assert_eq!(seq, par);
+    }
 
     #[test]
     fn test_action_table_size() {
@@ -2743,6 +2973,79 @@ mod tests {
         if std::env::var("RIPPLE_ORT_THREADS").is_err() {
             assert_eq!(ripple_ort_threads(), 4);
         }
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_two_pools_interleaved_build_infer() {
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        let path = Path::new(env!("HOME")).join("eval_bots/ripple/bots/v1.1");
+        if !path.join("ripple-v1.1.onnx").exists() {
+            eprintln!("Skipping test: Ripple models not found");
+            return;
+        }
+        init_from_default(true).expect("load collision meshes");
+        let policy = Arc::new(RipplePolicy::load_cpu(&path).expect("load"));
+        let barrier = Arc::new(Barrier::new(2));
+        let width = policy.obs_width();
+        thread::scope(|scope| {
+            for pool in 0..2 {
+                let policy = Arc::clone(&policy);
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    let mut envs: Vec<_> = (0..2)
+                        .map(|_| {
+                            crate::env::create_env(
+                                &crate::rewards::RewardConfig::default(),
+                                &crate::setters::default_mix(),
+                            )
+                        })
+                        .collect();
+                    let mut states: Vec<GameState> = envs.iter_mut().map(|env| env.reset().0).collect();
+                    let n_cars = states[0].cars.len();
+                    assert!(states.iter().all(|s| s.cars.len() == n_cars));
+                    let rows = states.len() * n_cars;
+                    let mut obs = vec![0.0f32; rows * width];
+                    let mut mask = vec![true; rows * N_ACTIONS];
+                    for step in 0..3 {
+                        for g in 0..states.len() {
+                            for c in 0..n_cars {
+                                let i = g * n_cars + c;
+                                policy.build(
+                                    &states[g],
+                                    c,
+                                    &mut obs[i * width..(i + 1) * width],
+                                    &mut mask[i * N_ACTIONS..(i + 1) * N_ACTIONS],
+                                );
+                            }
+                        }
+                        barrier.wait();
+                        if step == 0 && pool == 1 {
+                            barrier.wait();
+                            let actions = policy.infer(&obs, &mask, rows);
+                            assert_eq!(actions.len(), rows);
+                        } else if step == 0 {
+                            let actions = policy.infer(&obs, &mask, rows);
+                            assert_eq!(actions.len(), rows);
+                            barrier.wait();
+                        } else {
+                            let actions = policy.infer(&obs, &mask, rows);
+                            assert_eq!(actions.len(), rows);
+                            barrier.wait();
+                        }
+                        for g in 0..states.len() {
+                            for c in 0..n_cars {
+                                envs[g].arena.set_car_controls(c, controls_of(0));
+                            }
+                            envs[g].step_physics(4);
+                            states[g] = envs[g].current_state();
+                        }
+                    }
+                });
+            }
+        });
     }
 
     #[test]

@@ -6,6 +6,7 @@
 // two collector pools can launch at once without sharing the default stream.
 
 #include <ATen/Context.h>
+#include <ATen/Tensor.h>
 
 #if defined(RIPPLE_LIBTORCH_CUDA)
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -57,28 +58,49 @@ void ripple_stream_set(void* stream) {
 #endif
 }
 
-size_t ripple_cuda_allocated(int device) {
+void ripple_stream_synchronize(void* stream) {
+#if defined(RIPPLE_LIBTORCH_CUDA)
+    if (stream != nullptr) {
+        static_cast<c10::cuda::CUDAStream*>(stream)->synchronize();
+    }
+#else
+    (void)stream;
+#endif
+}
+
+// `dst` and `src` are tch `torch::Tensor*` values. The destination is pinned
+// host memory. non_blocking queues the DMA on the caller's current stream.
+void ripple_copy_nonblocking(void* dst, void* src) {
+    auto* destination = static_cast<at::Tensor*>(dst);
+    auto* source = static_cast<at::Tensor*>(src);
+    destination->copy_(*source, /*non_blocking=*/true);
+}
+
+size_t ripple_cuda_stat(int device, bool reserved) {
 #if defined(RIPPLE_LIBTORCH_CUDA)
     if (!at::globalContext().hasCUDA()) {
         return 0;
     }
-    return c10::cuda::CUDACachingAllocator::currentMemoryAllocated(device);
+    auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(
+        static_cast<c10::DeviceIndex>(device));
+    auto kind = static_cast<size_t>(c10::CachingAllocator::StatType::AGGREGATE);
+    if (reserved) {
+        return stats.reserved_bytes[kind].current;
+    }
+    return stats.allocated_bytes[kind].current;
 #else
     (void)device;
+    (void)reserved;
     return 0;
 #endif
 }
 
+size_t ripple_cuda_allocated(int device) {
+    return ripple_cuda_stat(device, false);
+}
+
 size_t ripple_cuda_reserved(int device) {
-#if defined(RIPPLE_LIBTORCH_CUDA)
-    if (!at::globalContext().hasCUDA()) {
-        return 0;
-    }
-    return c10::cuda::CUDACachingAllocator::currentMemoryReserved(device);
-#else
-    (void)device;
-    return 0;
-#endif
+    return ripple_cuda_stat(device, true);
 }
 
 }

@@ -46,13 +46,15 @@ const GPU_CHUNK: usize = 16384;
 /// `sqrt(32)` as f32 (bits `0x40b504f3`). The ONNX graph divides by this value.
 const ATTN_SCALE: f64 = f32::from_bits(0x40b5_04f3) as f64;
 
-extern "C" {
+unsafe extern "C" {
     fn ripple_allow_tf32_cublas() -> i32;
     fn ripple_set_allow_tf32_cublas(enabled: i32);
     fn ripple_allow_tf32_cudnn() -> i32;
     fn ripple_set_allow_tf32_cudnn(enabled: i32);
     fn ripple_stream_create(device: i32) -> *mut c_void;
     fn ripple_stream_set(stream: *mut c_void);
+    fn ripple_stream_synchronize(stream: *mut c_void);
+    fn ripple_copy_nonblocking(dst: *mut c_void, src: *mut c_void);
     fn ripple_cuda_allocated(device: i32) -> usize;
     fn ripple_cuda_reserved(device: i32) -> usize;
 }
@@ -102,9 +104,9 @@ impl Drop for Tf32Guard {
     }
 }
 
-fn with_stream<R>(device: Device, f: impl FnOnce() -> R) -> R {
+fn with_stream<R>(device: Device, f: impl FnOnce(*mut c_void) -> R) -> R {
     let Device::Cuda(index) = device else {
-        return f();
+        return f(std::ptr::null_mut());
     };
     std::thread_local! {
         static STREAM: std::cell::RefCell<Option<(usize, *mut c_void)>> = const { std::cell::RefCell::new(None) };
@@ -121,8 +123,70 @@ fn with_stream<R>(device: Device, f: impl FnOnce() -> R) -> R {
         if !ptr.is_null() {
             unsafe { ripple_stream_set(ptr) };
         }
-        f()
+        f(ptr)
     })
+}
+
+/// Pinned host tensors reused by this thread. Two pools do not share them.
+struct HostStage {
+    cap: i64,
+    device: Device,
+    main: Tensor,
+    others: Tensor,
+    ball: Tensor,
+    actions: Tensor,
+    boosts: Tensor,
+    policy: Tensor,
+    base: Tensor,
+}
+
+impl HostStage {
+    fn alloc(rows: i64, device: Device) -> Self {
+        let pin = |shape: &[i64]| Tensor::empty(shape, (Kind::Float, Device::Cpu)).pin_memory(device);
+        Self {
+            cap: rows,
+            device,
+            main: pin(&[rows, 32]),
+            others: pin(&[rows, 5, 21]),
+            ball: pin(&[rows, 6, 9]),
+            actions: pin(&[rows, 6, 8]),
+            boosts: pin(&[rows, 34, 5]),
+            policy: pin(&[rows, N_ACTIONS]),
+            base: pin(&[rows, N_ACTIONS]),
+        }
+    }
+}
+
+fn with_stage<R>(rows: usize, device: Device, f: impl FnOnce(&mut HostStage) -> R) -> R {
+    std::thread_local! {
+        static STAGE: std::cell::RefCell<Option<HostStage>> = const { std::cell::RefCell::new(None) };
+    }
+    STAGE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let rows = rows as i64;
+        let stale = slot
+            .as_ref()
+            .map(|s| s.cap < rows || s.device != device)
+            .unwrap_or(true);
+        if stale {
+            *slot = Some(HostStage::alloc(rows, device));
+        }
+        f(slot.as_mut().unwrap())
+    })
+}
+
+fn upload(pinned: &Tensor, data: &[f32], shape: &[i64], device: Device) -> Tensor {
+    let mut view = pinned.narrow(0, 0, shape[0]);
+    view.copy_(&Tensor::from_slice(data).reshape(shape));
+    view.to_device_(device, Kind::Float, true, true)
+}
+
+fn queue_download(pinned: &Tensor, gpu: &Tensor, rows: i64) -> Tensor {
+    let view = pinned.narrow(0, 0, rows);
+    unsafe {
+        ripple_copy_nonblocking(view.as_ptr() as *mut c_void, gpu.as_ptr() as *mut c_void);
+    }
+    view
 }
 
 struct Linear {
@@ -405,28 +469,35 @@ impl RippleGpu {
     fn forward_chunk(&self, obs: &[f32], rows: usize) -> Result<(Vec<f32>, Vec<f32>), String> {
         let width = obs.len() / rows;
         let packed = super::pack_obs(obs, rows, width);
+        let device = self.device;
         let _tf32 = Tf32Guard::enter();
-        with_stream(self.device, || {
-            tch::no_grad(|| {
-                let to = |data: &[f32], shape: &[i64]| {
-                    Tensor::from_slice(data).reshape(shape).to(self.device)
-                };
-                let main = to(&packed[0], &[rows as i64, 32]);
-                let others = to(&packed[1], &[rows as i64, 5, 21]);
-                let ball = to(&packed[2], &[rows as i64, 6, 9]);
-                let actions = to(&packed[3], &[rows as i64, 6, 8]);
-                let boosts = to(&packed[4], &[rows as i64, 34, 5]);
-                let policy = copy_logits(
-                    &self
-                        .policy
-                        .forward(&main, &others, &ball, &actions, &boosts),
-                    rows,
-                )?;
-                let base = copy_logits(
-                    &self.base.forward(&main, &others, &ball, &actions, &boosts),
-                    rows,
-                )?;
-                Ok((policy, base))
+        with_stage(rows, device, |stage| {
+            with_stream(device, |stream| {
+                tch::no_grad(|| {
+                    let rows_i = rows as i64;
+                    let main = upload(&stage.main, &packed[0], &[rows_i, 32], device);
+                    let others = upload(&stage.others, &packed[1], &[rows_i, 5, 21], device);
+                    let ball = upload(&stage.ball, &packed[2], &[rows_i, 6, 9], device);
+                    let actions = upload(&stage.actions, &packed[3], &[rows_i, 6, 8], device);
+                    let boosts = upload(&stage.boosts, &packed[4], &[rows_i, 34, 5], device);
+                    let policy_gpu = self.policy.forward(&main, &others, &ball, &actions, &boosts);
+                    // Policy D2H overlaps the base forward. Both stay queued on this stream.
+                    let policy_host = queue_download(&stage.policy, &policy_gpu, rows_i);
+                    let base_gpu = self.base.forward(&main, &others, &ball, &actions, &boosts);
+                    let base_host = queue_download(&stage.base, &base_gpu, rows_i);
+                    if stream.is_null() {
+                        if let Device::Cuda(index) = device {
+                            tch::Cuda::synchronize(index as i64);
+                        }
+                    } else {
+                        unsafe { ripple_stream_synchronize(stream) };
+                    }
+                    drop(policy_gpu);
+                    drop(base_gpu);
+                    let policy = copy_logits(&policy_host, rows)?;
+                    let base = copy_logits(&base_host, rows)?;
+                    Ok((policy, base))
+                })
             })
         })
     }
@@ -442,7 +513,13 @@ impl RippleGpu {
 }
 
 fn copy_logits(logits: &Tensor, rows: usize) -> Result<Vec<f32>, String> {
-    let cpu = logits.to(Device::Cpu).contiguous();
+    let owned;
+    let cpu = if logits.device() == Device::Cpu {
+        logits
+    } else {
+        owned = logits.to(Device::Cpu).contiguous();
+        &owned
+    };
     if cpu.size() != [rows as i64, N_ACTIONS] {
         return Err(format!(
             "logits shape {:?}, expected [{rows}, {N_ACTIONS}]",

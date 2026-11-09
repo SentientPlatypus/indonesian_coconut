@@ -3807,6 +3807,7 @@ dependencies = [
  "ndarray 0.16.1",
  "ort",
  "rand 0.10.3",
+ "rayon",
  "rlbot-rocketsim",
  "rlgymppo",
  "rlgymppo-model",

@@ -78,6 +78,12 @@ the parity fixtures and the tests all run the same code.
 On the training box, `/opt/dlami/nvme/ic_env.sh` sets `LIBTORCH`
 (torch 2.9 site-packages), `LD_LIBRARY_PATH` and `CARGO_TARGET_DIR`.
 
+Ripple's CUDA helper (`src/ripple_tf32.cpp`) includes the CUDA runtime
+headers. `build.rs` looks for them in `RIPPLE_CUDA_INCLUDE`, then
+`$CUDA_HOME/include`, then `$CUDA_PATH/include`, and finally
+`/usr/local/cuda/include` when that directory exists. torch-sys links as
+`tch`, so the LibTorch library directory is `DEP_TCH_LIBTORCH_LIB`.
+
 ```sh
 cargo build --release --features torch,cuda --bin indococo-train   # trainer
 cargo build --profile dist --features rlbot --bin indococo-rlbot   # deploy binary
