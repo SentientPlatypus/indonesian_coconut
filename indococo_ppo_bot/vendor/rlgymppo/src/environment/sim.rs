@@ -1,0 +1,447 @@
+use rlgym::rocketsim::{BallState, CarControls, GameMode};
+use rlgym::{
+    Action, Env, FullObs, GameState, Obs, Reward, SharedInfoProvider, StateSetter, Terminal,
+    Truncate,
+};
+use rlgymppo_utils::shared_info::SharedInfoReport;
+use rlgymppo_utils::{AvgTracker, Report};
+
+#[derive(Clone)]
+pub struct StepResult {
+    pub obs: FullObs,
+    /// Per-player observations from the old (teacher) obs builder for the same
+    /// states as `obs`. Empty when no old obs builder is configured.
+    pub old_obs: FullObs,
+    pub action_masks: Vec<Vec<bool>>,
+    pub rewards: Vec<f32>,
+    pub is_terminal: bool,
+    pub truncated: bool,
+}
+
+/// Reward metrics sampling configuration.
+#[derive(Clone, Debug)]
+pub struct RewardSamplingConfig {
+    /// Whether to include per-component reward metrics in the report.
+    /// Reward components whose name starts with `"Reward/"` are tracked.
+    pub add_rewards_to_metrics: bool,
+    /// Sample reward metrics once every N steps (1 = every step).
+    /// 0 means always sample (every step).
+    pub reward_sample_interval: usize,
+}
+
+impl Default for RewardSamplingConfig {
+    fn default() -> Self {
+        Self {
+            add_rewards_to_metrics: true,
+            reward_sample_interval: 8,
+        }
+    }
+}
+
+impl RewardSamplingConfig {
+    /// Returns `true` when reward metrics should be recorded for this step.
+    pub fn should_sample(&self, step_counter: usize) -> bool {
+        if !self.add_rewards_to_metrics {
+            return false;
+        }
+        self.reward_sample_interval == 0 || step_counter.is_multiple_of(self.reward_sample_interval)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum VisActionResult {
+    Reset,
+    StateChanged,
+    Unchanged,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VisActionRequests {
+    reset: bool,
+    dribble: bool,
+    launch: bool,
+}
+
+impl VisActionRequests {
+    fn from_bits(bits: u8) -> Self {
+        Self {
+            reset: bits & 1 != 0,
+            dribble: bits & 2 != 0,
+            launch: bits & 4 != 0,
+        }
+    }
+}
+
+fn apply_vis_controls(
+    arena: &mut rlgym::rocketsim::Arena,
+    controls: Option<(usize, CarControls)>,
+) -> bool {
+    let Some((car_index, controls)) = controls.filter(|(index, _)| *index < arena.num_cars())
+    else {
+        return false;
+    };
+    arena.set_car_controls(car_index, controls);
+    true
+}
+
+fn apply_vis_requests(
+    arena: &mut rlgym::rocketsim::Arena,
+    action_bits: u8,
+    selected_car: Option<(usize, CarControls)>,
+) -> VisActionResult {
+    let requests = VisActionRequests::from_bits(action_bits);
+    if requests.reset {
+        return VisActionResult::Reset;
+    }
+
+    let mut changed = false;
+    if requests.dribble
+        && let Some((car_idx, _)) = selected_car.filter(|(index, _)| *index < arena.num_cars())
+    {
+        let car = arena.get_car_state(car_idx);
+        let pos = car.phys.pos + rlgym::rocketsim::Vec3A::Z * 150.0;
+        let vel = car.phys.vel;
+        arena.edit_ball_state(|ball| {
+            ball.phys.pos = pos;
+            ball.phys.vel = vel;
+        });
+        changed = true;
+    }
+    if requests.launch {
+        arena.edit_ball_state(|ball| {
+            ball.phys.vel += rlgym::rocketsim::Vec3A::Z * 1000.0;
+        });
+        changed = true;
+    }
+
+    if changed {
+        VisActionResult::StateChanged
+    } else {
+        VisActionResult::Unchanged
+    }
+}
+
+pub struct GameInstance<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+where
+    SS: StateSetter<SI>,
+    SI: SharedInfoProvider,
+    OBS: Obs<SI>,
+    ACT: Action<SI>,
+    REW: Reward<SI>,
+    TERM: Terminal<SI>,
+    TRUNC: Truncate<SI>,
+{
+    env: Env<SS, OBS, ACT, REW, TERM, TRUNC, SI>,
+    /// Optional old (teacher) obs builder, run in lockstep with the env's own
+    /// builder so transfer learning can score the same states with a
+    /// different observation space.
+    old_obs: Option<Box<dyn Obs<SI> + Send>>,
+    last_state: GameState,
+    metrics: Report,
+    step_counter: usize,
+    reward_sampling: RewardSamplingConfig,
+}
+
+impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> GameInstance<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+where
+    SS: StateSetter<SI>,
+    SI: SharedInfoProvider + SharedInfoReport,
+    OBS: Obs<SI>,
+    ACT: Action<SI>,
+    REW: Reward<SI>,
+    TERM: Terminal<SI>,
+    TRUNC: Truncate<SI>,
+{
+    pub fn new(
+        env: Env<SS, OBS, ACT, REW, TERM, TRUNC, SI>,
+        old_obs: Option<Box<dyn Obs<SI> + Send>>,
+        reward_sampling: RewardSamplingConfig,
+    ) -> Self {
+        Self {
+            env,
+            old_obs,
+            last_state: GameState {
+                tick_count: 0,
+                game_mode: GameMode::Soccar,
+                ball: BallState::default(),
+                cars: Vec::new(),
+                boost_pads: Vec::new(),
+                events: Vec::new(),
+            },
+            metrics: Report::default(),
+            step_counter: 0,
+            reward_sampling,
+        }
+    }
+
+    pub fn set_vis_enabled(&mut self, enabled: bool) -> std::io::Result<()> {
+        self.env.set_vis_enabled(enabled)
+    }
+
+    pub fn set_net_vis(&mut self, addr: Option<&str>) -> std::io::Result<()> {
+        self.env.set_net_vis(addr)
+    }
+
+    /// Apply viewer requests and report the required renderer update.
+    pub(super) fn apply_vis_actions(&mut self) -> VisActionResult {
+        let controls = self
+            .env
+            .latest_vis_controls()
+            .map(|message| (message.car_index as usize, message.controls));
+        let action_bits = self.env.take_vis_actions();
+        apply_vis_requests(&mut self.env.arena, action_bits, controls)
+    }
+
+    pub fn num_players(&self) -> usize {
+        self.last_state.cars.len()
+    }
+
+    /// Return the team index (0 = Blue, 1 = Orange) for each player
+    /// in observation order (matches `cars` ordering).
+    pub fn player_teams(&self) -> Vec<usize> {
+        self.last_state
+            .cars
+            .iter()
+            .map(|(info, _)| info.team as usize)
+            .collect()
+    }
+
+    pub fn reset(&mut self) -> (FullObs, FullObs, Vec<Vec<bool>>) {
+        let (state, obs, masks) = self.env.reset();
+        self.last_state = state.clone();
+
+        // Run the old obs builder in lockstep: reset it with the same initial
+        // state, then build the initial observations.
+        let old_obs = if let Some(builder) = &mut self.old_obs {
+            let shared_info = self.env.get_mut_shared_info();
+            builder.reset(&state, shared_info);
+            builder.build_obs(&state, shared_info)
+        } else {
+            Vec::new()
+        };
+
+        (obs, old_obs, masks)
+    }
+
+    pub fn step(&mut self, actions: &[ACT::Input]) -> StepResult {
+        self.env.pre_step(&self.last_state, actions);
+        self.env.step_physics(ACT::get_tick_skip());
+        self.finish_step()
+    }
+
+    /// Apply policy controls before the renderer advances a policy interval.
+    pub fn begin_vis_step(&mut self, actions: &[ACT::Input]) {
+        self.env.pre_step(&self.last_state, actions);
+    }
+
+    /// Advance one physics tick and apply fresh viewer controls.
+    pub fn step_vis_tick(&mut self) {
+        let controls = self
+            .env
+            .latest_vis_controls()
+            .map(|message| (message.car_index as usize, message.controls));
+        apply_vis_controls(&mut self.env.arena, controls);
+        self.env.step_physics(1);
+    }
+
+    /// Finish the policy interval after its physics ticks.
+    pub fn finish_vis_step(&mut self) -> StepResult {
+        self.finish_step()
+    }
+
+    /// Apply generic `ACT` actions to every car, then overwrite the selected
+    /// cars with raw RocketSim controls (e.g. a fixed opponent policy)
+    /// before simulating the step.
+    pub fn step_mixed(
+        &mut self,
+        actions: &[ACT::Input],
+        nexto_controls: &[(usize, CarControls)],
+    ) -> StepResult {
+        self.env.pre_step(&self.last_state, actions);
+        for (car_idx, controls) in nexto_controls {
+            self.env.arena.set_car_controls(*car_idx, *controls);
+        }
+        self.env.step_physics(ACT::get_tick_skip());
+        self.finish_step()
+    }
+
+    /// [`Self::step`] where some cars are driven by an external policy:
+    /// each `(car, held, new)` keeps `held` for `delay` ticks, then `new`
+    /// for the rest of the interval.
+    ///
+    /// Delay 0 with `tick_skip >= 2` does not use this. The collector calls
+    /// [`Self::begin_external_half`] and [`Self::finish_external_half`] so
+    /// the opponent can decide again on the midpoint state.
+    pub fn step_external(
+        &mut self,
+        actions: &[ACT::Input],
+        overrides: &[(usize, CarControls, CarControls)],
+        delay: u8,
+    ) -> StepResult {
+        let tick_skip = ACT::get_tick_skip();
+        let delay = delay.min(tick_skip);
+        self.env.pre_step(&self.last_state, actions);
+        for &(car, held, _) in overrides {
+            self.env.arena.set_car_controls(car, held);
+        }
+        if delay > 0 {
+            self.env.step_physics(delay);
+        }
+        for &(car, _, new) in overrides {
+            self.env.arena.set_car_controls(car, new);
+        }
+        self.env.step_physics(tick_skip - delay);
+        self.finish_step()
+    }
+
+    /// First half of a delay-0 external interval.
+    ///
+    /// Applies the learner's actions, overwrites the external cars with the
+    /// decision just made, steps `tick_skip / 2`, then writes the arena back
+    /// into `last_state`. The field assignment keeps the `GameState` address
+    /// stable, so an opponent keyed on that pointer keeps its queue.
+    /// Rewards and the learner observation are not built here.
+    pub(crate) fn begin_external_half(
+        &mut self,
+        actions: &[ACT::Input],
+        first: &[(usize, CarControls)],
+    ) {
+        let half = ACT::get_tick_skip() / 2;
+        self.env.pre_step(&self.last_state, actions);
+        for &(car, controls) in first {
+            self.env.arena.set_car_controls(car, controls);
+        }
+        self.env.step_physics(half);
+        self.last_state = self.env.current_state();
+    }
+
+    /// Second half of a delay-0 external interval.
+    ///
+    /// The learner's controls from [`Self::begin_external_half`] stay applied.
+    /// `second` replaces only the external cars, then the remaining ticks run
+    /// and [`Self::finish_step`] scores the learner once.
+    pub(crate) fn finish_external_half(
+        &mut self,
+        second: &[(usize, CarControls)],
+    ) -> StepResult {
+        let tick_skip = ACT::get_tick_skip();
+        let half = tick_skip / 2;
+        for &(car, controls) in second {
+            self.env.arena.set_car_controls(car, controls);
+        }
+        self.env.step_physics(tick_skip - half);
+        self.finish_step()
+    }
+
+    /// Advance the delayed portion of a policy decision interval using the
+    /// previously selected action. Call [`Self::finish_delayed_step`] with the
+    /// new action to complete the interval.
+    pub fn begin_delayed_step(&mut self, previous_actions: &[ACT::Input]) {
+        let delay = ACT::get_action_delay();
+        let tick_skip = ACT::get_tick_skip();
+        assert!(
+            delay < tick_skip,
+            "action_delay ({delay}) must be less than tick_skip ({tick_skip})"
+        );
+
+        self.env.pre_step(&self.last_state, previous_actions);
+        self.env.step_physics(delay);
+    }
+
+    /// Advance the delayed portion of a policy decision interval with neutral
+    /// controls. This is used before the first action after a reset is available.
+    pub fn begin_neutral_delayed_step(&mut self) {
+        let delay = ACT::get_action_delay();
+        let tick_skip = ACT::get_tick_skip();
+        assert!(
+            delay < tick_skip,
+            "action_delay ({delay}) must be less than tick_skip ({tick_skip})"
+        );
+
+        self.env.pre_step_neutral(&self.last_state);
+        self.env.step_physics(delay);
+    }
+
+    /// Apply the newly selected action, simulate the remainder of a delayed
+    /// decision interval, and evaluate the resulting environment step.
+    pub fn finish_delayed_step(&mut self, actions: &[ACT::Input]) -> StepResult {
+        let delayed_state = self.env.current_state();
+        self.env.apply_actions(&delayed_state, actions);
+        self.env
+            .step_physics(ACT::get_tick_skip() - ACT::get_action_delay());
+        self.finish_step()
+    }
+
+    fn finish_step(&mut self) -> StepResult {
+        let result = self.env.post_step();
+        self.last_state = result.state.clone();
+
+        // Build the old (teacher) observations for the same states the env's
+        // obs builder just scored. The old builder consumes shared info after
+        // the rewards/terminals have run, matching GigaLearn's ordering.
+        let old_obs = if let Some(builder) = &mut self.old_obs {
+            let shared_info = self.env.get_mut_shared_info();
+            builder.build_obs(&result.state, shared_info)
+        } else {
+            Vec::new()
+        };
+
+        let shared_info = self.env.get_mut_shared_info();
+        let report = shared_info.report();
+
+        // Sample reward metrics: only merge reward entries on sampled steps.
+        if self.reward_sampling.should_sample(self.step_counter) {
+            self.metrics += &*report;
+        } else {
+            // Non-reward entries (e.g. player stats from SharedInfo) always flow
+            // through, but "Reward/"-prefixed entries are dropped on non-sampled steps.
+            report.remove_keys_with_prefix("Reward/");
+            self.metrics += &*report;
+        }
+        report.clear();
+
+        self.step_counter += 1;
+
+        let num_players = result.rewards.len();
+        let total_rew = result.rewards.iter().sum::<f32>() as f64;
+
+        self.metrics["Collect/avg step reward"] += AvgTracker::new(total_rew, num_players as u64);
+
+        StepResult {
+            obs: result.obs,
+            old_obs,
+            action_masks: result.action_masks,
+            rewards: result.rewards,
+            is_terminal: result.is_terminal,
+            truncated: result.truncated,
+        }
+    }
+
+    /// Access the game state after the most recent `reset` or `step` call.
+    pub fn last_game_state(&self) -> &GameState {
+        &self.last_state
+    }
+
+    /// Refresh cached state and observations after a viewer-only physics edit.
+    pub fn refresh_after_vis_action(&mut self) -> (FullObs, Vec<Vec<bool>>) {
+        self.last_state = self.env.current_state();
+        self.env.shared_info.update(&self.last_state);
+        let obs = self
+            .env
+            .observations
+            .build_obs(&self.last_state, &mut self.env.shared_info);
+        let masks = self
+            .env
+            .action
+            .get_action_masks(&self.last_state, &mut self.env.shared_info);
+        (obs, masks)
+    }
+
+    pub fn get_metrics(&self) -> &Report {
+        &self.metrics
+    }
+
+    pub fn clear_metrics(&mut self) {
+        self.metrics.clear();
+    }
+}

@@ -6051,7 +6051,6 @@ dependencies = [
 [[package]]
 name = "rlgymppo"
 version = "0.1.0"
-source = "git+https://github.com/SentientPlatypus/indococo-ppo?rev=22c3575aac18517089044a68a0fb8787c49b57b6#22c3575aac18517089044a68a0fb8787c49b57b6"
 dependencies = [
  "arrayvec",
  "burn",
@@ -6146,8 +6145,6 @@ dependencies = [
 [[package]]
 name = "rocketsim"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c5f96f6c340fe9ea0571ca7e5d0b608c2defa2486f40d61e17c1864b181e14e"
 dependencies = [
  "arrayvec",
  "byteorder",

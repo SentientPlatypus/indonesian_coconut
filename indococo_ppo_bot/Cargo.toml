@@ -71,6 +71,15 @@ ripple = ["train", "dep:ort", "dep:ndarray"]
 ripple-replay = []  # Enables RNG override for deterministic replay (not for training)
 rlbot = ["dep:burn-store", "dep:rlgymppo-model", "dep:rlgymppo-rlbot", "dep:rlbot-rocketsim", "dep:rustc-hash", "dep:burn", "burn/flex"]
 
+[patch.crates-io]
+# Same 0.3.3 sources. quantize_physics defaults on, so training arenas keep
+# the registry tick. Ripple's forecast arena is the one that turns it off.
+rocketsim = { path = "vendor/rocketsim" }
+
+[patch."https://github.com/SentientPlatypus/indococo-ppo"]
+# 22c3575 plus a halfway rebuild for external policies whose action_delay is 0.
+rlgymppo = { path = "vendor/rlgymppo" }
+
 [profile.release]
 debug = 1
 

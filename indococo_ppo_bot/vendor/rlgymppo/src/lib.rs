@@ -1,0 +1,1821 @@
+#![allow(clippy::type_complexity)]
+mod agent;
+mod base;
+mod environment;
+
+pub mod utils;
+
+use std::collections::{HashMap, VecDeque};
+use std::fs::OpenOptions;
+use std::io::{BufWriter, Write};
+#[cfg(not(feature = "tui"))]
+use std::io::{Read, stdin};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use agent::Ppo;
+pub use agent::config::{
+    AdaptiveClipConfig, DecayShape, GaeEstimator, LrSchedule, PercentileAdvConfig,
+    PpoLearnerConfig, RegenConfig,
+};
+pub use agent::external::{ExternalOpponent, ExternalPolicy, Opponent, OpponentRef};
+pub use agent::model::{Actic, Net, linear_weight_param_ids};
+use agent::self_play::VersionManager;
+pub use agent::self_play::{FixedOpponent, OpponentPick, SelfPlayConfig};
+pub use agent::skill_tracker::SkillTrackerConfig;
+use agent::skill_tracker::{AsyncSkillTracker, SkillTrackerUpdate, report_skill_ratings};
+pub use agent::transfer_learn::{TeacherConfig, TransferLearnConfig};
+use base::{Memory, TerminalState};
+pub use burn;
+use burn::module::{Module, Quantizer};
+use burn::nn::modules::norm::NormalizationConfig;
+use burn::nn::{LayerNormConfig, RmsNormConfig};
+use burn::optim::{AdamConfig, AdamWConfig, ModuleOptimizer};
+use burn::tensor::Device;
+use environment::render::{Renderer, RendererControls};
+use environment::sim::RewardSamplingConfig;
+use environment::thread_sim::ThreadSim;
+use parking_lot::{Condvar, Mutex};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng, rng};
+pub use rlgym::{self, rocketsim};
+use rlgym::{Action, Env, Obs, Reward, SharedInfoProvider, StateSetter, Terminal, Truncate};
+pub use rlgymppo_model::{ComputePrecision, TrainPrecision};
+use rlgymppo_model::{
+    NormSelection as TeacherNormSelection, Policy as TeacherPolicy, PolicyConfig,
+};
+use rlgymppo_utils::Report;
+use rlgymppo_utils::shared_info::{SharedInfoReport, SharedInfoRng};
+pub use rlgymppo_utils::{any_terminal, combined_rewards, weighted_state};
+use utils::running_stat::Stats;
+use utils::serde::{
+    load_latest_model, resolve_model_folder, save_checkpoint as save_checkpoint_files,
+};
+
+#[derive(Clone, Copy)]
+enum HumanInput {
+    Save,
+    Quit,
+    RenderToggled,
+    DeterministicToggled,
+}
+
+struct PendingMetricReport {
+    waiting_for_skill_eval: Option<u64>,
+    #[cfg(feature = "tui")]
+    fresh_rating: bool,
+    report: Report,
+}
+
+enum MetricEvent {
+    Report(PendingMetricReport),
+    Shutdown,
+}
+
+#[cfg(feature = "tui")]
+type TuiNotifier = rlgymppo_tui::TuiNotifier;
+
+#[cfg(feature = "tui")]
+type TuiScrollCommand = rlgymppo_tui::ScrollCommand;
+
+#[cfg(not(feature = "tui"))]
+#[derive(Clone)]
+struct TuiNotifier;
+
+#[cfg(not(feature = "tui"))]
+impl TuiNotifier {
+    fn notify(&self, _msg: impl Into<String>) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn disable_mouse_capture(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "tui")]
+fn stdin_reader(
+    s: Sender<HumanInput>,
+    renderer_controls: Arc<(Mutex<RendererControls>, Condvar)>,
+    tui_notifier: Option<TuiNotifier>,
+) {
+    use crossterm::event::{Event, KeyCode, KeyEventKind, MouseEventKind, read};
+
+    while let Ok(event) = read() {
+        match event {
+            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                KeyCode::Char(ch) => {
+                    if handle_input_char(ch, &s, &renderer_controls, tui_notifier.as_ref()) {
+                        return;
+                    }
+                }
+                KeyCode::Up => scroll_tui(tui_notifier.as_ref(), TuiScrollCommand::Up),
+                KeyCode::Down => scroll_tui(tui_notifier.as_ref(), TuiScrollCommand::Down),
+                KeyCode::PageUp => scroll_tui(tui_notifier.as_ref(), TuiScrollCommand::PageUp),
+                KeyCode::PageDown => scroll_tui(tui_notifier.as_ref(), TuiScrollCommand::PageDown),
+                KeyCode::Home => scroll_tui(tui_notifier.as_ref(), TuiScrollCommand::Home),
+                KeyCode::End => scroll_tui(tui_notifier.as_ref(), TuiScrollCommand::End),
+                _ => {}
+            },
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    scroll_tui(tui_notifier.as_ref(), TuiScrollCommand::MouseUp)
+                }
+                MouseEventKind::ScrollDown => {
+                    scroll_tui(tui_notifier.as_ref(), TuiScrollCommand::MouseDown)
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+}
+
+#[cfg(not(feature = "tui"))]
+fn stdin_reader(
+    s: Sender<HumanInput>,
+    renderer_controls: Arc<(Mutex<RendererControls>, Condvar)>,
+    tui_notifier: Option<TuiNotifier>,
+) {
+    let mut buffer = [0; 1];
+    while stdin().read_exact(&mut buffer).is_ok() {
+        if handle_input_char(
+            char::from(buffer[0]),
+            &s,
+            &renderer_controls,
+            tui_notifier.as_ref(),
+        ) {
+            return;
+        }
+    }
+}
+
+fn handle_input_char(
+    ch: char,
+    s: &Sender<HumanInput>,
+    renderer_controls: &Arc<(Mutex<RendererControls>, Condvar)>,
+    tui_notifier: Option<&TuiNotifier>,
+) -> bool {
+    match ch.to_ascii_lowercase() {
+        'q' => {
+            #[cfg(not(feature = "tui"))]
+            println!("Finishing iteration, saving, then exiting...");
+
+            if let Some(notifier) = tui_notifier {
+                let _ = notifier.disable_mouse_capture();
+                let _ =
+                    notifier.notify("Quit requested. Waiting for this iteration to complete...");
+            }
+
+            s.send(HumanInput::Quit).unwrap();
+            true
+        }
+        's' => {
+            #[cfg(not(feature = "tui"))]
+            println!("Saving model after this iteration...");
+
+            if let Some(notifier) = tui_notifier {
+                let _ =
+                    notifier.notify("Save requested. Waiting for this iteration to complete...");
+            }
+
+            s.send(HumanInput::Save).unwrap();
+            false
+        }
+        'r' => {
+            let (controls, start_renderer) = &**renderer_controls;
+            let mut guard = controls.lock();
+            guard.render = !guard.render;
+            let render = guard.render;
+            drop(guard);
+
+            start_renderer.notify_all();
+
+            #[cfg(not(feature = "tui"))]
+            if render {
+                println!("Starting renderer...");
+            } else {
+                println!("Stopping renderer...");
+            }
+
+            if let Some(notifier) = tui_notifier {
+                let _ = notifier.notify(if render {
+                    "Renderer enabled."
+                } else {
+                    "Renderer disabled."
+                });
+            }
+
+            s.send(HumanInput::RenderToggled).unwrap();
+            false
+        }
+        #[cfg(feature = "tui")]
+        'p' => {
+            if let Some(notifier) = tui_notifier {
+                let _ = notifier.toggle_sparklines();
+            }
+            false
+        }
+        'd' => {
+            let (controls, start_renderer) = &**renderer_controls;
+            let mut guard = controls.lock();
+            guard.deterministic = !guard.deterministic;
+            let deterministic = guard.deterministic;
+            drop(guard);
+
+            start_renderer.notify_all();
+
+            #[cfg(not(feature = "tui"))]
+            println!("Rendering deterministic: {deterministic}");
+
+            if let Some(notifier) = tui_notifier {
+                let _ = notifier.notify(if deterministic {
+                    "Deterministic mode enabled."
+                } else {
+                    "Deterministic mode disabled."
+                });
+            }
+
+            s.send(HumanInput::DeterministicToggled).unwrap();
+            false
+        }
+        #[cfg(feature = "tui")]
+        'k' => {
+            scroll_tui(tui_notifier, TuiScrollCommand::Up);
+            false
+        }
+        #[cfg(feature = "tui")]
+        'j' => {
+            scroll_tui(tui_notifier, TuiScrollCommand::Down);
+            false
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "tui")]
+fn scroll_tui(tui_notifier: Option<&TuiNotifier>, command: TuiScrollCommand) {
+    if let Some(notifier) = tui_notifier {
+        let _ = notifier.scroll(command);
+    }
+}
+
+fn apply_skill_update_to_report(report: &mut Report, update: &SkillTrackerUpdate) {
+    report.remove_keys_with_prefix("Rating/");
+    report_skill_ratings(report, &update.cur_ratings);
+    report["Timing/skill tracker"] = update.elapsed_secs.into();
+}
+
+fn calculate_episode_length(memory: &Memory) -> f64 {
+    let terminal_count = (0..memory.len())
+        .filter(|&i| memory.terminals()[i] != TerminalState::None)
+        .count();
+    if terminal_count > 0 {
+        memory.len() as f64 / terminal_count as f64
+    } else {
+        memory.len() as f64
+    }
+}
+
+/// Appends one JSON object per metric report to a local `.jsonl` file.
+pub struct MetricsJsonlSink {
+    writer: Mutex<BufWriter<std::fs::File>>,
+}
+
+impl MetricsJsonlSink {
+    pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path.as_ref())?;
+        Ok(Self {
+            writer: Mutex::new(BufWriter::new(file)),
+        })
+    }
+
+    pub fn write_line(&self, flat: &HashMap<String, f64>) -> std::io::Result<()> {
+        let mut writer = self.writer.lock();
+        serde_json::to_writer(&mut *writer, flat)?;
+        writer.write_all(b"\n")?;
+        writer.flush()
+    }
+}
+
+fn spawn_metrics_actor(
+    metric_rx: Receiver<MetricEvent>,
+    skill_rx: Receiver<SkillTrackerUpdate>,
+    #[cfg(feature = "tui")] tui_display: Option<rlgymppo_tui::TuiHandle>,
+    #[cfg(feature = "wandb")] wandb_tx: Option<
+        std::sync::mpsc::SyncSender<std::collections::HashMap<String, f64>>,
+    >,
+    #[cfg(feature = "wandb")] wandb_handle: Option<thread::JoinHandle<()>>,
+    #[cfg(all(feature = "tui", feature = "wandb"))] wandb_run_id: Option<String>,
+    metrics_jsonl_path: Option<PathBuf>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        #[cfg(all(feature = "tui", feature = "wandb"))]
+        if let Some(ref tui) = tui_display
+            && let Some(ref id) = wandb_run_id
+        {
+            let _ = tui.notify(format!("Wandb run started: {id}"));
+        }
+
+        let jsonl_sink = match metrics_jsonl_path {
+            Some(path) => match MetricsJsonlSink::open(&path) {
+                Ok(sink) => Some(sink),
+                Err(e) => {
+                    eprintln!("Warning: Failed to open metrics jsonl file {path:?}: {e}");
+                    None
+                }
+            },
+            None => None,
+        };
+
+        let mut pending_reports: VecDeque<PendingMetricReport> = VecDeque::new();
+        let mut completed_skill_updates: HashMap<u64, SkillTrackerUpdate> = HashMap::new();
+        let mut shutting_down = false;
+
+        loop {
+            while let Ok(update) = skill_rx.try_recv() {
+                let mut matched_report = false;
+                for pending in &mut pending_reports {
+                    apply_skill_update_to_report(&mut pending.report, &update);
+
+                    if pending.waiting_for_skill_eval == Some(update.eval_id) {
+                        pending.waiting_for_skill_eval = None;
+                        matched_report = true;
+                        #[cfg(feature = "tui")]
+                        {
+                            pending.fresh_rating = true;
+                        }
+                    }
+                }
+
+                if !matched_report {
+                    completed_skill_updates.insert(update.eval_id, update);
+                }
+            }
+
+            while pending_reports
+                .front()
+                .is_some_and(|pending| pending.waiting_for_skill_eval.is_none())
+            {
+                let metrics = pending_reports.pop_front().unwrap();
+
+                #[cfg(feature = "wandb")]
+                if let Some(ref tx) = wandb_tx {
+                    let flat = metrics.report.to_flat_map();
+                    let _ = tx.try_send(flat);
+                }
+
+                #[cfg(feature = "tui")]
+                if let Some(ref tui) = tui_display {
+                    let fresh_rating = metrics.fresh_rating;
+                    let flat = metrics.report.to_flat_map();
+                    if let Err(e) = tui.update_with_fresh_rating(flat, fresh_rating) {
+                        eprintln!("Warning: TUI display update failed: {e}");
+                    }
+                }
+
+                if let Some(ref sink) = jsonl_sink {
+                    let flat = metrics.report.to_flat_map();
+                    if let Err(e) = sink.write_line(&flat) {
+                        eprintln!("Warning: JSONL metrics write failed: {e}");
+                    }
+                }
+
+                #[cfg(not(feature = "tui"))]
+                println!("{}", metrics.report);
+            }
+
+            if shutting_down && pending_reports.is_empty() {
+                break;
+            }
+
+            match metric_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(MetricEvent::Report(mut report)) => {
+                    if let Some(eval_id) = report.waiting_for_skill_eval
+                        && let Some(update) = completed_skill_updates.remove(&eval_id)
+                    {
+                        apply_skill_update_to_report(&mut report.report, &update);
+                        report.waiting_for_skill_eval = None;
+                        #[cfg(feature = "tui")]
+                        {
+                            report.fresh_rating = true;
+                        }
+                    }
+                    pending_reports.push_back(report);
+                }
+                Ok(MetricEvent::Shutdown) | Err(RecvTimeoutError::Disconnected) => {
+                    shutting_down = true;
+                    for pending in &mut pending_reports {
+                        pending.waiting_for_skill_eval = None;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
+
+        #[cfg(feature = "tui")]
+        if let Some(tui) = tui_display
+            && let Err(e) = tui.close()
+        {
+            eprintln!("Warning: TUI display close failed: {e}");
+        }
+
+        #[cfg(feature = "wandb")]
+        {
+            drop(wandb_tx);
+            if let Some(handle) = wandb_handle {
+                handle.join().expect("wandb-sender thread panicked");
+            }
+        }
+    })
+}
+
+/// Which normalization layer to apply after each hidden linear layer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NormSelection {
+    /// No normalization.
+    None,
+    /// Layer Normalization (learnable affine with gamma & beta).
+    LayerNorm,
+    /// RMS Normalization (learnable scale only, no beta).
+    RmsNorm,
+}
+
+/// Runtime module optimizer used by the default AdamW configuration.
+pub type AdamWOptimizer = ModuleOptimizer;
+
+/// Runtime module optimizer used by the default Adam configuration.
+pub type AdamOptimizer = ModuleOptimizer;
+
+/// Identifies the network being optimized by a model-aware optimizer factory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptimizerNetwork {
+    /// The policy/action network, including its output layer.
+    Policy,
+    /// The value network, including its output layer.
+    Value,
+    /// The optional shared feature-extractor network.
+    SharedHead,
+}
+
+/// A stored optimizer factory inside [`LearnerConfig`].
+///
+/// The closure is called three times during `init()` (once per sub-network)
+/// and must return a freshly created optimizer each time.
+pub type MakeOptim = Box<dyn Fn() -> ModuleOptimizer>;
+
+/// A model-aware optimizer factory. The closure receives the network and its
+/// role, allowing parameter IDs to be grouped differently for output heads.
+pub type MakeOptimForNet = Box<dyn Fn(OptimizerNetwork, &Net) -> ModuleOptimizer>;
+
+/// Called after a checkpoint's model, statistics, and optimizer files have been saved.
+///
+/// The callback receives the path to the newly-created checkpoint folder.
+pub type CheckpointCallback = Box<dyn Fn(&Path)>;
+
+/// Returns a factory for the default Adam optimizer.
+pub fn default_adam_optimizer() -> MakeOptim {
+    Box::new(|| AdamConfig::new().with_epsilon(1e-8).init())
+}
+
+/// Returns a factory for the default AdamW optimizer.
+pub fn default_adamw_optimizer() -> MakeOptim {
+    Box::new(|| AdamWConfig::new().with_epsilon(1e-8).init())
+}
+
+pub struct LearnerConfig {
+    /// Hyperparameters for the PPO learner.
+    pub ppo: PpoLearnerConfig,
+    /// Where to load/save checkpoints.
+    /// If None, defaults to "checkpoints".
+    /// If the path does not exist, it will be created.
+    pub checkpoints_folder: PathBuf,
+    /// The device to use for training.
+    /// Defaults to the runtime default device with autodiff enabled.
+    pub device: Device,
+    pub quantizer: Option<Quantizer>,
+    /// The device to use for rendering.
+    /// Defaults to the runtime default device without autodiff.
+    pub render_device: Device,
+    /// The device to use for skill-tracker inference.
+    /// When `None`, uses the training device without autodiff. Set this to
+    /// another device, for example a CPU device while training on a GPU.
+    pub skill_tracker_device: Option<Device>,
+    /// The layer sizes for the policy network.
+    pub policy_layer_sizes: Vec<usize>,
+    /// The layer sizes for the critic network.
+    pub critic_layer_sizes: Vec<usize>,
+    /// Normalization to apply after every hidden linear layer.
+    pub norm: NormSelection,
+    /// Layer sizes for the shared feature extractor (empty = no shared head).
+    /// When set, the actor and critic take their input from this head's output.
+    pub shared_head_layer_sizes: Vec<usize>,
+    /// The maximum number of checkpoints to keep.
+    /// If None, all checkpoints will be kept.
+    pub checkpoints_limit: Option<usize>,
+    /// The number of timesteps to run before saving a checkpoint.
+    pub timesteps_per_save: u64,
+    /// An optional callback invoked after each checkpoint is saved.
+    /// The callback receives the path to the newly-created checkpoint folder.
+    pub checkpoint_callback: Option<CheckpointCallback>,
+    /// The number of threads in one collection pool's rayon pool.
+    pub num_threads_per_pool: usize,
+    /// The number of independent collection pools.
+    /// Each pool owns its own games, its own inference batch,
+    /// and its own rayon pool.
+    /// Total games = num_pools * num_games_per_pool.
+    pub num_pools: usize,
+    /// The number of games to run per pool.
+    /// Increasing this will increase GPU utilization
+    /// and the utilization of one CPU thread.
+    pub num_games_per_pool: usize,
+
+    /// The number of additional iterations (episodes) to run training for,
+    /// exiting after that.
+    /// `None` means run indefinitely.
+    pub num_additional_iterations: Option<u64>,
+    /// If true, one extra environment will visualize training in rocketsim_viewer.
+    pub render: bool,
+    /// Numeric `IP:port` of a manually started viewer.
+    /// If `None`, start or reuse the viewer at the default local address.
+    pub render_viewer_addr: Option<String>,
+
+    /// Configuration for saving old policy versions and occasionally
+    /// training against them (self-play).
+    pub self_play: SelfPlayConfig,
+
+    /// Elo rating system that periodically evaluates the current policy
+    /// against previous policy versions and, optionally, the fixed Nexto
+    /// bot. Reports `"Rating/{mode}"` for the current policy. Set `enabled`
+    /// to `false` to disable all skill tracking. Set `nexto_mmr` to `None`
+    /// to disable only Nexto (no Nexto model is loaded);
+    /// tracking against previous versions still runs when versions exist.
+    pub skill_tracker: SkillTrackerConfig,
+
+    /// Project name for wandb (requires the `wandb` feature).
+    /// When `None`, wandb logging is disabled.
+    pub wandb_project_name: Option<String>,
+    /// Group name for wandb (default: `"unnamed-runs"`).
+    pub wandb_group_name: Option<String>,
+    /// Run name for wandb (default: `"rlgymppo-run"`).
+    pub wandb_run_name: Option<String>,
+    /// Optional path to a local `.jsonl` file where per-iteration metrics are appended.
+    /// Disabled by default and when `None`.
+    pub metrics_jsonl: Option<PathBuf>,
+}
+
+impl Default for LearnerConfig {
+    fn default() -> Self {
+        Self {
+            ppo: PpoLearnerConfig::default(),
+            checkpoints_folder: PathBuf::from("checkpoints"),
+            device: Device::default().autodiff(),
+            quantizer: None,
+            render_device: Device::default(),
+            skill_tracker_device: None,
+            policy_layer_sizes: vec![256; 3],
+            critic_layer_sizes: vec![256; 3],
+            norm: NormSelection::RmsNorm,
+            shared_head_layer_sizes: vec![256],
+            checkpoints_limit: None,
+            timesteps_per_save: 1_000_000,
+            checkpoint_callback: None,
+            num_threads_per_pool: 4,
+            num_pools: 1,
+            num_games_per_pool: 64,
+            num_additional_iterations: None,
+            render: false,
+            render_viewer_addr: None,
+            self_play: SelfPlayConfig::default(),
+            skill_tracker: SkillTrackerConfig::default(),
+            wandb_project_name: None,
+            wandb_group_name: None,
+            wandb_run_name: None,
+            metrics_jsonl: None,
+        }
+    }
+}
+
+impl LearnerConfig {
+    /// Initialize a [`Learner`] with a simple optimizer factory.
+    ///
+    /// The `make_optim` closure is called three times (once per sub-network)
+    /// and must return a freshly created optimizer each time.
+    pub fn init<F, SS, OBS, ACT, REW, TERM, TRUNC, SI>(
+        self,
+        create_env: F,
+        make_optim: MakeOptim,
+    ) -> Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+    where
+        F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
+        SS: StateSetter<SI> + Send,
+        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send + 'static,
+        OBS: Obs<SI> + Send,
+        ACT: Action<SI, Input = usize> + Send,
+        REW: Reward<SI> + Send,
+        TERM: Terminal<SI> + Send,
+        TRUNC: Truncate<SI> + Send,
+    {
+        self.init_internal(
+            create_env,
+            None::<fn() -> Box<dyn Obs<SI> + Send>>,
+            |device, ppo, _model| ppo.init_with(device, make_optim),
+        )
+    }
+
+    /// Initialize a [`Learner`] with a simple optimizer factory and an old
+    /// (teacher) observation builder.
+    ///
+    /// The `make_old_obs` closure is called once per game (and once more for
+    /// a size probe) and must return a freshly created obs builder each time.
+    /// The builder runs in lockstep with the env's own obs builder so transfer
+    /// learning can distill a teacher trained on a *different* observation
+    /// space; everything else (actions, rewards, shared info) must match.
+    pub fn init_with_old_obs<F, FO, SS, OBS, ACT, REW, TERM, TRUNC, SI>(
+        self,
+        create_env: F,
+        make_optim: MakeOptim,
+        make_old_obs: FO,
+    ) -> Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+    where
+        F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
+        FO: Fn() -> Box<dyn Obs<SI> + Send> + Clone + Send + 'static,
+        SS: StateSetter<SI> + Send,
+        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send + 'static,
+        OBS: Obs<SI> + Send,
+        ACT: Action<SI, Input = usize> + Send,
+        REW: Reward<SI> + Send,
+        TERM: Terminal<SI> + Send,
+        TRUNC: Truncate<SI> + Send,
+    {
+        self.init_internal(create_env, Some(make_old_obs), |device, ppo, _model| {
+            ppo.init_with(device, make_optim)
+        })
+    }
+
+    /// Initialize a [`Learner`] with a model-aware optimizer factory.
+    ///
+    /// The factory receives each sub-network identifier and the corresponding
+    /// [`Net`], allowing parameter-group optimizers such as Muon/AdamW hybrids
+    /// to select parameters by ID.
+    pub fn init_with_model<F, SS, OBS, ACT, REW, TERM, TRUNC, SI>(
+        self,
+        create_env: F,
+        make_optim: MakeOptimForNet,
+    ) -> Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+    where
+        F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
+        SS: StateSetter<SI> + Send,
+        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send + 'static,
+        OBS: Obs<SI> + Send,
+        ACT: Action<SI, Input = usize> + Send,
+        REW: Reward<SI> + Send,
+        TERM: Terminal<SI> + Send,
+        TRUNC: Truncate<SI> + Send,
+    {
+        self.init_internal(
+            create_env,
+            None::<fn() -> Box<dyn Obs<SI> + Send>>,
+            |device, ppo, model| ppo.init_with_model(device, model, make_optim),
+        )
+    }
+
+    /// Initialize a [`Learner`] with a model-aware optimizer factory and an
+    /// old (teacher) observation builder. See [`Self::init_with_old_obs`].
+    pub fn init_with_model_and_old_obs<F, FO, SS, OBS, ACT, REW, TERM, TRUNC, SI>(
+        self,
+        create_env: F,
+        make_optim: MakeOptimForNet,
+        make_old_obs: FO,
+    ) -> Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+    where
+        F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
+        FO: Fn() -> Box<dyn Obs<SI> + Send> + Clone + Send + 'static,
+        SS: StateSetter<SI> + Send,
+        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send + 'static,
+        OBS: Obs<SI> + Send,
+        ACT: Action<SI, Input = usize> + Send,
+        REW: Reward<SI> + Send,
+        TERM: Terminal<SI> + Send,
+        TRUNC: Truncate<SI> + Send,
+    {
+        self.init_internal(create_env, Some(make_old_obs), |device, ppo, model| {
+            ppo.init_with_model(device, model, make_optim)
+        })
+    }
+
+    fn init_internal<F, FO, SS, OBS, ACT, REW, TERM, TRUNC, SI>(
+        mut self,
+        create_env: F,
+        make_old_obs: Option<FO>,
+        build_ppo: impl FnOnce(Device, PpoLearnerConfig, &Actic) -> Ppo,
+    ) -> Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+    where
+        F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
+        FO: Fn() -> Box<dyn Obs<SI> + Send> + Clone + Send + 'static,
+        SS: StateSetter<SI> + Send,
+        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send,
+        OBS: Obs<SI> + Send,
+        ACT: Action<SI, Input = usize> + Send,
+        REW: Reward<SI> + Send,
+        TERM: Terminal<SI> + Send,
+        TRUNC: Truncate<SI> + Send,
+    {
+        self.device = self.device.autodiff();
+        self.render_device = self.render_device.without_autodiff();
+        self.skill_tracker_device = self
+            .skill_tracker_device
+            .map(|device| device.without_autodiff());
+        self.ppo.validate_batching();
+        assert!(
+            self.num_threads_per_pool > 0,
+            "Number of threads per collection pool must be greater than zero"
+        );
+        assert!(
+            self.num_pools > 0,
+            "Number of collection pools must be greater than zero"
+        );
+        assert!(
+            self.num_games_per_pool > 0,
+            "Number of games per pool must be greater than zero"
+        );
+        assert_ne!(
+            self.policy_layer_sizes.len(),
+            0,
+            "policy_layer_sizes must not be empty"
+        );
+        assert_ne!(
+            self.critic_layer_sizes.len(),
+            0,
+            "critic_layer_sizes must not be empty"
+        );
+        assert_ne!(
+            self.timesteps_per_save, 0,
+            "timesteps_per_save must not be 0"
+        );
+        let mut env = (create_env)(None);
+        let obs_space = env.get_obs_space();
+        let action_space = env.get_action_space();
+
+        // Probe the old (teacher) obs builder's space so transfer learning can
+        // construct the teacher network without asking the caller for a size.
+        let old_obs_space = make_old_obs
+            .as_ref()
+            .map(|make| make().get_obs_space(env.get_mut_shared_info()));
+        if let Some(size) = old_obs_space {
+            println!("# old (teacher) obs space: {size}");
+        }
+
+        let norm_config = match self.norm {
+            NormSelection::None => None,
+            NormSelection::LayerNorm => Some(NormalizationConfig::Layer(LayerNormConfig::new(0))),
+            NormSelection::RmsNorm => Some(NormalizationConfig::Rms(RmsNormConfig::new(0))),
+        };
+
+        let model = Actic::new(
+            obs_space,
+            action_space,
+            self.policy_layer_sizes,
+            self.critic_layer_sizes,
+            &self.shared_head_layer_sizes,
+            &self.device,
+            norm_config,
+        );
+
+        if let Some(ref head) = model.shared_head {
+            println!("# parameters in shared head: {}", head.num_params());
+        }
+        println!("# parameters in actor: {}", model.actor.num_params());
+        println!("# parameters in critic: {}", model.critic.num_params());
+
+        let renderer_controls = Arc::new((
+            Mutex::new(RendererControls::new(self.render)),
+            Condvar::new(),
+        ));
+
+        let renderer = {
+            let create_env = create_env.clone();
+            let renderer_controls = renderer_controls.clone();
+
+            thread::spawn(move || {
+                Renderer::new(
+                    (create_env)(None),
+                    renderer_controls,
+                    self.render_device,
+                    self.render_viewer_addr,
+                )
+                .run();
+            })
+        };
+
+        let reward_sampling = RewardSamplingConfig {
+            add_rewards_to_metrics: self.ppo.add_rewards_to_metrics,
+            reward_sample_interval: self.ppo.reward_sample_interval,
+        };
+
+        let (skill_metric_tx, skill_metric_rx) = channel();
+
+        // Construct the skill tracker when Nexto is enabled or when policy
+        // versions are saved for historical comparisons.
+        let skill_tracking_enabled = self.skill_tracker.enabled
+            && (self.skill_tracker.nexto_mmr.is_some()
+                || self.self_play.save_policy_versions
+                || self.self_play.train_against_old_versions);
+
+        let skill_tracker = if skill_tracking_enabled {
+            let create_env_skill = create_env.clone();
+            let create_arena = move |game_idx: usize| {
+                let env = (create_env_skill)(Some(game_idx));
+
+                (env.arena, env.observations, env.action, env.shared_info)
+            };
+
+            let skill_tracker_device = self
+                .skill_tracker_device
+                .clone()
+                .unwrap_or_else(|| self.device.clone().without_autodiff());
+
+            Some(AsyncSkillTracker::new(
+                self.skill_tracker.clone(),
+                create_arena,
+                skill_tracker_device,
+                skill_metric_tx,
+            ))
+        } else {
+            None
+        };
+
+        let thread_sim = ThreadSim::new(
+            create_env,
+            make_old_obs,
+            self.ppo.timesteps_per_iteration,
+            self.num_threads_per_pool,
+            self.num_pools,
+            self.num_games_per_pool,
+            self.device.clone(),
+            reward_sampling,
+            self.ppo.max_episode_length,
+            self.ppo.retain_overflow_episodes,
+            self.ppo.overbatching,
+            self.ppo.gae_estimator == GaeEstimator::TerminationTime,
+        );
+
+        let mut self_play_config = self.self_play;
+        // Self-play and the skill tracker both need historical opponents.
+        if self_play_config.train_against_old_versions || skill_tracking_enabled {
+            self_play_config.save_policy_versions = true;
+        }
+
+        let version_mgr = VersionManager::new(
+            self.checkpoints_folder.join("policy_versions"),
+            self_play_config.clone(),
+        );
+
+        let ppo = build_ppo(self.device.clone(), self.ppo, &model);
+
+        Learner {
+            ppo,
+            rng: SmallRng::from_rng(&mut rng()),
+            stats: Stats::default(),
+            device: self.device,
+            quantizer: self.quantizer,
+            model,
+            obs_space,
+            action_space,
+            old_obs_space,
+            wandb_project_name: self.wandb_project_name,
+            wandb_group_name: self.wandb_group_name,
+            wandb_run_name: self.wandb_run_name,
+            metrics_jsonl_path: self.metrics_jsonl,
+            checkpoints_folder: self.checkpoints_folder,
+            checkpoints_limit: self.checkpoints_limit,
+            timesteps_per_save: self.timesteps_per_save,
+            checkpoint_callback: self.checkpoint_callback,
+            last_save_timestep: 0,
+            num_additional_iterations: self.num_additional_iterations,
+            renderer_controls: renderer_controls.clone(),
+            renderer,
+            collector: thread_sim,
+            self_play_config,
+            version_mgr,
+            skill_tracker,
+            skill_metric_rx: Some(skill_metric_rx),
+        }
+    }
+}
+
+pub struct Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+where
+    SS: StateSetter<SI> + Send,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send,
+    OBS: Obs<SI> + Send,
+    ACT: Action<SI, Input = usize> + Send,
+    REW: Reward<SI> + Send,
+    TERM: Terminal<SI> + Send,
+    TRUNC: Truncate<SI> + Send,
+{
+    ppo: Ppo,
+    rng: SmallRng,
+    stats: Stats,
+    device: Device,
+    quantizer: Option<Quantizer>,
+    model: Actic,
+    /// Raw observation-space size (needed to construct the teacher policy
+    /// during transfer learning).
+    obs_space: usize,
+    /// Raw action-space size (needed to construct the teacher policy
+    /// during transfer learning).
+    action_space: usize,
+    /// The old (teacher) obs builder's space, probed at init. `None` when no
+    /// old obs builder was configured (same-obs transfer learning).
+    old_obs_space: Option<usize>,
+    wandb_project_name: Option<String>,
+    #[cfg_attr(not(feature = "wandb"), allow(dead_code))]
+    wandb_group_name: Option<String>,
+    #[cfg_attr(not(feature = "wandb"), allow(dead_code))]
+    wandb_run_name: Option<String>,
+    metrics_jsonl_path: Option<PathBuf>,
+    checkpoints_folder: PathBuf,
+    checkpoints_limit: Option<usize>,
+    timesteps_per_save: u64,
+    checkpoint_callback: Option<CheckpointCallback>,
+    last_save_timestep: u64,
+    num_additional_iterations: Option<u64>,
+    renderer_controls: Arc<(Mutex<RendererControls>, Condvar)>,
+    renderer: thread::JoinHandle<()>,
+    // ── Self‑Play ──────────────────────────────────────────────────
+    self_play_config: SelfPlayConfig,
+    version_mgr: VersionManager,
+    // ── Skill Tracker ────────────────────────────────────────────
+    skill_tracker: Option<AsyncSkillTracker<OBS, ACT, SI>>,
+    skill_metric_rx: Option<Receiver<SkillTrackerUpdate>>,
+
+    collector: ThreadSim<SS, OBS, ACT, REW, TERM, TRUNC, SI>,
+}
+
+impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
+where
+    SS: StateSetter<SI> + Send,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send,
+    OBS: Obs<SI> + Send,
+    ACT: Action<SI, Input = usize> + Send,
+    REW: Reward<SI> + Send,
+    TERM: Terminal<SI> + Send,
+    TRUNC: Truncate<SI> + Send,
+{
+    /// Load the previously saved model, training stats, and optimizer state.
+    /// Does nothing if no checkpoint exists. Invalid or legacy checkpoints cause a panic.
+    ///
+    /// Restores the transfer-round count (`Stats::transfer_rounds`) into the
+    /// PPO schedule state and the regen anchor (`*_init` files) when present.
+    /// Legacy checkpoints predate both: they resume the transfer LR schedule
+    /// from round `0` and re-anchor regen to the loaded weights, each with an
+    /// explicit warning (the original counts/anchors are unrecoverable).
+    pub fn load(&mut self) {
+        (self.model, self.stats) =
+            load_latest_model(self.model.clone(), &self.checkpoints_folder, &self.device);
+
+        // Align save timer so we don't immediately re-save the loaded checkpoint.
+        self.last_save_timestep = self.stats.cumulative_timesteps;
+
+        self.ppo.reinit_optimizers(&self.model);
+
+        if let Some(latest_folder) = resolve_model_folder(&self.checkpoints_folder) {
+            self.ppo.load_optimizers(&latest_folder);
+            self.ppo.load_regen_snapshot(&latest_folder, &self.model);
+            self.ppo.set_transfer_rounds(self.stats.transfer_rounds);
+            if !self.ppo.has_regen_snapshot() && self.ppo.ppo_regen_enabled() {
+                eprintln!(
+                    "Warning: checkpoint has no regen anchor (legacy); regen will \
+                     initialize from the loaded weights on the next update, not the \
+                     run's original initialization."
+                );
+            }
+        }
+
+        // Load saved policy versions from disk.
+        {
+            let template = self.model.valid();
+            self.version_mgr.load_versions(
+                &template,
+                &self.device.clone().without_autodiff(),
+                self.stats.cumulative_timesteps,
+            );
+        }
+
+        // Restore skill tracker ratings from the checkpoint.
+        if let (Some(st), Some(ratings)) = (&mut self.skill_tracker, &self.stats.skill_ratings) {
+            st.cur_ratings.data = ratings.clone();
+        }
+    }
+
+    fn print_controls_prompt() {
+        #[cfg(not(feature = "tui"))]
+        {
+            println!("Press Q to quit, S to quick save, R to toggle rendering,");
+            println!("and D to toggle deterministic mode for the renderer.");
+            println!("!!! Must be confirmed by pressing enter. !!!\n");
+        }
+    }
+
+    fn save_checkpoint(&self) {
+        let folder = save_checkpoint_files(
+            self.model.valid(),
+            &self.ppo,
+            &self.stats,
+            &self.checkpoints_folder,
+            self.checkpoints_limit,
+        );
+        if let Some(callback) = &self.checkpoint_callback {
+            callback(&folder);
+        }
+    }
+
+    fn handle_input(&mut self, input: HumanInput) -> bool {
+        match input {
+            HumanInput::Quit => {
+                return false;
+            }
+            HumanInput::Save => {
+                // Serialise skill tracker ratings before saving.
+                if let Some(ref st) = self.skill_tracker {
+                    self.stats.skill_ratings = Some(st.cur_ratings.data.clone());
+                }
+                self.save_checkpoint();
+                self.version_mgr.save_versions();
+            }
+            HumanInput::RenderToggled | HumanInput::DeterministicToggled => {}
+        }
+
+        true
+    }
+
+    fn drain_input(&mut self, r: &Receiver<HumanInput>) -> (bool, Vec<HumanInput>) {
+        let mut keep_running = true;
+        let mut handled = Vec::new();
+
+        for input in r.try_iter() {
+            keep_running = self.handle_input(input);
+            handled.push(input);
+
+            if !keep_running {
+                break;
+            }
+        }
+
+        (keep_running, handled)
+    }
+
+    fn notify_input(tui: &TuiNotifier, input: HumanInput) {
+        if matches!(input, HumanInput::Save) {
+            let _ = tui.notify("Saved model.");
+        }
+    }
+
+    /// Train the model, and automatically saves it before exiting.
+    pub fn learn(mut self) {
+        #[cfg(not(feature = "wandb"))]
+        assert_eq!(
+            self.wandb_project_name, None,
+            "'wandb' feature is not enabled, but wandb_project_name is set. \
+             Enable the 'wandb' feature in Cargo.toml to use Weights & Biases logging."
+        );
+
+        // Initialise the wandb MetricSender via embedded Python before
+        // the TUI so the "wandb run started" message goes to stdout
+        // before the alternate screen takes over.
+        #[cfg(feature = "wandb")]
+        #[cfg_attr(not(all(feature = "tui", feature = "wandb")), allow(dead_code))]
+        let (wandb_tx, wandb_handle, wandb_run_id) = if let Some(project_name) =
+            self.wandb_project_name.as_ref()
+        {
+            let group = self.wandb_group_name.as_deref().unwrap_or("unnamed-runs");
+            let name = self.wandb_run_name.as_deref().unwrap_or("rlgymppo-run");
+            let run_id = self
+                .stats
+                .wandb_run
+                .as_ref()
+                .map(|r| r.run_id.as_str())
+                .unwrap_or("");
+
+            match rlgymppo_wandb::MetricSender::new(project_name, group, name, run_id) {
+                Ok(sender) => {
+                    let id = sender.run_id().to_owned();
+                    self.stats.wandb_run =
+                        Some(crate::utils::running_stat::WandbRun { run_id: id.clone() });
+                    println!(" > wandb run started with ID: \"{id}\"");
+
+                    let (tx, rx) =
+                        std::sync::mpsc::sync_channel::<std::collections::HashMap<String, f64>>(1);
+                    let handle = thread::Builder::new()
+                        .name("wandb".into())
+                        .spawn(move || {
+                            // `sender` moves into this thread; dropped
+                            // when the channel closes -> calls finish().
+                            while let Ok(metrics) = rx.recv() {
+                                if let Err(e) = sender.send(&metrics) {
+                                    eprintln!("Warning: wandb send failed: {e}");
+                                }
+                            }
+                        })
+                        .expect("Failed to spawn wandb-sender thread");
+                    (Some(tx), Some(handle), Some(id))
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to initialise wandb MetricSender: {e}\n\
+                             Metrics will not be logged to wandb."
+                    );
+                    (None, None, None)
+                }
+            }
+        } else {
+            (None, None, None)
+        };
+
+        // Initialise the TUI display (ratatui-based terminal dashboard).
+        #[cfg(feature = "tui")]
+        let tui_display = match rlgymppo_tui::TuiHandle::new() {
+            Ok(tui) => Some(tui),
+            Err(e) => {
+                eprintln!("Warning: Failed to initialise TUI display: {e}",);
+                eprintln!("Falling back to plain-text iteration logs.");
+                None
+            }
+        };
+
+        #[cfg(feature = "tui")]
+        let tui_notifier = tui_display.as_ref().map(|tui| tui.notifier());
+        #[cfg(not(feature = "tui"))]
+        let tui_notifier = None;
+
+        let (metric_tx, metric_rx) = channel();
+        let skill_metric_rx = self.skill_metric_rx.take().unwrap();
+
+        let metrics_actor = spawn_metrics_actor(
+            metric_rx,
+            skill_metric_rx,
+            #[cfg(feature = "tui")]
+            tui_display,
+            #[cfg(feature = "wandb")]
+            wandb_tx,
+            #[cfg(feature = "wandb")]
+            wandb_handle,
+            #[cfg(all(feature = "tui", feature = "wandb"))]
+            wandb_run_id,
+            self.metrics_jsonl_path.clone(),
+        );
+
+        let (s, r) = channel();
+
+        {
+            let renderer_controls = self.renderer_controls.clone();
+            let input_tui_notifier = tui_notifier.clone();
+            thread::spawn(move || {
+                stdin_reader(s, renderer_controls, input_tui_notifier);
+            });
+        }
+
+        #[cfg(not(feature = "tui"))]
+        println!("Running for the first time. This might be slow at first...");
+        Self::print_controls_prompt();
+
+        let inital_cumulative_updates = self.stats.cumulative_model_updates;
+        'train: while self
+            .num_additional_iterations
+            .is_none_or(|n| self.stats.cumulative_model_updates - inital_cumulative_updates < n)
+        {
+            let collect_start = Instant::now();
+
+            let mut nodiff_model = self.model.valid();
+            if let Some(quantizer) = &mut self.quantizer {
+                nodiff_model = nodiff_model.quantize_weights(quantizer);
+            }
+
+            // update the model the renderer is using
+            {
+                let (controls, start_rendering) = &*self.renderer_controls;
+                let mut guard = controls.lock();
+                guard.model = Some(nodiff_model.clone());
+                drop(guard);
+
+                start_rendering.notify_all();
+            }
+
+            // ── Self‑play: stochastically pick a past version or fixed opponent ──
+            let self_play = self
+                .self_play_config
+                .pick_opponent(self.version_mgr.versions.len(), &mut self.rng)
+                .map(|pick| {
+                    let old_team = if self.rng.next_u32().is_multiple_of(2) {
+                        0
+                    } else {
+                        1
+                    };
+                    let (name, model) = match pick {
+                        OpponentPick::PastVersion(i) => {
+                            let v = &self.version_mgr.versions[i];
+                            (
+                                format!("old version {}", v.timesteps),
+                                Opponent::Model(v.model.clone()),
+                            )
+                        }
+                        OpponentPick::Fixed(i) => {
+                            let o = &self.self_play_config.fixed_opponents[i];
+                            (
+                                format!("fixed opponent {}", o.name),
+                                Opponent::Model(o.model.clone()),
+                            )
+                        }
+                        OpponentPick::External(i) => {
+                            let o = &self.self_play_config.external_opponents[i];
+                            (
+                                format!("external opponent {}", o.name),
+                                Opponent::External(o.policy.clone()),
+                            )
+                        }
+                    };
+                    #[cfg(not(feature = "tui"))]
+                    println!(" > Training against {name} (team {old_team})");
+                    #[cfg(feature = "tui")]
+                    let _ = name;
+                    (model, old_team)
+                });
+
+            // collect steps
+            let (memory, mut metrics) = self.collector.run(nodiff_model, self_play);
+            let collect_elapsed = collect_start.elapsed().as_secs_f64();
+
+            // train the model
+            let is_first_iteration = self.stats.cumulative_model_updates == 0;
+            let train_start = Instant::now();
+            let num_new_steps;
+            (self.model, num_new_steps) = self.ppo.learn(
+                self.model,
+                memory,
+                &mut self.rng,
+                &mut metrics,
+                &mut self.stats,
+                is_first_iteration,
+            );
+
+            let consumption_elapsed = train_start.elapsed().as_secs_f64();
+
+            // ── Self‑play: save a policy version if we crossed a boundary ──
+            let prev_timesteps = self.stats.cumulative_timesteps - num_new_steps as u64;
+            let nodiff_model_snapshot = self.model.valid();
+
+            if let Some(ref mut st) = self.skill_tracker {
+                st.poll_updates(&mut self.version_mgr.versions);
+            }
+
+            // Skill tracker ratings (if enabled) are frozen into new versions.
+            let cur_ratings = self.skill_tracker.as_ref().map(|st| &st.cur_ratings);
+            self.version_mgr.on_iteration(
+                &nodiff_model_snapshot,
+                self.stats.cumulative_timesteps,
+                prev_timesteps,
+                cur_ratings,
+            );
+
+            // Count both normal ends and truncations so this agrees with the
+            // collector's trajectory-length accounting.
+            let ep_len = calculate_episode_length(memory);
+            metrics["Collect/episode length"] = ep_len.into();
+            metrics["Collect/timesteps"] = num_new_steps.into();
+            metrics["Timing/collection"] = collect_elapsed.into();
+            metrics["Timing/consumption"] = consumption_elapsed.into();
+            metrics["Throughput/collected"] = (num_new_steps as f64 / collect_elapsed).into();
+            metrics["Throughput/consumption"] =
+                (num_new_steps as f64 / consumption_elapsed.max(1e-12)).into();
+            metrics["Throughput/overall"] =
+                (num_new_steps as f64 / collect_start.elapsed().as_secs_f64()).into();
+            metrics["Cumulative/steps"] = self.stats.cumulative_timesteps.into();
+            metrics["Cumulative/epochs"] = self.stats.cumulative_epochs.into();
+            metrics["Cumulative/updates"] = self.stats.cumulative_model_updates.into();
+
+            let waiting_for_skill_eval = if let Some(ref mut st) = self.skill_tracker {
+                let eval_id =
+                    st.on_iteration(&nodiff_model_snapshot, &mut self.version_mgr.versions);
+                if eval_id.is_none() {
+                    st.report_ratings(&mut metrics);
+                }
+                eval_id
+            } else {
+                None
+            };
+
+            let _ = metric_tx.send(MetricEvent::Report(PendingMetricReport {
+                waiting_for_skill_eval,
+                #[cfg(feature = "tui")]
+                fresh_rating: false,
+                report: metrics,
+            }));
+
+            let (keep_running, handled_inputs) = self.drain_input(&r);
+            if let Some(ref notifier) = tui_notifier {
+                for input in handled_inputs {
+                    Self::notify_input(notifier, input);
+                }
+            } else {
+                drop(handled_inputs);
+            }
+
+            if !keep_running {
+                break 'train;
+            }
+
+            if self.stats.cumulative_timesteps - self.last_save_timestep > self.timesteps_per_save {
+                if let Some(ref notifier) = tui_notifier {
+                    let _ = notifier.notify("Auto-saving model...");
+                }
+
+                // Serialise skill tracker ratings into the stats.
+                if let Some(ref st) = self.skill_tracker {
+                    self.stats.skill_ratings = Some(st.cur_ratings.data.clone());
+                }
+
+                self.save_checkpoint();
+                self.version_mgr.save_versions();
+                self.last_save_timestep = self.stats.cumulative_timesteps;
+            }
+
+            Self::print_controls_prompt();
+        }
+
+        {
+            // Make render thread exit
+            let (controls, start_renderer) = &*self.renderer_controls;
+            let mut guard = controls.lock();
+            guard.quit = true;
+            drop(guard);
+
+            // if render = false, this will wake the thread up to exit
+            start_renderer.notify_all();
+        }
+
+        if let Some(st) = self.skill_tracker.take() {
+            let ratings = st.join(&mut self.version_mgr.versions);
+            self.stats.skill_ratings = Some(ratings.data);
+        }
+
+        self.save_checkpoint();
+        self.version_mgr.save_versions();
+
+        let _ = metric_tx.send(MetricEvent::Shutdown);
+        let _ = metrics_actor.join();
+
+        println!("Waiting for threads to exit...");
+        self.renderer.join().unwrap();
+
+        println!("Done.")
+    }
+
+    /// Distill an already-trained (typically larger) teacher policy into this
+    /// learner's smaller student policy.
+    ///
+    /// `teacher` describes the teacher policy (its architecture and where its
+    /// checkpoints live); `tl` holds the distillation hyperparameters (see
+    /// [`TransferLearnConfig`]). The student acts in the environment while the
+    /// frozen teacher scores the same states; the student's actor and shared
+    /// head are trained to match the teacher's action distribution. When the
+    /// learner was initialized with [`LearnerConfig::init_with_old_obs`],
+    /// the teacher consumes the old obs builder's (different) observation
+    /// space; otherwise it shares the student's.
+    ///
+    /// This loop performs policy distillation only. It does not train the
+    /// student critic or run PPO updates. Rewards are metrics only. Plasticity
+    /// diagnostics report the actor and shared head, not the unused critic.
+    /// Checkpoints retain the critic and its optimizer for resume compatibility.
+    /// To train with PPO later, explicitly resume with [`Learner::learn`] and
+    /// the same student architecture and observations. There is no automatic
+    /// transition to PPO.
+    pub fn transfer_learn(mut self, teacher: TeacherConfig, tl: TransferLearnConfig) {
+        teacher.validate();
+        tl.validate();
+
+        #[cfg(not(feature = "wandb"))]
+        assert_eq!(
+            self.wandb_project_name, None,
+            "'wandb' feature is not enabled, but wandb_project_name is set. \
+             Enable the 'wandb' feature in Cargo.toml to use Weights & Biases logging."
+        );
+
+        // This loop does not schedule skill evaluations. Stop the tracker
+        // before collecting distillation batches.
+        if let Some(st) = self.skill_tracker.take() {
+            let ratings = st.join(&mut self.version_mgr.versions);
+            self.stats.skill_ratings = Some(ratings.data);
+        }
+
+        // ── Load the teacher (old, larger) policy ──────────────────────
+        let teacher_folder = resolve_model_folder(&teacher.models_path).unwrap_or_else(|| {
+            panic!(
+                "No teacher checkpoint found in: {}",
+                teacher.models_path.display()
+            )
+        });
+        let teacher_config = PolicyConfig {
+            input_size: self.old_obs_space.unwrap_or(self.obs_space),
+            action_size: self.action_space,
+            actor_layer_sizes: teacher.policy_layer_sizes.clone(),
+            shared_head_layer_sizes: teacher.shared_head_layer_sizes.clone(),
+            norm: match teacher.norm {
+                NormSelection::None => TeacherNormSelection::None,
+                NormSelection::LayerNorm => TeacherNormSelection::LayerNorm,
+                NormSelection::RmsNorm => TeacherNormSelection::RmsNorm,
+            },
+        };
+        let teacher = TeacherPolicy::load(
+            &teacher_folder,
+            &teacher_config,
+            &self.device.clone().without_autodiff(),
+        )
+        .unwrap_or_else(|e| panic!("Failed to load teacher policy from {teacher_folder:?}: {e}"));
+        let teacher_params = teacher.actor.num_params()
+            + teacher
+                .shared_head
+                .as_ref()
+                .map_or(0, |head| head.num_params());
+        let student_actor_params = self.model.actor.num_params();
+        let student_head_params = self
+            .model
+            .shared_head
+            .as_ref()
+            .map_or(0, |head| head.num_params());
+        println!(
+            " > Policy distillation: teacher checkpoint: {}",
+            teacher_folder.display()
+        );
+        println!(
+            " > Policy distillation: teacher has {teacher_params} policy params, \
+             student has {} policy params (actor {student_actor_params} + head {student_head_params})",
+            student_actor_params + student_head_params
+        );
+        println!(" > Train the student actor and shared head only. No PPO updates run.");
+        println!(" > Rewards are metrics only. Critic weights and optimizer stay unchanged.");
+        println!(" > Checkpoints retain the unused critic for resume compatibility.");
+        // Legacy resume warnings (load stays quiet so pure-PPO loads do not
+        // false-positive). A legacy transfer checkpoint has no
+        // `transfer_rounds` field (defaults to 0) and no `*_init` anchor
+        // files, which is indistinguishable from a fresh transfer started
+        // from PPO weights — the messages below say when to ignore them.
+        if self.stats.transfer_rounds == 0
+            && self.stats.cumulative_model_updates > 0
+            && tl.lr_schedule != crate::LrSchedule::Constant
+        {
+            eprintln!(
+                "Warning: transfer-round count is 0 despite prior updates. If resuming \
+                 transfer learning from a legacy checkpoint, the LR schedule restarts from \
+                 round 0 instead of continuing. If starting a fresh transfer from PPO \
+                 weights, ignore this warning."
+            );
+        }
+        if tl.regen.is_some()
+            && !self.ppo.has_regen_snapshot()
+            && self.stats.cumulative_model_updates > 0
+        {
+            eprintln!(
+                "Warning: starting transfer with regen but no saved anchor despite prior \
+                 updates; the anchor will be the current weights. If resuming a legacy \
+                 transfer run this is not the original transfer-start anchor. If starting a \
+                 fresh transfer, this anchor (the transfer start) is correct."
+            );
+        }
+
+        // Initialise the wandb MetricSender via embedded Python before
+        // the TUI so the "wandb run started" message goes to stdout
+        // before the alternate screen takes over.
+        #[cfg(feature = "wandb")]
+        #[cfg_attr(not(all(feature = "tui", feature = "wandb")), allow(dead_code))]
+        let (wandb_tx, wandb_handle, wandb_run_id) = if let Some(project_name) =
+            self.wandb_project_name.as_ref()
+        {
+            let group = self.wandb_group_name.as_deref().unwrap_or("unnamed-runs");
+            let name = self.wandb_run_name.as_deref().unwrap_or("rlgymppo-run");
+            let run_id = self
+                .stats
+                .wandb_run
+                .as_ref()
+                .map(|r| r.run_id.as_str())
+                .unwrap_or("");
+
+            match rlgymppo_wandb::MetricSender::new(project_name, group, name, run_id) {
+                Ok(sender) => {
+                    let id = sender.run_id().to_owned();
+                    self.stats.wandb_run =
+                        Some(crate::utils::running_stat::WandbRun { run_id: id.clone() });
+                    println!(" > wandb run started with ID: \"{id}\"");
+
+                    let (tx, rx) =
+                        std::sync::mpsc::sync_channel::<std::collections::HashMap<String, f64>>(1);
+                    let handle = thread::Builder::new()
+                        .name("wandb".into())
+                        .spawn(move || {
+                            // `sender` moves into this thread; dropped
+                            // when the channel closes -> calls finish().
+                            while let Ok(metrics) = rx.recv() {
+                                if let Err(e) = sender.send(&metrics) {
+                                    eprintln!("Warning: wandb send failed: {e}");
+                                }
+                            }
+                        })
+                        .expect("Failed to spawn wandb-sender thread");
+                    (Some(tx), Some(handle), Some(id))
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to initialise wandb MetricSender: {e}\n\
+                             Metrics will not be logged to wandb."
+                    );
+                    (None, None, None)
+                }
+            }
+        } else {
+            (None, None, None)
+        };
+
+        // Initialise the TUI display (ratatui-based terminal dashboard).
+        #[cfg(feature = "tui")]
+        let tui_display = match rlgymppo_tui::TuiHandle::new() {
+            Ok(tui) => Some(tui),
+            Err(e) => {
+                eprintln!("Warning: Failed to initialise TUI display: {e}",);
+                eprintln!("Falling back to plain-text iteration logs.");
+                None
+            }
+        };
+
+        #[cfg(feature = "tui")]
+        let tui_notifier = tui_display.as_ref().map(|tui| tui.notifier());
+        #[cfg(not(feature = "tui"))]
+        let tui_notifier = None;
+
+        let (metric_tx, metric_rx) = channel();
+        let skill_metric_rx = self.skill_metric_rx.take().unwrap();
+
+        let metrics_actor = spawn_metrics_actor(
+            metric_rx,
+            skill_metric_rx,
+            #[cfg(feature = "tui")]
+            tui_display,
+            #[cfg(feature = "wandb")]
+            wandb_tx,
+            #[cfg(feature = "wandb")]
+            wandb_handle,
+            #[cfg(all(feature = "tui", feature = "wandb"))]
+            wandb_run_id,
+            self.metrics_jsonl_path.clone(),
+        );
+
+        let (s, r) = channel();
+
+        {
+            let renderer_controls = self.renderer_controls.clone();
+            let input_tui_notifier = tui_notifier.clone();
+            thread::spawn(move || {
+                stdin_reader(s, renderer_controls, input_tui_notifier);
+            });
+        }
+
+        #[cfg(not(feature = "tui"))]
+        println!("Running policy distillation. This might be slow at first...");
+        Self::print_controls_prompt();
+
+        let inital_cumulative_updates = self.stats.cumulative_model_updates;
+        'train: while self
+            .num_additional_iterations
+            .is_none_or(|n| self.stats.cumulative_model_updates - inital_cumulative_updates < n)
+        {
+            let collect_start = Instant::now();
+
+            let mut nodiff_model = self.model.valid();
+            if let Some(quantizer) = &mut self.quantizer {
+                nodiff_model = nodiff_model.quantize_weights(quantizer);
+            }
+
+            // update the model the renderer is using
+            {
+                let (controls, start_rendering) = &*self.renderer_controls;
+                let mut guard = controls.lock();
+                guard.model = Some(nodiff_model.clone());
+                drop(guard);
+
+                start_rendering.notify_all();
+            }
+
+            // collect a batch of environment steps with the student acting
+            let (memory, mut metrics) = self.collector.run_with_budget(nodiff_model, tl.batch_size);
+            let collect_elapsed = collect_start.elapsed().as_secs_f64();
+
+            // Same episode-length accounting as the PPO loop. Computed here
+            // because `memory` is moved into distillation below.
+            let ep_len = calculate_episode_length(memory);
+
+            // distill the teacher's action distribution into the student
+            let train_start = Instant::now();
+            let num_new_steps;
+            (self.model, num_new_steps) =
+                self.ppo
+                    .transfer_learn(self.model, &teacher, memory, &tl, &mut metrics);
+            let consumption_elapsed = train_start.elapsed().as_secs_f64();
+
+            // ── Self-play: snapshot policy versions on timestep boundaries ──
+            let prev_timesteps = self.stats.cumulative_timesteps;
+            self.stats.cumulative_timesteps += num_new_steps as u64;
+            self.stats.cumulative_model_updates += 1;
+            self.stats.cumulative_epochs += tl.epochs as u64;
+            // Persist the transfer-round count so cosine/exponential LR
+            // schedules continue (not restart) across restarts.
+            self.stats.transfer_rounds = self.ppo.transfer_rounds();
+            self.version_mgr.on_iteration(
+                &self.model.valid(),
+                self.stats.cumulative_timesteps,
+                prev_timesteps,
+                None,
+            );
+
+            metrics["Collect/timesteps"] = num_new_steps.into();
+            metrics["Collect/episode length"] = ep_len.into();
+            metrics["Timing/collection"] = collect_elapsed.into();
+            metrics["Timing/consumption"] = consumption_elapsed.into();
+            metrics["Throughput/collected"] = (num_new_steps as f64 / collect_elapsed).into();
+            metrics["Throughput/consumption"] =
+                (num_new_steps as f64 / consumption_elapsed.max(1e-12)).into();
+            metrics["Throughput/overall"] =
+                (num_new_steps as f64 / collect_start.elapsed().as_secs_f64()).into();
+            metrics["Cumulative/steps"] = self.stats.cumulative_timesteps.into();
+            metrics["Cumulative/epochs"] = self.stats.cumulative_epochs.into();
+            metrics["Cumulative/updates"] = self.stats.cumulative_model_updates.into();
+
+            let _ = metric_tx.send(MetricEvent::Report(PendingMetricReport {
+                waiting_for_skill_eval: None,
+                #[cfg(feature = "tui")]
+                fresh_rating: false,
+                report: metrics,
+            }));
+
+            let (keep_running, handled_inputs) = self.drain_input(&r);
+            if let Some(ref notifier) = tui_notifier {
+                for input in handled_inputs {
+                    Self::notify_input(notifier, input);
+                }
+            } else {
+                drop(handled_inputs);
+            }
+
+            if !keep_running {
+                break 'train;
+            }
+
+            if self.stats.cumulative_timesteps - self.last_save_timestep > self.timesteps_per_save {
+                if let Some(ref notifier) = tui_notifier {
+                    let _ = notifier.notify("Auto-saving model...");
+                }
+
+                self.save_checkpoint();
+                self.version_mgr.save_versions();
+                self.last_save_timestep = self.stats.cumulative_timesteps;
+            }
+
+            Self::print_controls_prompt();
+        }
+
+        {
+            // Make render thread exit
+            let (controls, start_renderer) = &*self.renderer_controls;
+            let mut guard = controls.lock();
+            guard.quit = true;
+            drop(guard);
+
+            // if render = false, this will wake the thread up to exit
+            start_renderer.notify_all();
+        }
+
+        self.save_checkpoint();
+        self.version_mgr.save_versions();
+
+        let _ = metric_tx.send(MetricEvent::Shutdown);
+        let _ = metrics_actor.join();
+
+        println!("Waiting for threads to exit...");
+        self.renderer.join().unwrap();
+
+        println!("Done.")
+    }
+
+    /// Only run the renderer. Useful for debugging.
+    pub fn render(mut self) {
+        let (s, r) = channel();
+
+        {
+            let renderer_controls = self.renderer_controls.clone();
+            thread::spawn(move || {
+                stdin_reader(s, renderer_controls, None);
+            });
+        }
+
+        Self::print_controls_prompt();
+
+        let nodiff_model = self.model.valid();
+
+        // update the model the renderer is using
+        {
+            let (controls, start_rendering) = &*self.renderer_controls;
+            let mut guard = controls.lock();
+            guard.model = Some(nodiff_model.clone());
+            drop(guard);
+
+            start_rendering.notify_all();
+        }
+
+        for input in r.iter() {
+            if !self.handle_input(input) {
+                break;
+            }
+        }
+
+        {
+            // Make render thread exit
+            let (controls, start_renderer) = &*self.renderer_controls;
+            let mut guard = controls.lock();
+            guard.quit = true;
+            drop(guard);
+
+            // if render = false, this will wake the thread up to exit
+            start_renderer.notify_all();
+        }
+
+        self.save_checkpoint();
+        self.version_mgr.save_versions();
+
+        println!("Waiting for threads to exit...");
+        self.renderer.join().unwrap();
+
+        println!("Done.")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_update_reports_ratings() {
+        let mut ratings = agent::skill_tracker::SkillRating::default();
+        ratings.data.insert("1v1".to_string(), 1525.0);
+        let update = SkillTrackerUpdate {
+            eval_id: 3,
+            cur_ratings: ratings,
+            elapsed_secs: 2.5,
+        };
+        let mut report = Report::default();
+        report["Rating/stale"] = 1.0.into();
+
+        apply_skill_update_to_report(&mut report, &update);
+        let metrics = report.to_flat_map();
+
+        assert_eq!(metrics.get("Rating/1v1"), Some(&1525.0));
+        assert!(!metrics.contains_key("Rating/Nexto"));
+        assert!(!metrics.contains_key("Rating/stale"));
+    }
+
+    #[test]
+    fn episode_length_counts_truncated_boundaries() {
+        let mut memory = Memory::with_capacity(3);
+        memory.push_player(
+            vec![0.0, 1.0],
+            1,
+            vec![0, 0],
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+            vec![TerminalState::None, TerminalState::Truncated],
+            vec![1u8, 1u8],
+            1,
+            Vec::new(),
+            0,
+            Some(vec![2.0]),
+        );
+        memory.push_player(
+            vec![2.0],
+            1,
+            vec![0],
+            vec![0.0],
+            vec![0.0],
+            vec![TerminalState::Normal],
+            vec![1u8],
+            1,
+            Vec::new(),
+            0,
+            None,
+        );
+
+        assert_eq!(calculate_episode_length(&memory), 1.5);
+    }
+}

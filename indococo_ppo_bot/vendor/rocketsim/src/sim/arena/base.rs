@@ -1,0 +1,1998 @@
+use std::{any::Any, f32::consts::PI, iter::repeat_n, mem};
+
+use arrayvec::ArrayVec;
+use fastrand::Rng;
+use glam::{Affine3A, EulerRot, Mat3A, Vec3A};
+
+use super::ArenaContactTracker;
+use crate::{
+    ARENA_COLLISION_SHAPES, ArenaConfig,
+    ArenaEvent::{BallHitWorld, CarPickupBoost},
+    ArenaMemWeightMode, ArenaState, BallHitWorldEvent, BoostPadConfig, BoostPadGrid, BoostPadState,
+    Car, CarBodyConfig, CarControls, CarCore, CarInfo, CarPickupBoostEvent, CarState, GameMode,
+    MutatorConfig, PhysState, RaycastHitInfo, RaycastQuery, Team, TileDamageState, TileStates,
+    bullet::{
+        collision::{
+            broadphase::{CollisionFilterGroups, GridBroadphase},
+            dispatch::{
+                collision_dispatcher::CollisionDispatcher, collision_world::CollisionWorld,
+                quad_ray_callbacks::ClosestQuadRayResultCallback,
+            },
+            narrowphase::{
+                manifold_point::ManifoldPoint, persistent_manifold::ContactAddedCallback,
+            },
+            shapes::{
+                box_shape::BoxShape, collision_shape::CollisionShapes,
+                compound_shape::CompoundShape, static_plane_shape::StaticPlaneShape,
+            },
+        },
+        dynamics::{
+            discrete_dynamics_world::DiscreteDynamicsWorld,
+            rigid_body::{
+                CollisionFlags, RigidBody, RigidBodyConstructionInfo, RigidBodyUpdateInfo,
+            },
+        },
+    },
+    consts::{self, BT_TO_UU, TICK_RATE, TICK_TIME, UU_TO_BT},
+    make_tile_shapes,
+    shared::{Aabb, quantize},
+    sim::{
+        ArenaEvent, Ball, BallState, BoostPad, CarHitBallEvent, CarHitCarEvent, CarHitWorldEvent,
+        CarLandedEvent, DemoMode, UserInfoType, arena::ArenaEventList,
+    },
+};
+
+// Synchronize in-place edits on both normal return and panic unwinding.
+struct StateEditGuard<'a, T, F: FnMut(&mut T)> {
+    target: &'a mut T,
+    sync: F,
+}
+
+impl<T, F: FnMut(&mut T)> Drop for StateEditGuard<'_, T, F> {
+    fn drop(&mut self) {
+        (self.sync)(self.target);
+    }
+}
+
+/// Optional visualization hook, called with a snapshot after each tick.
+///
+/// Implement this in your own crate (see `rocketsim_vis`) to render or log
+/// the game. Register with `arena.vis = Some(Box::new(my_vis))`.
+pub trait Vis: Send + Sync + Any {
+    /// Called after [`Arena::step_tick`] with the fresh state and `dt`
+    /// ([`crate::consts::TICK_TIME`]).
+    fn update(&mut self, arena_state: &ArenaState, dt: f32);
+}
+
+/// A full Rocket League game: ball, cars, boost pads/tiles, and physics.
+///
+/// Create with [`Arena::new`] (Soccar defaults) or
+/// [`Arena::new_with_config`], then [`Arena::add_car`], then
+/// [`Arena::reset_to_random_kickoff`]. Drive with
+/// [`Arena::set_car_controls`] + [`Arena::step_tick`] at 120 Hz.
+///
+/// ```no_run
+/// use rocketsim::{Arena, CarBodyConfig, GameMode, Team, init_from_default};
+/// init_from_default(true).unwrap();
+/// let mut arena = Arena::new(GameMode::Soccar);
+/// arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+/// arena.reset_to_random_kickoff(Some(0));
+/// let events = arena.step_tick();
+/// ```
+pub struct Arena {
+    pub(crate) bullet_world: DiscreteDynamicsWorld,
+    config: ArenaConfig,
+
+    pub(crate) ball: Ball,
+    pub(crate) cars: Vec<Car>,
+    pub(crate) tick_count: u64,
+    pub(crate) boost_pad_grid: Option<BoostPadGrid>,
+    pub(crate) tile_states: Option<TileStates>,
+    pub(crate) contact_tracker: ArenaContactTracker,
+    pub(crate)     events: ArenaEventList,
+    ball_only: bool,
+    quantize_physics: bool,
+
+    pub rng: Rng,
+    pub vis: Option<Box<dyn Vis>>,
+}
+
+impl Clone for Arena {
+    /// Clones this arena with the same physics state.
+    ///
+    /// This clones all physics state. The clone steps the same as the original.
+    /// Static collision meshes stay shared. Static meshes never change. Sharing them does not change physics.
+    /// This clones the random generator state. Random kickoffs stay in sync if you make the same calls on both arenas.
+    /// This clones contact history and pending events. The clone reports the same last-step events.
+    ///
+    /// # Limitations
+    ///
+    /// The clone sets `vis` to `None`. `Vis` has no clone operation. Attach your visualizer again after cloning if you need it. `vis` does not change physics.
+    ///
+    /// No other limitation exists. The clone does not diverge unless you change one arena.
+    fn clone(&self) -> Self {
+        Self {
+            bullet_world: self.bullet_world.clone(),
+            config: self.config.clone(),
+            ball: self.ball,
+            cars: self.cars.clone(),
+            tick_count: self.tick_count,
+            boost_pad_grid: self.boost_pad_grid.clone(),
+            tile_states: self.tile_states,
+            contact_tracker: self.contact_tracker.clone(),
+            events: self.events.clone(),
+            ball_only: self.ball_only,
+            quantize_physics: self.quantize_physics,
+            rng: self.rng.clone(),
+            vis: None,
+        }
+    }
+}
+
+impl Arena {
+    /// Creates a Soccar-defaults arena for `game_mode` (see [`ArenaConfig::new`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if collision meshes were not loaded via `crate::init*` (except
+    /// [`GameMode::TheVoid`], which needs no meshes).
+    #[must_use]
+    pub fn new(game_mode: GameMode) -> Self {
+        Self::new_with_config(ArenaConfig::new(game_mode))
+    }
+
+    /// Creates an arena from a full [`ArenaConfig`] (mutators, pads, RNG, ...).
+    ///
+    /// # Panics
+    ///
+    /// Same as [`Arena::new`]: panics without loaded meshes (except `TheVoid`).
+    pub fn new_with_config(config: ArenaConfig) -> Self {
+        let (cell_size, initial_handle_size) = match config.mem_weight_mode {
+            ArenaMemWeightMode::Light => ((config.max_pos - config.min_pos).max_element(), 1),
+            ArenaMemWeightMode::Balanced => (config.max_aabb_len * 3.0, 1),
+            ArenaMemWeightMode::Heavy => (config.max_aabb_len, 8),
+        };
+
+        let broadphase = GridBroadphase::new(
+            config.min_pos * UU_TO_BT,
+            config.max_pos * UU_TO_BT,
+            cell_size * UU_TO_BT,
+            initial_handle_size,
+        );
+
+        let mut bullet_world =
+            DiscreteDynamicsWorld::new(broadphase, config.mutators.gravity * UU_TO_BT);
+
+        if config.game_mode != GameMode::TheVoid {
+            Self::setup_arena_collision_shapes(&mut bullet_world, config.game_mode);
+        }
+
+        let ball = Ball::new(
+            config.game_mode,
+            &mut bullet_world,
+            &config.mutators,
+            config.no_ball_rot,
+        );
+
+        let boost_pad_grid =
+            if config.game_mode != GameMode::TheVoid && config.game_mode != GameMode::Dropshot {
+                let mut boost_pad_configs = Vec::new();
+
+                if let Some(custom_boost_pads) = config.custom_boost_pads.as_ref() {
+                    boost_pad_configs.extend_from_slice(custom_boost_pads);
+                } else {
+                    let small_pad_locs = consts::boost_pads::get_locations(config.game_mode, false);
+                    let big_pad_locs = consts::boost_pads::get_locations(config.game_mode, true);
+                    boost_pad_configs.reserve(small_pad_locs.len() + big_pad_locs.len());
+
+                    for small_pos in small_pad_locs {
+                        boost_pad_configs.push(BoostPadConfig {
+                            pos: *small_pos,
+                            is_big: false,
+                        });
+                    }
+
+                    for big_pos in big_pad_locs {
+                        boost_pad_configs.push(BoostPadConfig {
+                            pos: *big_pos,
+                            is_big: true,
+                        });
+                    }
+                }
+
+                Some(BoostPadGrid::new(&boost_pad_configs, &config.mutators))
+            } else {
+                None
+            };
+
+        let tile_states = if config.game_mode == GameMode::Dropshot {
+            Some(TileStates::DEFAULT)
+        } else {
+            None
+        };
+
+        let rng = config.rng_seed.map_or_else(Rng::new, Rng::with_seed);
+        let ball_only = tile_states.is_none();
+        let quantize_physics = config.quantize_physics;
+
+        Self {
+            rng,
+            config,
+            ball,
+            boost_pad_grid,
+            tick_count: 0,
+            cars: Vec::with_capacity(6),
+            bullet_world,
+            tile_states,
+
+            contact_tracker: ArenaContactTracker::new(),
+            events: ArenaEventList::new(),
+            ball_only,
+            quantize_physics,
+
+            vis: None,
+        }
+    }
+
+    /// Borrow the current Arena configuration, including active mutators.
+    #[must_use]
+    pub const fn get_config(&self) -> &ArenaConfig {
+        &self.config
+    }
+
+    fn add_static_collision_shape(
+        bullet_world: &mut DiscreteDynamicsWorld,
+        shape: CollisionShapes,
+        pos_bt: Vec3A,
+        group: Option<u8>,
+    ) -> usize {
+        let mut rb_info = RigidBodyConstructionInfo::new(0.0, shape);
+        rb_info.restitution = consts::arena::BASE_COEFS.restitution;
+        rb_info.friction = consts::arena::BASE_COEFS.friction;
+        rb_info.start_world_trans.translation = pos_bt;
+
+        let shape_rb = RigidBody::new(rb_info);
+        if let Some(group) = group {
+            bullet_world.add_rigid_body(
+                shape_rb,
+                group | CollisionFilterGroups::Static,
+                group ^ CollisionFilterGroups::Static,
+            )
+        } else {
+            bullet_world.add_rigid_body_default(shape_rb)
+        }
+    }
+
+    /// Face count identifying the Hoops net mesh component: it collides
+    /// with the ball only (cars pass through), and the viewer draws it
+    /// translucent for the same reason.
+    pub const HOOPS_NET_FACE_COUNT: usize = 798;
+
+    fn setup_arena_collision_shapes(bullet_world: &mut DiscreteDynamicsWorld, game_mode: GameMode) {
+        debug_assert!(game_mode != GameMode::TheVoid);
+
+        let mesh_game_mode = match game_mode {
+            GameMode::Heatseeker | GameMode::Snowday => GameMode::Soccar,
+            _ => game_mode,
+        };
+        let collision_shapes = ARENA_COLLISION_SHAPES.read().unwrap();
+        let collision_meshes = &collision_shapes
+            .as_ref()
+            .expect("Arena collision shapes are uninitialized - please call init(..) first.")
+            [&mesh_game_mode];
+        assert!(
+            !collision_meshes.is_empty(),
+            "No arena meshes found for the game mode {game_mode:?}"
+        );
+
+        for mesh in collision_meshes {
+            let is_hoops_net = if game_mode == GameMode::Hoops {
+                // Detect net mesh and disable car collision
+                mesh.shape.get_mesh_interface().get_total_num_faces() == Self::HOOPS_NET_FACE_COUNT
+            } else {
+                false
+            };
+
+            let mask = if is_hoops_net {
+                Some(CollisionFilterGroups::HoopsNet as u8)
+            } else {
+                None
+            };
+
+            Self::add_static_collision_shape(
+                bullet_world,
+                CollisionShapes::TriangleMesh(mesh.shape.clone()),
+                mesh.translation,
+                mask,
+            );
+        }
+
+        drop(collision_shapes);
+
+        let arena_aabb = consts::arena::get_aabb(game_mode);
+
+        let mut add_plane = |pos_uu: Vec3A, normal: Vec3A, mask: Option<u8>| {
+            debug_assert!(normal.is_normalized());
+            let pos_bt = pos_uu * UU_TO_BT;
+            let trans = Affine3A {
+                matrix3: Mat3A::IDENTITY,
+                translation: pos_bt,
+            };
+
+            let plane_shape = StaticPlaneShape::new(trans, normal);
+
+            Self::add_static_collision_shape(
+                bullet_world,
+                CollisionShapes::StaticPlane(plane_shape),
+                pos_bt,
+                mask,
+            );
+        };
+
+        let floor_mask = if game_mode == GameMode::Dropshot {
+            Some(CollisionFilterGroups::DropshotFloor as u8)
+        } else {
+            None
+        };
+
+        // Floor
+        add_plane(Vec3A::new(0.0, 0.0, arena_aabb.min.z), Vec3A::Z, floor_mask);
+
+        // Ceiling
+        add_plane(Vec3A::new(0.0, 0.0, arena_aabb.max.z), Vec3A::NEG_Z, None);
+
+        if game_mode != GameMode::Dropshot {
+            // Side walls
+            add_plane(
+                Vec3A::new(arena_aabb.min.x, 0.0, arena_aabb.max.z / 2.0),
+                Vec3A::X,
+                None,
+            );
+            add_plane(
+                Vec3A::new(arena_aabb.max.x, 0.0, arena_aabb.max.z / 2.0),
+                Vec3A::NEG_X,
+                None,
+            );
+        }
+
+        match game_mode {
+            GameMode::Hoops => {
+                // Y walls
+                add_plane(
+                    Vec3A::new(0.0, arena_aabb.min.y, arena_aabb.max.z / 2.0),
+                    Vec3A::Y,
+                    None,
+                );
+
+                add_plane(
+                    Vec3A::new(0.0, arena_aabb.max.y, arena_aabb.max.z / 2.0),
+                    Vec3A::NEG_Y,
+                    None,
+                );
+            }
+            GameMode::Dropshot => {
+                for (i, tile) in make_tile_shapes().enumerate() {
+                    // Shift down so the collision doesn't peek through the floor
+                    let pos = Vec3A::new(0.0, 0.0, -tile.get_margin());
+
+                    let rb_idx = Self::add_static_collision_shape(
+                        bullet_world,
+                        CollisionShapes::ConvexHull(tile),
+                        pos,
+                        Some(CollisionFilterGroups::DropshotTile as u8),
+                    );
+
+                    let rb = &mut bullet_world.bodies_mut()[rb_idx];
+                    rb.user_idx = UserInfoType::DropshotTile;
+                    rb.user_pointer = i;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn ball_within_hoops_goal_xy_margin_eq(x: f32, y: f32) -> f32 {
+        const SCALE_Y: f32 = 0.9;
+        const OFFSET_Y: f32 = 2770.0;
+        const RADIUS_SQ: f32 = 716.0 * 716.0;
+
+        let dy = y.abs() * SCALE_Y - OFFSET_Y;
+        let dist_sq = x * x + dy * dy;
+        dist_sq - RADIUS_SQ
+    }
+
+    /// Returns `true` if the ball is fully inside a goal (Soccar/Hoops) or
+    /// has fallen through broken Dropshot tiles. Always `false` for `TheVoid`.
+    ///
+    /// Check this after [`Arena::step_tick`]; RocketSim does not reset or
+    /// award points itself.
+    #[must_use]
+    pub fn is_ball_scored(&self) -> bool {
+        let ball_pos = self.bullet_world.bodies()[self.ball.rigid_body_idx]
+            .get_world_trans()
+            .translation
+            * BT_TO_UU;
+
+        match self.config.game_mode {
+            GameMode::Soccar | GameMode::Heatseeker | GameMode::Snowday => {
+                ball_pos.y.abs()
+                    > self.config.mutators.goal_base_threshold_y + self.config.mutators.ball_radius
+            }
+            GameMode::Hoops => {
+                if ball_pos.z < consts::goal::HOOPS_GOAL_SCORE_THRESHOLD_Z {
+                    Self::ball_within_hoops_goal_xy_margin_eq(ball_pos.x, ball_pos.y) < 0.0
+                } else {
+                    false
+                }
+            }
+            GameMode::Dropshot => ball_pos.z < -self.config.mutators.ball_radius * 1.75,
+            GameMode::TheVoid => false,
+        }
+    }
+
+    /// Teleports cars to kickoff spawns and resets ball/pads (Dropshot tiles too).
+    ///
+    /// Cars are assigned in team order to shuffled
+    /// `consts::car::spawn::get_kickoff_spawn_locations`. Orange spawns are
+    /// mirrored/rotated 180°. Extra cars past the mode kickoff spots overflow to
+    /// respawn locations. `rng_seed` overrides the arena RNG for this call
+    /// only; `None` uses the arena RNG (seed via `ArenaConfig::with_rng_seed`
+    /// for replays).
+    pub fn reset_to_random_kickoff(&mut self, rng_seed: Option<u64>) {
+        let kickoff_locs = consts::car::spawn::get_kickoff_spawn_locations(self.config.game_mode);
+        let respawn_locs = consts::car::spawn::get_respawn_locations(self.config.game_mode);
+
+        let mut kickoff_order_perm = ArrayVec::<usize, 5>::new();
+        kickoff_order_perm.extend(0..kickoff_locs.len());
+        let mut seeded_rng = rng_seed.map(Rng::with_seed);
+        if let Some(rng) = seeded_rng.as_mut() {
+            rng.shuffle(&mut kickoff_order_perm);
+        } else {
+            self.rng.shuffle(&mut kickoff_order_perm);
+        }
+
+        let mut num_blue_cars = 0;
+        let mut num_orange_cars = 0;
+
+        for car in &mut self.cars {
+            if car.team == Team::Blue {
+                num_blue_cars += 1;
+            } else {
+                num_orange_cars += 1;
+            }
+        }
+
+        let mut num_cars_at_respawn_pos = ArrayVec::<usize, 4>::new();
+        num_cars_at_respawn_pos.extend(repeat_n(0, 4));
+
+        let kickoff_pos_amount = num_blue_cars.max(num_orange_cars);
+        for i in 0..kickoff_pos_amount {
+            let spawn_pos = if i < kickoff_locs.len() {
+                kickoff_locs[kickoff_order_perm[i]]
+            } else {
+                const CAR_SPAWN_EXTRA_OFFSET_Y: f32 = 250.0;
+
+                let respawn_pos_idx = (i - kickoff_locs.len()) % respawn_locs.len();
+                let mut pos = respawn_locs[respawn_pos_idx];
+                pos.y += CAR_SPAWN_EXTRA_OFFSET_Y * num_cars_at_respawn_pos[respawn_pos_idx] as f32;
+                num_cars_at_respawn_pos[respawn_pos_idx] += 1;
+
+                pos
+            };
+
+            let mut spawn_state = CarState::from(CarCore::grounded(
+                PhysState {
+                    pos: Vec3A::new(spawn_pos.x, spawn_pos.y, consts::car::spawn::REST_Z),
+                    rot_mat: Mat3A::IDENTITY,
+                    vel: Vec3A::ZERO,
+                    ang_vel: Vec3A::ZERO,
+                },
+                self.config.mutators.car_spawn_boost_amount,
+            ));
+            spawn_state.cache.is_on_ground = true;
+
+            for cur_team in Team::ALL {
+                let is_blue = cur_team == Team::Blue;
+
+                let mut team_car_count = 0;
+                let mut car_idx = None;
+
+                for car in &self.cars {
+                    if car.team == cur_team {
+                        team_car_count += 1;
+
+                        if team_car_count == i + 1 {
+                            car_idx = Some(car.idx);
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(car_idx) = car_idx {
+                    spawn_state.phys.rot_mat = Mat3A::from_euler(
+                        EulerRot::ZYX,
+                        if is_blue {
+                            spawn_pos.yaw_ang
+                        } else {
+                            spawn_state.phys.pos *= Vec3A::new(-1.0, -1.0, 1.0);
+                            spawn_pos.yaw_ang + if is_blue { 0.0 } else { PI }
+                        },
+                        0.0,
+                        0.0,
+                    );
+
+                    let car = &mut self.cars[car_idx];
+                    let rb = &mut self.bullet_world.bodies_mut()[car.rigid_body_idx];
+                    car.set_state(rb, &spawn_state);
+
+                    // Drop driving contacts so the next tick matches a fresh arena
+                    car.bullet_vehicle.reset_transient_contacts();
+                    car.sticky_gate_prev = false;
+                }
+            }
+        }
+
+        let mut ball_state = BallState::DEFAULT;
+        match self.config.game_mode {
+            GameMode::Heatseeker => {
+                let next_rand = seeded_rng
+                    .as_mut()
+                    .map_or_else(|| self.rng.bool(), Rng::bool);
+                let y_sign = f32::from(i8::from(next_rand) * 2 - 1);
+                let scale = Vec3A::new(-y_sign, y_sign, 1.0);
+                ball_state.phys.pos = consts::heatseeker::BALL_START_POS * scale;
+                ball_state.phys.vel = consts::heatseeker::BALL_START_VEL * scale;
+            }
+            GameMode::Snowday => {
+                ball_state.phys.vel.z = f32::EPSILON;
+            }
+            GameMode::Dropshot => {
+                self.tile_states = Some(TileStates::DEFAULT);
+                self.ball_only = false;
+                self.update_tile_states();
+            }
+            _ => {}
+        }
+
+        self.set_ball_state(ball_state);
+
+        if let Some(boost_pad_grid) = self.boost_pad_grid.as_mut() {
+            boost_pad_grid.reset();
+        }
+    }
+
+    /// Spawns a car, respawns it at a team respawn pad, and returns its index.
+    ///
+    /// Use the index with `get_car_*/set_car_*`. Removing a car with
+    /// [`Arena::remove_car`] decreases the indices of all later cars by one.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the car exceeds the broadphase limit of 16,384 collision
+    /// objects. This count includes arena shapes and the ball.
+    ///
+    /// ```no_run
+    /// # use rocketsim::{Arena, CarBodyConfig, GameMode, Team, init_from_default};
+    /// # init_from_default(true).unwrap();
+    /// # let mut arena = Arena::new(GameMode::Soccar);
+    /// let blue = arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+    /// let orange = arena.add_car(Team::Orange, CarBodyConfig::DOMINUS);
+    /// ```
+    pub fn add_car(&mut self, team: Team, config: CarBodyConfig) -> usize {
+        let idx = self.cars.len();
+
+        let mut car = Car::new(
+            idx,
+            team,
+            &mut self.bullet_world,
+            &self.config.mutators,
+            config,
+        );
+        car.respawn(
+            &mut self.bullet_world.bodies_mut()[car.rigid_body_idx],
+            &mut self.rng,
+            self.config.game_mode,
+            self.config.mutators.car_spawn_boost_amount,
+        );
+
+        self.bullet_world.bodies_mut()[car.rigid_body_idx].user_pointer = idx;
+        self.cars.push(car);
+        self.ball_only = false;
+        idx
+    }
+
+    /// Removes a car and its physics body from the arena.
+    ///
+    /// Keeps the order of the remaining cars. Each car after `car_idx` gets
+    /// an index that is one less than its old index. Update any car indices
+    /// stored by your application. Old snapshots and copied events keep their
+    /// old indices; do not use those indices with the changed arena.
+    ///
+    /// Removes the car from boost-pad membership and bump cooldowns. Updates
+    /// stored physics indices and removes contacts with the car. Queries
+    /// exported wheel contacts again if they included a car. Clears the last
+    /// step's events. Does not advance time or reset the remaining bodies.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `car_idx` is out of bounds. The arena stays unchanged.
+    ///
+    /// ```
+    /// use rocketsim::{Arena, CarBodyConfig, GameMode, Team};
+    ///
+    /// let mut arena = Arena::new(GameMode::TheVoid);
+    /// let blue = arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+    /// let orange = arena.add_car(Team::Orange, CarBodyConfig::DOMINUS);
+    /// arena.remove_car(blue);
+    /// assert_eq!(arena.get_car_info(orange - 1).team, Team::Orange);
+    /// ```
+    pub fn remove_car(&mut self, car_idx: usize) {
+        let body_idx = self.cars[car_idx].rigid_body_idx;
+        self.bullet_world.remove_rigid_body(body_idx);
+        self.cars.remove(car_idx);
+
+        if self.ball.rigid_body_idx > body_idx {
+            self.ball.rigid_body_idx -= 1;
+        }
+        for (idx, car) in self.cars.iter_mut().enumerate() {
+            car.info.idx = idx;
+            if car.rigid_body_idx > body_idx {
+                car.rigid_body_idx -= 1;
+            }
+            self.bullet_world.bodies_mut()[car.rigid_body_idx].user_pointer = idx;
+            car.bullet_vehicle.remove_body(body_idx);
+            if let Some(victim) = &mut car.state.bump_cooldown_victim {
+                if *victim == car_idx {
+                    // None with a positive timer blocks bumps against all cars.
+                    car.state.bump_cooldown_victim = None;
+                    car.state.bump_cooldown_timer = 0.0;
+                } else if *victim > car_idx {
+                    *victim -= 1;
+                }
+            }
+        }
+
+        // Exported wheel hits store the body type, not the body index.
+        // Query these hits again without clearing unrelated suspension history.
+        if self.cars.iter().any(|car| {
+            car.state
+                .wheels_with_contact()
+                .iter()
+                .flatten()
+                .any(|hit| hit.user_info == UserInfoType::Car)
+        }) {
+            self.bullet_world.refresh_aabbs();
+            for car in &mut self.cars {
+                if car
+                    .state
+                    .wheels_with_contact()
+                    .iter()
+                    .flatten()
+                    .any(|hit| hit.user_info == UserInfoType::Car)
+                {
+                    car.refresh_contact_state(&self.bullet_world);
+                }
+            }
+        }
+        if let Some(grid) = &mut self.boost_pad_grid {
+            grid.remove_car(
+                car_idx,
+                &self.cars,
+                self.config.mutators.car_max_boost_amount,
+            );
+        }
+        self.contact_tracker.clear_records();
+        self.events.clear();
+        self.ball_only = self.cars.is_empty() && self.tile_states.is_none();
+    }
+
+    /// Advances the game one tick (`1/120` s) and returns that tick's events.
+    ///
+    /// Set inputs with [`Arena::set_car_controls`] before calling. The
+    /// returned slice is only valid until the next `step_tick` — copy it if
+    /// you need it longer. See [`Arena::get_last_step_events`].
+    ///
+    /// ```no_run
+    /// # use rocketsim::{Arena, CarBodyConfig, CarControls, GameMode, Team, init_from_default};
+    /// # init_from_default(true).unwrap();
+    /// # let mut arena = Arena::new(GameMode::Soccar);
+    /// # let car = arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+    /// arena.set_car_controls(car, CarControls::default().with_throttle(1.0));
+    /// for event in arena.step_tick() {
+    ///     println!("{event:?}");
+    /// }
+    /// ```
+    pub fn step_tick(&mut self) -> &[ArenaEvent] {
+        self.events.clear();
+
+        // NOTE: This needs to be called manually
+        // TODO: Make it not need to be called manually
+        self.bullet_world.clear_accum_forces();
+
+        // Limit velocities, then quantize physics values.
+        // quantize_physics defaults on. Arenas that leave it on take the
+        // same snap the 0.3.3 tick always took. A forecast arena can skip it.
+        {
+            use consts::{ball, car};
+
+            if !self.ball_only {
+                for car_idx in 0..self.cars.len() {
+                    let car_rb =
+                        &mut self.bullet_world.bodies_mut()[self.cars[car_idx].rigid_body_idx];
+                    car_rb.limit_vels(car::MAX_SPEED * UU_TO_BT, car::MAX_ANG_SPEED);
+                    if self.quantize_physics {
+                        quantize::quantize(car_rb);
+                    }
+                    // Sync the cached state after rigid-body limits.
+                    self.cars[car_idx].state.phys.vel = car_rb.lin_vel * BT_TO_UU;
+                    self.cars[car_idx].state.phys.ang_vel = car_rb.ang_vel;
+                }
+            }
+            let ball_rb = &mut self.bullet_world.bodies_mut()[self.ball.rigid_body_idx];
+            ball_rb.limit_vels(
+                self.config.mutators.ball_max_speed * UU_TO_BT,
+                ball::MAX_ANG_SPEED,
+            );
+            if self.quantize_physics {
+                quantize::quantize(ball_rb);
+            }
+            self.ball.state.phys.vel = ball_rb.lin_vel * BT_TO_UU;
+            self.ball.state.phys.ang_vel = ball_rb.ang_vel;
+        }
+
+        if !self.ball_only {
+            // Apply flip damping before another car's wheels read its velocity.
+            for car in &mut self.cars {
+                car.apply_flip_zdamp_prepass(&mut self.bullet_world);
+            }
+
+            for car_idx in 0..self.cars.len() {
+                let was_on_ground = self.cars[car_idx].state.cache.is_on_ground;
+                self.cars[car_idx].pre_tick_update(
+                    &mut self.bullet_world,
+                    &mut self.rng,
+                    self.config.game_mode,
+                    &self.config.mutators,
+                );
+                if !was_on_ground && self.cars[car_idx].state.cache.is_on_ground {
+                    self.events.push(ArenaEvent::CarLanded(CarLandedEvent {
+                        car_idx,
+                        wheels: self.cars[car_idx].state.cache.wheels_with_contact,
+                    }));
+                }
+            }
+        }
+
+        self.ball.pre_tick_update(
+            &mut self.bullet_world.bodies_mut()[self.ball.rigid_body_idx],
+            self.config.game_mode,
+        );
+
+        let ball_only = self.ball_only;
+        self.contact_tracker.set_ball_only(ball_only);
+        self.bullet_world.set_ball_only(ball_only);
+
+        self.bullet_world
+            .step_simulation(TICK_TIME, &mut self.contact_tracker);
+
+        if ball_only {
+            let contact_count = self.contact_tracker.num_ball_world_records();
+            for idx in 0..contact_count {
+                let contact = *self.contact_tracker.get_ball_world_record(idx);
+                self.on_ball_world_collision_parts(
+                    contact.rb_idx,
+                    contact.contact_point,
+                    contact.contact_normal,
+                );
+            }
+        } else {
+            let contact_count = self.contact_tracker.num_records();
+            for idx in 0..contact_count {
+                let contact = *self.contact_tracker.get_record(idx);
+
+                let bodies = self.bullet_world.bodies();
+                let rb_a = &bodies[contact.rb_idx_a];
+                let rb_b = &bodies[contact.rb_idx_b];
+                let user_idx_a = rb_a.user_idx;
+                let user_idx_b = rb_b.user_idx;
+                let user_pointer_a = rb_a.user_pointer;
+                let user_pointer_b = rb_b.user_pointer;
+
+                match user_idx_a {
+                    UserInfoType::Car => match user_idx_b {
+                        UserInfoType::Ball => {
+                            self.on_car_ball_collision(
+                                user_pointer_a,
+                                &contact.manifold_point,
+                                contact.is_swap,
+                            );
+                        }
+                        UserInfoType::Car => {
+                            self.on_car_car_collision(
+                                user_pointer_a,
+                                user_pointer_b,
+                                &contact.manifold_point,
+                            );
+                        }
+                        _ => self.on_car_world_collision(user_pointer_a, &contact.manifold_point),
+                    },
+                    UserInfoType::Ball => match user_idx_b {
+                        UserInfoType::DropshotTile => {
+                            self.on_ball_tile_collision(user_pointer_b);
+                        }
+                        UserInfoType::None => {
+                            self.on_ball_world_collision(&contact.manifold_point, contact.rb_idx_a);
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+
+        self.contact_tracker.clear_records();
+
+        if !self.ball_only {
+            for car in &mut self.cars {
+                car.post_tick_update(&mut self.bullet_world);
+                let rb = &mut self.bullet_world.bodies_mut()[car.rigid_body_idx];
+                car.finish_physics_tick(rb);
+            }
+
+            if self.config.mutators.boost_pads_enabled
+                && let Some(grid) = self.boost_pad_grid.as_mut()
+            {
+                grid.update_membership(&self.cars, self.config.mutators.car_max_boost_amount);
+
+                for car_idx in 0..self.cars.len() {
+                    let collected = {
+                        let car = &mut self.cars[car_idx];
+                        grid.maybe_give_car_boost(
+                            &mut car.state,
+                            &self.config.mutators,
+                            self.tick_count,
+                            car_idx,
+                        )
+                    };
+
+                    if let Some(boost_pad_idx) = collected {
+                        self.events.push(CarPickupBoost(CarPickupBoostEvent {
+                            car_idx,
+                            boost_pad_idx,
+                        }));
+                        grid.refresh_winner(
+                            boost_pad_idx,
+                            &self.cars,
+                            self.config.mutators.car_max_boost_amount,
+                        );
+                    }
+                }
+            }
+        }
+
+        let ball_rb = &mut self.bullet_world.bodies_mut()[self.ball.rigid_body_idx];
+        self.ball.finish_physics_tick(ball_rb);
+
+        if self.config.game_mode == GameMode::Dropshot
+            && self.ball.state.ds_info.last_damage_tick == Some(self.tick_count)
+        {
+            self.update_tile_states();
+        }
+
+        self.tick_count += 1;
+
+        if self.vis.is_some() {
+            let arena_state = self.get_arena_state();
+            if let Some(vis) = self.vis.as_mut() {
+                vis.update(&arena_state, TICK_TIME);
+            }
+        };
+
+        self.get_last_step_events()
+    }
+
+    /// Ticks simulated so far (starts at 0, increments per [`Arena::step_tick`]).
+    #[inline]
+    pub const fn tick_count(&self) -> u64 {
+        self.tick_count
+    }
+
+    /// The game mode this arena was built with.
+    #[inline]
+    pub const fn game_mode(&self) -> GameMode {
+        self.config.game_mode
+    }
+
+    /// Current mutators (physics/rules). Initially set by `ArenaConfig`.
+    #[inline]
+    pub const fn mutator_config(&self) -> &MutatorConfig {
+        &self.config.mutators
+    }
+
+    /// Replace active mutators without recreating this Arena.
+    ///
+    /// This keeps positions, velocities, timers, pad cooldown timestamps, and event
+    /// history. It updates gravity, body mass and inertia, ball geometry and drag,
+    /// and pad amount and cooldown values. A ball-radius or body-mass change clears
+    /// persistent contact manifolds because cached geometry or impulses are stale.
+    /// Other changes keep contact manifolds. A car mass change updates and wakes
+    /// cars. A ball mass, radius, or drag change updates and wakes the ball. Gravity
+    /// changes do not wake sleeping bodies. Body updates clear pending accumulators.
+    /// Changing pad cooldown durations keeps each pad's pickup tick and applies the
+    /// new duration to it. Pad membership is retained while disabled and refreshed
+    /// before the first pickup check after re-enabling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either the current or new mass is not finite and strictly
+    /// positive. The Arena remains unchanged when this validation fails.
+    pub fn set_mutator_config(&mut self, mutators: MutatorConfig) {
+        let old = self.config.mutators;
+        assert!(
+            old.car_mass.is_finite() && old.car_mass > 0.0,
+            "runtime updates require an Arena with a finite, positive car mass"
+        );
+        assert!(
+            old.ball_mass.is_finite() && old.ball_mass > 0.0,
+            "runtime updates require an Arena with a finite, positive ball mass"
+        );
+        assert!(
+            mutators.car_mass.is_finite() && mutators.car_mass > 0.0,
+            "runtime car mass must be finite and strictly positive"
+        );
+        assert!(
+            mutators.ball_mass.is_finite() && mutators.ball_mass > 0.0,
+            "runtime ball mass must be finite and strictly positive"
+        );
+
+        let car_mass_changed = old.car_mass != mutators.car_mass;
+        let ball_properties_changed = old.ball_radius != mutators.ball_radius
+            || old.ball_mass != mutators.ball_mass
+            || old.ball_drag != mutators.ball_drag;
+        let geometry_changed = old.ball_radius != mutators.ball_radius
+            || old.ball_mass != mutators.ball_mass
+            || car_mass_changed;
+
+        if old.gravity != mutators.gravity {
+            self.bullet_world.set_gravity(mutators.gravity * UU_TO_BT);
+        }
+
+        if car_mass_changed {
+            for car in &mut self.cars {
+                let config = car.info.config;
+                let child = BoxShape::new(config.hitbox_size * UU_TO_BT * 0.5);
+                let inertia = child.calculate_local_intertia(mutators.car_mass);
+                let offset = Affine3A {
+                    matrix3: Mat3A::IDENTITY,
+                    translation: config.hitbox_pos_offset * UU_TO_BT,
+                };
+                let shape = CollisionShapes::Compound(CompoundShape::new(child, offset));
+                self.bullet_world.update_body_properties(
+                    car.rigid_body_idx,
+                    RigidBodyUpdateInfo {
+                        shape,
+                        mass: mutators.car_mass,
+                        local_inertia: inertia,
+                        friction: crate::sim::consts::car::BASE_COEFS.friction,
+                        restitution: crate::sim::consts::car::BASE_COEFS.restitution,
+                        linear_damping: 0.0,
+                        invalidate_contacts: geometry_changed,
+                    },
+                );
+                car.refresh_mass_dependent_state(mutators.car_mass);
+                car.vel_impulse_cache = Vec3A::ZERO;
+            }
+        }
+
+        if ball_properties_changed {
+            let (ball_shape, ball_inertia) =
+                Ball::make_ball_collision_shape(self.config.game_mode, &mutators);
+            let ball_coefs = if self.config.game_mode == GameMode::Snowday {
+                crate::sim::consts::snowday::PUCK_COEFS
+            } else {
+                crate::sim::consts::ball::COEFS
+            };
+            self.bullet_world.update_body_properties(
+                self.ball.rigid_body_idx,
+                RigidBodyUpdateInfo {
+                    shape: ball_shape,
+                    mass: mutators.ball_mass,
+                    local_inertia: ball_inertia,
+                    friction: ball_coefs.friction,
+                    restitution: ball_coefs.restitution,
+                    linear_damping: mutators.ball_drag,
+                    invalidate_contacts: geometry_changed,
+                },
+            );
+        }
+
+        if let Some(grid) = self.boost_pad_grid.as_mut() {
+            for pad in &mut grid.all_pads {
+                pad.max_cooldown = if pad.config.is_big {
+                    mutators.boost_pad_cooldown_big
+                } else {
+                    mutators.boost_pad_cooldown_small
+                };
+                pad.boost_amount = if pad.config.is_big {
+                    mutators.boost_pad_amount_big
+                } else {
+                    mutators.boost_pad_amount_small
+                };
+            }
+        }
+
+        self.config.mutators = mutators;
+    }
+
+    /// Teleports the ball (position/velocity/rotation + mode state).
+    ///
+    /// Use to place kickoffs, restore snapshots, or inject test states.
+    /// For Heatseeker also set `hs_info`; for Dropshot `ds_info`.
+    /// Persistent manifolds auto-cull stale points on the next tick via the
+    /// contact breaking threshold; call `clear_persistent_manifolds` first
+    /// only if you need bit-identical fresh-arena matching for large
+    /// planning jumps.
+    ///
+    /// This operation activates the ball and resets its deactivation timer,
+    /// even when both velocity vectors are zero.
+    pub fn set_ball_state(&mut self, ball_state: BallState) {
+        self.ball.set_state(
+            &mut self.bullet_world.bodies_mut()[self.ball.rigid_body_idx],
+            ball_state,
+        );
+    }
+
+    /// Set the ball's linear and angular velocity to zero, then put it to sleep.
+    /// The ball remains asleep until a collision or state update activates it.
+    pub fn sleep_ball(&mut self) {
+        let ball = &mut self.ball;
+        let rb = &mut self.bullet_world.bodies_mut()[ball.rigid_body_idx];
+        ball.state.phys.vel = Vec3A::ZERO;
+        ball.state.phys.ang_vel = Vec3A::ZERO;
+        rb.set_lin_vel(Vec3A::ZERO);
+        rb.set_ang_vel(Vec3A::ZERO);
+        rb.clear_accum_vels();
+        rb.set_activation_state(crate::bullet::dynamics::rigid_body::ActivationState::Sleeping);
+    }
+
+    /// Edit ball state in place. Synchronize its body as in [`Arena::set_ball_state`].
+    /// This operation activates the ball and resets its deactivation timer,
+    /// even when both velocity vectors are zero.
+    ///
+    /// If the callback panics, completed edits remain. The body is synchronized
+    /// during unwinding.
+    pub fn edit_ball_state(&mut self, edit: impl FnOnce(&mut BallState)) {
+        let rb = &mut self.bullet_world.bodies_mut()[self.ball.rigid_body_idx];
+        let guard = StateEditGuard {
+            target: &mut self.ball,
+            sync: |ball: &mut Ball| ball.sync_state_to_body(rb),
+        };
+        edit(&mut guard.target.state);
+    }
+
+    /// Explicitly drop cached collision contacts.
+    ///
+    /// Opt-in for planning code reusing one arena across far-apart poses that
+    /// needs fresh-arena matching. Normal per-tick replay corrections should
+    /// NOT call this; auto-culling preserves continuity there.
+    pub fn clear_persistent_manifolds(&mut self) {
+        self.bullet_world.clear_persistent_manifolds();
+    }
+
+    /// Current ball state (updated after every [`Arena::step_tick`]).
+    pub const fn get_ball_state(&self) -> &BallState {
+        &self.ball.state
+    }
+
+    /// Count cached contact manifolds for reuse diagnostics.
+    #[inline]
+    #[must_use]
+    pub fn num_persistent_manifolds(&self) -> usize {
+        self.bullet_world.num_persistent_manifolds()
+    }
+
+    /// All current cars in add order. Indices match the `get_car_*/set_car_*` APIs.
+    /// Removing a car shifts all later indices down by one.
+    #[inline]
+    pub const fn cars(&self) -> &Vec<Car> {
+        &self.cars
+    }
+
+    /// Number of cars currently in the arena.
+    #[inline]
+    pub const fn num_cars(&self) -> usize {
+        self.cars.len()
+    }
+
+    /// Immutable car info (team, hitbox preset). Panics if `car_idx` is OOB.
+    pub fn get_car_info(&self, car_idx: usize) -> &CarInfo {
+        &self.cars[car_idx].info
+    }
+
+    /// Current car state (updated after every [`Arena::step_tick`]).
+    pub fn get_car_state(&self, car_idx: usize) -> &CarState {
+        self.cars[car_idx].get_state()
+    }
+
+    /// Last controls set for a car (equals applied controls after the tick).
+    pub fn get_car_controls(&self, car_idx: usize) -> &CarControls {
+        &self.cars[car_idx].state.controls
+    }
+
+    /// Re-syncs the sticky wheel-contact gate after externally teleporting a car.
+    ///
+    /// Call after [`Arena::set_car_state_full`] when you restore snapshots mid-drive,
+    /// otherwise the next tick may apply a one-tick sticking artifact.
+    /// Normal `set_car_controls` + `step_tick` loops don't need this.
+    pub fn refresh_car_sticky_gate(&mut self, car_idx: usize) {
+        self.cars[car_idx].refresh_sticky_gate(&self.bullet_world);
+    }
+
+    /// Refresh wheel contacts at the current car pose without advancing time.
+    ///
+    /// Updates Bullet wheel contacts, exported wheel hits, grounding, and the
+    /// sticky gate. Clears the stale world-contact normal; wheel queries do not
+    /// reconstruct body contact manifolds. Applies no forces and keeps physics,
+    /// tuning, and previous controls unchanged. Demoed cars keep empty contacts.
+    /// Place all cars and the ball before refreshing contacts after a reset.
+    /// For continuous corrections, [`Arena::refresh_car_contact_state`] preserves
+    /// suspension history and the retained world-contact normal instead.
+    /// Panics if `car_idx` is out of bounds.
+    ///
+    /// ```no_run
+    /// # use rocketsim::{Arena, CarControls, CarCore, PhysState};
+    /// # fn place_car(arena: &mut Arena, car_idx: usize, phys: PhysState) {
+    /// arena.set_car_state(car_idx, CarCore::grounded(phys, 50.0));
+    /// arena.refresh_car_contacts(car_idx);
+    /// arena.set_car_controls(
+    ///     car_idx,
+    ///     CarControls {
+    ///         jump: true,
+    ///         ..CarControls::DEFAULT
+    ///     },
+    /// );
+    /// // The next tick can jump without a warm-up tick.
+    /// # }
+    /// ```
+    pub fn refresh_car_contacts(&mut self, car_idx: usize) {
+        let car = &mut self.cars[car_idx];
+        self.bullet_world.refresh_aabbs();
+        car.refresh_contacts(&self.bullet_world);
+    }
+
+    /// Calculate exported wheel contacts and grounding from the current pose.
+    ///
+    /// Preserves Bullet wheel and suspension history, the sticky gate, and the
+    /// retained world-contact normal. Does not advance time or apply forces.
+    /// Keeps core state, tuning, and previous controls unchanged. Demoed cars
+    /// get empty wheel contacts. Place all bodies before querying contacts.
+    /// Use [`Arena::refresh_car_contacts`] for full contact initialization instead.
+    /// Panics if `car_idx` is out of bounds.
+    ///
+    /// ```no_run
+    /// # use rocketsim::{Arena, PhysState};
+    /// # fn correct_car(arena: &mut Arena, car_idx: usize, phys: PhysState) {
+    /// arena.edit_car_state_full(car_idx, |state| state.phys = phys);
+    /// arena.refresh_car_contact_state(car_idx);
+    /// # }
+    /// ```
+    pub fn refresh_car_contact_state(&mut self, car_idx: usize) {
+        let car = &mut self.cars[car_idx];
+        self.bullet_world.refresh_aabbs();
+        car.refresh_contact_state(&self.bullet_world);
+    }
+
+    /// Convenience getter returning `(info, state)` together.
+    pub fn get_car_info_and_state(&self, car_idx: usize) -> (&CarInfo, &CarState) {
+        let car = &self.cars[car_idx];
+        (&car.info, &car.state)
+    }
+
+    /// Set primary car state. Derive tuning from velocity and clear contacts.
+    ///
+    /// Clamps boost to `0..100` and sets jump/flip flags required by active phases.
+    /// Sets previous controls to the supplied controls. Contacts are unknown until
+    /// the next tick or [`Arena::refresh_car_contacts`]. Resets wheel contacts,
+    /// cached impulses, and the sticky gate.
+    /// For far teleports, also call [`Arena::clear_persistent_manifolds`].
+    /// Use [`Arena::set_car_state_full`] to preserve tuning for replay or cloning.
+    pub fn set_car_state(&mut self, car_idx: usize, core: CarCore) {
+        self.set_car_state_full(car_idx, CarState::from(core));
+        self.reset_car_transient_contacts(car_idx);
+    }
+
+    /// Restore an exact car snapshot. Use only for replay or cloning.
+    ///
+    /// Copies core, tuning, and cache without validation or normalization.
+    /// Clears cached body impulses. Hidden wheel contacts and the sticky gate
+    /// carry over. For replay corrections, call [`Arena::refresh_car_sticky_gate`].
+    /// For planning reuse, call [`Arena::reset_car_transient_contacts`] instead.
+    /// Also call [`Arena::clear_persistent_manifolds`] for far teleports.
+    pub fn set_car_state_full(&mut self, car_idx: usize, state: CarState) {
+        let car = &mut self.cars[car_idx];
+
+        car.set_state(
+            &mut self.bullet_world.bodies_mut()[car.rigid_body_idx],
+            &state,
+        );
+    }
+
+    /// Edit full car state in place. Use only for replay or cloning.
+    ///
+    /// Keeps unedited fields unchanged. Does not validate or normalize values.
+    /// Body and contact handling match [`Arena::set_car_state_full`].
+    /// If the callback panics, completed edits remain. The body is synchronized
+    /// during unwinding.
+    ///
+    /// ```no_run
+    /// # use rocketsim::Arena;
+    /// # fn restore_handbrake(arena: &mut Arena, car_idx: usize) {
+    /// arena.edit_car_state_full(car_idx, |state| {
+    ///     state.handbrake_val = 0.5;
+    ///     state.jump_hold_broken = true;
+    /// });
+    /// # }
+    /// ```
+    pub fn edit_car_state_full(&mut self, car_idx: usize, edit: impl FnOnce(&mut CarState)) {
+        let car = &mut self.cars[car_idx];
+        let rb = &mut self.bullet_world.bodies_mut()[car.rigid_body_idx];
+        let guard = StateEditGuard {
+            target: car,
+            sync: |car: &mut Car| car.sync_state_to_body(rb),
+        };
+        edit(&mut guard.target.state);
+    }
+
+    /// Clear a car's stored and Bullet contacts for planning reuse.
+    ///
+    /// Drops wheel raycasts/impulses, the sticky gate, exported wheel hits,
+    /// grounding, and the world-contact normal. Keeps core state, tuning, and
+    /// previous controls. Call [`Arena::refresh_car_contacts`] to query contacts
+    /// at the new pose. Also clear persistent manifolds after far teleports.
+    /// Replay following must not call this; it would break contact continuity.
+    pub fn reset_car_transient_contacts(&mut self, car_idx: usize) {
+        self.cars[car_idx].reset_transient_contacts();
+    }
+
+    /// Set boost, clamped to `0..100`. Leave all other state unchanged.
+    ///
+    /// Keeps contacts, tuning, jump history, and cached impulses.
+    /// Use this instead of replacing car state to refill boost during simulation.
+    pub fn set_car_boost(&mut self, car_idx: usize, boost: f32) {
+        self.cars[car_idx].state.boost = boost.clamp(0.0, consts::car::boost::MAX);
+    }
+
+    /// Sets the inputs applied on the next [`Arena::step_tick`].
+    ///
+    /// [`Arena::step_tick`] clamps analog inputs to `-1..1` (see [`CarControls::clamp`]).
+    /// `jump` is edge-triggered (only the rising edge jumps/flips).
+    pub fn set_car_controls(&mut self, car_idx: usize, controls: CarControls) {
+        self.cars[car_idx].state.controls = controls;
+    }
+
+    /// Sets a car's dodge deadzone (`|yaw| + |pitch| + |roll|` must reach this to flip instead of double-jumping).
+    ///
+    /// Defaults to `0.5` (see [`CarBodyConfig::dodge_deadzone`]). `0.0` always flips on second jump,
+    /// values above `3.0` never flip. Takes effect on the next [`Arena::step_tick`].
+    /// Panics if `car_idx` is OOB.
+    pub fn set_car_dodge_deadzone(&mut self, car_idx: usize, dodge_deadzone: f32) {
+        self.cars[car_idx].info.config.dodge_deadzone = dodge_deadzone;
+    }
+
+    /// Respawns a car at a random team respawn pad with spawn boost.
+    ///
+    /// Normally demos auto-respawn after `mutators.respawn_delay`; use this
+    /// to force it (e.g. after [`Arena::reset_to_random_kickoff`] tests).
+    pub fn respawn_car(&mut self, car_idx: usize) {
+        let car = &mut self.cars[car_idx];
+
+        car.respawn(
+            &mut self.bullet_world.bodies_mut()[car.rigid_body_idx],
+            &mut self.rng,
+            self.config.game_mode,
+            self.config.mutators.car_spawn_boost_amount,
+        );
+    }
+
+    /// Demolishes a car, disabling its physics until the respawn timer ends.
+    ///
+    /// Uses `mutators.respawn_delay` for the timer, matching demos from
+    /// car-car collisions. The car auto-respawns via [`Arena::respawn_car`]
+    /// logic once the timer expires; use [`Arena::respawn_car`] to force an
+    /// immediate respawn instead of waiting.
+    pub fn demolish_car(&mut self, car_idx: usize) {
+        self.cars[car_idx].demolish(self.config.mutators.respawn_delay);
+    }
+
+    /// Returns pad cooldown and ordered car members. Membership uses the
+    /// acquisition cylinder and hitbox retention box. A car appears on one pad
+    /// only. The order preserves first entry while membership continues.
+    ///
+    /// # Panics
+    ///
+    /// Panics in `TheVoid`/`Dropshot` (no pads) or for an OOB index.
+    #[must_use]
+    pub fn get_boost_pad_state(&self, idx: usize) -> BoostPadState {
+        let pad = &self.boost_pads()[idx];
+        let cooldown = pad.gave_boost_tick_count.map_or(0.0, |gave_boost_tick| {
+            let max_cooldown = pad.max_cooldown;
+            let time_since = ((self.tick_count() as i64 - gave_boost_tick) as f32) * TICK_TIME;
+            (max_cooldown - time_since).max(0.0)
+        });
+
+        BoostPadState {
+            cooldown,
+            touching_car_idxs: pad.touching_car_idxs.clone(),
+        }
+    }
+
+    /// Restores pad cooldown and ordered membership. `cooldown <= 0` reactivates the pad.
+    /// Add all cars before restoring this state. Invalid car IDs are discarded, and duplicate
+    /// IDs in this list keep their first position. Do not restore one car on multiple pads.
+    /// If restored data does so, the next tick keeps that car on the lowest-index pad that still
+    /// retains it. Membership changes take effect on the next tick.
+    pub fn set_boost_pad_state(&mut self, idx: usize, state: BoostPadState) {
+        let boost_pad_grid = self.boost_pad_grid.as_mut().unwrap();
+        let tick_count = self.tick_count;
+        let pad = &mut boost_pad_grid.all_pads[idx];
+        pad.touching_car_idxs.clear();
+
+        for car_idx in state.touching_car_idxs.iter().copied() {
+            if car_idx < self.cars.len() && !pad.touching_car_idxs.contains(&car_idx) {
+                pad.touching_car_idxs.push(car_idx);
+            }
+        }
+
+        if state.cooldown > 0.0 {
+            let time_since_pickup = (pad.max_cooldown - state.cooldown).max(0.0);
+            let ticks_since_pickup = (time_since_pickup * TICK_RATE).round() as i64;
+            pad.gave_boost_tick_count = Some(tick_count as i64 - ticks_since_pickup);
+        } else {
+            boost_pad_grid.all_pads[idx].gave_boost_tick_count = None;
+        }
+    }
+
+    /// Edit a local pad snapshot, then apply it with [`Arena::set_boost_pad_state`].
+    ///
+    /// Cooldown is derived from pickup ticks, so this editor uses a temporary value.
+    /// Conversion keeps the setter's tick quantization. If the callback panics,
+    /// the snapshot is not applied. Panics outside pad modes
+    /// or for an out-of-bounds `idx`, as the getter does.
+    pub fn edit_boost_pad_state(&mut self, idx: usize, edit: impl FnOnce(&mut BoostPadState)) {
+        let mut state = self.get_boost_pad_state(idx);
+        edit(&mut state);
+        self.set_boost_pad_state(idx, state);
+    }
+
+    /// Static pad layout (`pos`, `is_big`). Order is RLBot/RLGym (Y, then X).
+    #[must_use]
+    pub fn get_boost_pad_config(&self, idx: usize) -> &BoostPadConfig {
+        self.boost_pads()[idx].config()
+    }
+
+    pub(crate) fn boost_pads(&self) -> &[BoostPad] {
+        &self.boost_pad_grid.as_ref().unwrap().all_pads
+    }
+
+    /// Number of pads (`0` in `TheVoid`/`Dropshot`; 34 Soccar, 20 Hoops).
+    #[must_use]
+    pub fn num_boost_pads(&self) -> usize {
+        self.boost_pad_grid
+            .as_ref()
+            .map_or(0, |grid| grid.all_pads.len())
+    }
+
+    /// All pad cooldowns and ordered memberships in pad order.
+    #[must_use]
+    pub fn get_all_boost_pad_states(&self) -> Vec<BoostPadState> {
+        (0..self.num_boost_pads())
+            .map(|i| self.get_boost_pad_state(i))
+            .collect()
+    }
+
+    /// All pad layouts in pad order.
+    #[must_use]
+    pub fn get_all_boost_pad_configs(&self) -> Vec<BoostPadConfig> {
+        (0..self.num_boost_pads())
+            .map(|i| *self.get_boost_pad_config(i))
+            .collect()
+    }
+
+    /// Dropshot tile damage grid. Panics outside Dropshot.
+    pub fn get_tile_states(&self) -> &TileStates {
+        self.tile_states.as_ref().unwrap()
+    }
+
+    fn update_tile_states(&mut self) {
+        let tile_states = &self.tile_states.as_ref().unwrap().states;
+        for rb in self.bullet_world.bodies_mut() {
+            if rb.user_idx != UserInfoType::DropshotTile {
+                continue;
+            }
+            let team_idx = rb.user_pointer / consts::dropshot::NUM_TILES_PER_TEAM;
+            let tile_idx = rb.user_pointer % consts::dropshot::NUM_TILES_PER_TEAM;
+            if tile_states[team_idx][tile_idx] == TileDamageState::Broken {
+                rb.collision_flags |= CollisionFlags::NoContactResponse;
+            } else {
+                rb.collision_flags &= !CollisionFlags::NoContactResponse;
+            }
+        }
+    }
+
+    /// Replaces the Dropshot tile grid and updates collision (broken tiles
+    /// stop colliding). Also clears ball-only mode so tiles simulate.
+    pub fn set_tile_states(&mut self, tile_states: TileStates) {
+        self.tile_states = Some(tile_states);
+        self.ball_only = false;
+        self.update_tile_states();
+    }
+
+    /// Edit tile state in place. Update collision as in [`Arena::set_tile_states`].
+    ///
+    /// If the callback panics, completed edits remain. Collision flags and
+    /// ball-only mode are updated during unwinding. Panics outside Dropshot,
+    /// as the getter does.
+    pub fn edit_tile_states(&mut self, edit: impl FnOnce(&mut TileStates)) {
+        self.get_tile_states();
+        let guard = StateEditGuard {
+            target: self,
+            sync: |arena: &mut Self| {
+                arena.ball_only = false;
+                arena.update_tile_states();
+            },
+        };
+        edit(guard.target.tile_states.as_mut().unwrap());
+    }
+
+    /// Total tiles across both teams (`0` outside Dropshot, else 140).
+    pub fn num_tiles(&self) -> usize {
+        self.tile_states
+            .as_ref()
+            .map_or(0, |ts| ts.states[0].len() * ts.states.len())
+    }
+
+    /// Full snapshot (cars, ball, pads, tiles) for replays/debugging.
+    ///
+    /// Cheap clones of state only (no physics-world copy). Pair with
+    /// `set_*` methods to restore. [`crate::ArenaState::new_empty`] builds
+    /// an empty placeholder when you only need the type.
+    #[must_use]
+    pub fn get_arena_state(&self) -> ArenaState {
+        let cars = self
+            .cars
+            .iter()
+            .map(|c| (c.info, c.state))
+            .collect::<Vec<_>>();
+        let ball = *self.get_ball_state();
+
+        let boost_pads = (0..self.num_boost_pads())
+            .map(|i| (*self.get_boost_pad_config(i), self.get_boost_pad_state(i)))
+            .collect();
+
+        ArenaState {
+            game_mode: self.config.game_mode,
+            tick_count: self.tick_count,
+            cars,
+            ball,
+            boost_pads,
+            tile_states: self.tile_states,
+        }
+    }
+
+    /// Events from the last [`Arena::step_tick`] (same slice `step_tick` returned).
+    ///
+    /// Cleared at the start of each tick and by [`Arena::remove_car`].
+    /// See [`ArenaEvent`] for variants.
+    #[must_use]
+    pub fn get_last_step_events(&self) -> &[ArenaEvent] {
+        self.events.events()
+    }
+
+    /// Casts `N` rays against the arena (`None` on a miss).
+    ///
+    /// Fixed-size in and out (no allocation): pass `[RaycastQuery; N]`, get
+    /// back the hit (if any) for each query in the same order. Rays run 4 at
+    /// a time via SIMD, so multiples of 4 are fastest
+    /// (e.g. `let [hit] = arena.cast_rays([query]);`).
+    ///
+    /// Short rays use the broadphase grid; rays longer than one grid cell
+    /// (`ArenaConfig::max_aabb_len`, scaled by the memory-weight mode) fall
+    /// back to testing every body, so any length works. Coordinates are in
+    /// uu, like the rest of the API.
+    ///
+    /// A query with `include_dynamics: false` ignores cars and the ball
+    /// (a dynamic body hiding a wall reports a miss — split the batch if the
+    /// static hit behind it matters).
+    ///
+    /// ```no_run
+    /// # use rocketsim::{Arena, GameMode, RaycastQuery, init_from_default};
+    /// # init_from_default(true).unwrap();
+    /// # let arena = Arena::new(GameMode::Soccar);
+    /// # let from = arena.get_ball_state().pos;
+    /// # let to = from - glam::Vec3A::new(0., 0., 300.);
+    /// let [hit] = arena.cast_rays([RaycastQuery {
+    ///     from,
+    ///     to,
+    ///     include_dynamics: false,
+    /// }]);
+    /// if let Some(hit) = hit {
+    ///     assert!(hit.hit_point.z >= 0.0);
+    /// }
+    /// ```
+    #[must_use]
+    pub fn cast_rays<const N: usize>(
+        &self,
+        ray_queries: [RaycastQuery; N],
+    ) -> [Option<RaycastHitInfo>; N] {
+        // Grid cell size mirrors `new_with_config` (there in uu, here in BT).
+        let cell_size_uu = match self.config.mem_weight_mode {
+            ArenaMemWeightMode::Light => (self.config.max_pos - self.config.min_pos).max_element(),
+            ArenaMemWeightMode::Balanced => self.config.max_aabb_len * 3.0,
+            ArenaMemWeightMode::Heavy => self.config.max_aabb_len,
+        };
+        let cell_size_sq = (cell_size_uu * UU_TO_BT) * (cell_size_uu * UU_TO_BT);
+
+        let mut results = [None; N];
+        for (chunk_idx, query_batch) in ray_queries.chunks(4).enumerate() {
+            let (mut froms, mut tos) = ([Vec3A::ZERO; 4], [Vec3A::ZERO; 4]);
+            for (i, query) in query_batch.iter().enumerate() {
+                froms[i] = query.from * UU_TO_BT;
+                tos[i] = query.to * UU_TO_BT;
+            }
+
+            let static_only = query_batch.iter().all(|q| !q.include_dynamics);
+            let mut callback = ClosestQuadRayResultCallback::new(&froms, &tos, None);
+            if static_only {
+                callback.base.collision_filter_mask = CollisionFilterGroups::Static as u8;
+            }
+
+            let is_long =
+                (0..query_batch.len()).any(|i| froms[i].distance_squared(tos[i]) >= cell_size_sq);
+            if is_long {
+                // Global fallback: no grid limit, test every body directly.
+                for body in self.bullet_world.bodies() {
+                    if static_only && !body.is_static_obj() {
+                        continue;
+                    }
+                    CollisionWorld::quad_ray_test(
+                        &froms,
+                        &tos,
+                        body,
+                        body.world_array_idx,
+                        &mut callback,
+                    );
+                }
+            } else {
+                self.bullet_world.ray_test(&froms, &tos, &mut callback);
+            }
+
+            for i in 0..query_batch.len() {
+                let hit_obj_idx = callback.base.collision_obj_idx[i];
+                let hit_info = match hit_obj_idx {
+                    Some(obj_idx)
+                        if !query_batch[i].include_dynamics
+                            && !self.bullet_world.bodies()[obj_idx].is_static_obj() =>
+                    {
+                        None
+                    }
+                    Some(obj_idx) => Some(RaycastHitInfo {
+                        hit_point: callback.hit_point_world[i] * BT_TO_UU,
+                        hit_normal: callback.hit_normal_world[i],
+                        hit_fraction: callback.base.closest_hit_fraction[i],
+                        user_info: self.bullet_world.bodies()[obj_idx].user_idx,
+                    }),
+                    _ => None,
+                };
+
+                results[chunk_idx * 4 + i] = hit_info;
+            }
+        }
+
+        results
+    }
+
+    /// Overlap test: would an object here collide with anything?
+    ///
+    /// Pass `Some(body_config)` to test a car hitbox, `None` to test the ball
+    /// (built from the arena's game mode and mutators, so Snowday pucks
+    /// work). Set `include_dynamics` to also test against cars and the ball;
+    /// otherwise only static arena geometry (walls, floor, ceiling) is tested.
+    /// Useful for spawn-point checks and teleport validation without stepping
+    /// the sim.
+    ///
+    /// Cars are tested by hitbox only — wheels and suspension are ignored, so
+    /// a car at normal rest height (~17 uu) does *not* touch the floor. A
+    /// `false` result means "no contact at this transform", not "the path
+    /// here is clear" — use [`Arena::cast_rays`] for swept queries.
+    ///
+    /// ```no_run
+    /// # use rocketsim::{Arena, CarBodyConfig, GameMode, init_from_default};
+    /// # init_from_default(true).unwrap();
+    /// # let arena = Arena::new(GameMode::Soccar);
+    /// # let mut phys = arena.get_ball_state().phys;
+    /// # phys.pos.z = 3000.0;
+    /// // Mid-air ball: no overlap.
+    /// assert!(!arena.test_collision(phys, None, false));
+    /// // Same spot with a car hitbox (Octane is ~39 uu tall): still clear.
+    /// assert!(!arena.test_collision(phys, Some(CarBodyConfig::OCTANE), false));
+    /// ```
+    #[must_use]
+    pub fn test_collision(
+        &self,
+        phys: PhysState,
+        car_config: Option<CarBodyConfig>,
+        include_dynamics: bool,
+    ) -> bool {
+        let game_mode = self.config.game_mode;
+        let pos_bt = phys.pos * UU_TO_BT;
+        let world_trans = Affine3A {
+            matrix3: phys.rot_mat,
+            translation: pos_bt,
+        };
+
+        let (query_shape, query_aabb) = if let Some(config) = car_config {
+            let box_shape = BoxShape::new(config.hitbox_size * UU_TO_BT * 0.5);
+            let hitbox_offset = Affine3A {
+                matrix3: Mat3A::IDENTITY,
+                translation: config.hitbox_pos_offset * UU_TO_BT,
+            };
+            let compound_shape = CompoundShape::new(box_shape, hitbox_offset);
+            let aabb = compound_shape.get_aabb(&world_trans);
+            (CollisionShapes::Compound(compound_shape), aabb)
+        } else {
+            let (shape, _) = Ball::make_ball_collision_shape(game_mode, &self.config.mutators);
+            let aabb = shape.get_aabb(&world_trans);
+            (shape, aabb)
+        };
+
+        // Query AABB is in Bullet units, so convert the arena bounds too.
+        // Statics-only: anything outside the arena can't hit. With dynamics,
+        // a car or the ball could be out of bounds, so test them anyway.
+        if !include_dynamics {
+            let arena_aabb = Aabb::new(
+                self.config.min_pos * UU_TO_BT,
+                self.config.max_pos * UU_TO_BT,
+            );
+            if !arena_aabb.intersects(&query_aabb) {
+                return false;
+            }
+        }
+
+        let mut rb_info = RigidBodyConstructionInfo::new(0.0, query_shape);
+        rb_info.start_world_trans = world_trans;
+        let mut query_body = RigidBody::new(rb_info);
+        query_body.world_array_idx = usize::MAX;
+        let mut callback = NopContactAddedCallback;
+
+        for body in self.bullet_world.bodies() {
+            if !include_dynamics && !body.is_static_obj() {
+                continue;
+            }
+
+            let body_aabb = body.get_collision_shape().get_aabb(body.get_world_trans());
+            if !query_aabb.intersects(&body_aabb) {
+                continue;
+            }
+
+            let mut out = None;
+            CollisionDispatcher::process_collision(&query_body, body, &mut callback, &mut out);
+            if out.is_some() {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Returns `true` when a [`Vis`] hook is registered.
+    pub fn is_vis_enabled(&self) -> bool {
+        self.vis.is_some()
+    }
+}
+
+/// A no-op contact callback used when only checking for collision existence.
+struct NopContactAddedCallback;
+
+impl ContactAddedCallback for NopContactAddedCallback {
+    fn callback(
+        &mut self,
+        _contact_point: &mut ManifoldPoint,
+        _body_a: &RigidBody,
+        _body_b: &RigidBody,
+        _idx: Option<usize>,
+    ) {
+    }
+}
+
+fn is_within_rect_cone(
+    forward: Vec3A,
+    right: Vec3A,
+    up: Vec3A,
+    delta: Vec3A,
+    b_reverse: bool,
+    yaw_limit_deg: f32,
+    pitch_limit_deg: f32,
+) -> bool {
+    debug_assert!(yaw_limit_deg < 90.0 && pitch_limit_deg < 90.0);
+
+    let fwd = if b_reverse { -forward } else { forward };
+    let Some(d) = delta.try_normalize() else {
+        return false;
+    };
+
+    let f = d.dot(fwd);
+    if f <= 0.0 {
+        return false;
+    }
+
+    // angle = atan2(|component|, f) <= limit  <=>  |component| <= f * tan(limit)
+    d.dot(right).abs() <= f * yaw_limit_deg.to_radians().tan()
+        && d.dot(up).abs() <= f * pitch_limit_deg.to_radians().tan()
+}
+
+fn is_within_demo_cone(
+    forward: Vec3A,
+    right: Vec3A,
+    up: Vec3A,
+    delta: Vec3A,
+    b_reverse: bool,
+) -> bool {
+    use consts::car::demo;
+
+    is_within_rect_cone(
+        forward,
+        right,
+        up,
+        delta,
+        b_reverse,
+        demo::YAW_LIMIT_DEG,
+        demo::PITCH_LIMIT_DEG,
+    )
+}
+
+fn is_within_bump_cone(
+    forward: Vec3A,
+    right: Vec3A,
+    up: Vec3A,
+    delta: Vec3A,
+    b_reverse: bool,
+) -> bool {
+    use consts::car::bump;
+
+    is_within_rect_cone(
+        forward,
+        right,
+        up,
+        delta,
+        b_reverse,
+        bump::YAW_LIMIT_DEG,
+        bump::PITCH_LIMIT_DEG,
+    )
+}
+
+impl Arena {
+    fn on_ball_tile_collision(&mut self, tile_idx: usize) {
+        self.ball.on_dropshot_tile_collision(
+            self.tile_states.as_mut().unwrap(),
+            tile_idx,
+            self.tick_count,
+        );
+    }
+
+    fn on_ball_world_collision(&mut self, manifold_point: &ManifoldPoint, rb_index: usize) {
+        self.on_ball_world_collision_parts(
+            rb_index,
+            manifold_point.pos_world_on_b,
+            manifold_point.normal_world_on_b,
+        );
+    }
+
+    fn on_ball_world_collision_parts(
+        &mut self,
+        rb_index: usize,
+        contact_point: Vec3A,
+        contact_normal: Vec3A,
+    ) {
+        let contact_point = contact_point * BT_TO_UU;
+
+        let rb = &mut self.bullet_world.bodies_mut()[rb_index];
+        self.ball
+            .on_world_hit(rb, self.config.game_mode, contact_normal);
+
+        self.events.push(BallHitWorld(BallHitWorldEvent {
+            contact_point,
+            contact_normal,
+        }));
+    }
+
+    fn on_car_ball_collision(
+        &mut self,
+        car_idx: usize,
+        manifold_point: &ManifoldPoint,
+        ball_is_body_a: bool,
+    ) {
+        let ball_rb = &mut self.bullet_world.bodies_mut()[self.ball.rigid_body_idx];
+        let ball_lin_vel_before = ball_rb.lin_vel;
+        self.ball.on_hit(
+            &mut self.cars[car_idx],
+            self.config.game_mode,
+            &self.config.mutators,
+            self.tick_count,
+            ball_rb,
+        );
+
+        let contact_point = if ball_is_body_a {
+            manifold_point.pos_world_on_a
+        } else {
+            manifold_point.pos_world_on_b
+        } * BT_TO_UU;
+
+        let extra_hit_vel = (ball_rb.lin_vel - ball_lin_vel_before) * BT_TO_UU;
+        self.events.push(ArenaEvent::CarHitBall(CarHitBallEvent {
+            car_idx,
+            contact_point,
+            extra_hit_vel,
+        }));
+    }
+
+    fn on_car_world_collision(&mut self, car_idx: usize, manifold_point: &ManifoldPoint) {
+        self.events.push(ArenaEvent::CarHitWorld(CarHitWorldEvent {
+            car_idx,
+            contact_point: manifold_point.pos_world_on_b * BT_TO_UU,
+            contact_normal: manifold_point.normal_world_on_b,
+        }));
+        self.cars[car_idx].state.cache.world_contact_normal =
+            Some(manifold_point.normal_world_on_b);
+    }
+
+    fn on_car_car_collision(
+        &mut self,
+        car_1_idx: usize,
+        car_2_idx: usize,
+        manifold_point: &ManifoldPoint,
+    ) {
+        let Ok(both_cars) = self.cars.get_disjoint_mut([car_1_idx, car_2_idx]) else {
+            panic!(
+                "on_car_car_collision() called with invalid or duplicate car indices: {car_1_idx}, {car_2_idx}"
+            );
+        };
+
+        let (mut attacker, mut victim) = both_cars.into();
+
+        // NOTE: Checking the victim first, because in many use-cases, repeat-demo-victims are more likely
+        if victim.state.is_demoed || attacker.state.is_demoed {
+            return;
+        }
+
+        // Test collision both ways
+        for is_swapped in [false, true] {
+            let mut attacker_idx = car_1_idx;
+            let mut victim_idx = car_2_idx;
+            if is_swapped {
+                mem::swap(&mut attacker, &mut victim);
+                mem::swap(&mut attacker_idx, &mut victim_idx);
+            }
+
+            let attacker_state = &attacker.state;
+            let victim_state = &victim.state;
+
+            if attacker_state.bump_cooldown_timer > 0.0
+                && attacker_state
+                    .bump_cooldown_victim
+                    .is_none_or(|v| v == victim_idx)
+            {
+                // In cooldown for this victim pair (None = all victims)
+                continue;
+            }
+
+            let delta_pos = victim_state.phys.pos - attacker_state.phys.pos;
+            if attacker_state.phys.vel.dot(delta_pos) < 0.0 {
+                // Moving away from the other car
+                continue;
+            }
+
+            let vel_dir = attacker_state.phys.vel.normalize_or_zero();
+            let dir_to_victim = delta_pos.normalize_or_zero();
+
+            let speed_towards_other_car = attacker_state.phys.vel.dot(dir_to_victim);
+            let other_car_away_speed = victim_state.phys.vel.dot(vel_dir);
+            if speed_towards_other_car <= other_car_away_speed {
+                // Going towards other car slower than they're going away
+                continue;
+            }
+
+            let center_in_cone = is_within_bump_cone(
+                attacker_state.phys.get_forward_dir(),
+                attacker_state.phys.get_right_dir(),
+                attacker_state.phys.get_up_dir(),
+                delta_pos,
+                false,
+            );
+
+            // Contact-relative residual
+            let (contact_on_attacker, contact_on_victim) = if is_swapped {
+                (manifold_point.pos_world_on_b, manifold_point.pos_world_on_a)
+            } else {
+                (manifold_point.pos_world_on_a, manifold_point.pos_world_on_b)
+            };
+            let gate_vec = (victim_state.phys.pos - contact_on_victim * BT_TO_UU)
+                - (attacker_state.phys.pos - contact_on_attacker * BT_TO_UU);
+            let residual_in_cone = is_within_bump_cone(
+                attacker_state.phys.get_forward_dir(),
+                attacker_state.phys.get_right_dir(),
+                attacker_state.phys.get_up_dir(),
+                gate_vec,
+                false,
+            );
+
+            if !center_in_cone && !residual_in_cone {
+                continue;
+            }
+
+            let mut is_demo = match self.config.mutators.demo_mode {
+                DemoMode::OnContact => true,
+                DemoMode::Disabled => false,
+                DemoMode::Normal => {
+                    attacker_state.is_supersonic && {
+                        let fwd_speed = attacker_state
+                            .phys
+                            .vel
+                            .dot(attacker_state.phys.get_forward_dir());
+                        fwd_speed.abs() >= consts::car::supersonic::MAINTAIN_MIN_SPEED
+                            && is_within_demo_cone(
+                                attacker_state.phys.get_forward_dir(),
+                                attacker_state.phys.get_right_dir(),
+                                attacker_state.phys.get_up_dir(),
+                                delta_pos,
+                                fwd_speed < 0.0,
+                            )
+                    }
+                }
+            };
+            if is_demo && !self.config.mutators.enable_team_demos {
+                is_demo = attacker.team != victim.team;
+            }
+
+            if is_demo {
+                victim.demolish(self.config.mutators.respawn_delay);
+            } else {
+                let ground_hit = victim_state.cache.is_on_ground;
+                let attacker_speed = attacker_state.phys.vel.length().min(2200.0);
+                if ground_hit {
+                    // Grounded victim: Ground and Z curves on total attacker speed.
+                    let base_scale =
+                        consts::curves::BUMP_VEL_AMOUNT_GROUND.get_output(attacker_speed);
+
+                    let hit_up_dir = victim_state.phys.rot_mat.z_axis;
+
+                    let upward_vel_curve = &consts::curves::BUMP_UPWARD_VEL_AMOUNT;
+                    let upward_force = upward_vel_curve.get_output(attacker_speed)
+                        * self.config.mutators.bump_force_scale;
+                    let bump_impulse = (vel_dir * base_scale) + (hit_up_dir * upward_force);
+                    victim.vel_impulse_cache += bump_impulse * UU_TO_BT;
+                } else {
+                    // Airborne victim: Air curve on total attacker speed; no up term.
+                    let base_scale = consts::curves::BUMP_VEL_AMOUNT_AIR.get_output(attacker_speed);
+                    let bump_impulse = vel_dir * base_scale;
+                    victim.vel_impulse_cache += bump_impulse * UU_TO_BT;
+                }
+            }
+
+            attacker.state.bump_cooldown_timer = self.config.mutators.bump_cooldown_time;
+            attacker.state.bump_cooldown_victim = Some(victim_idx);
+
+            let contact_point = if is_swapped {
+                manifold_point.pos_world_on_b
+            } else {
+                manifold_point.pos_world_on_a
+            } * BT_TO_UU;
+
+            self.events.push(ArenaEvent::CarHitCar(CarHitCarEvent {
+                bumper_car_idx: attacker_idx,
+                victim_car_idx: victim_idx,
+                contact_point,
+                is_demo,
+            }));
+        }
+    }
+}

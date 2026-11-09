@@ -1,0 +1,40 @@
+[package]
+name = "rlgymppo"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Vendored rlgymppo 22c3575 with a mid-interval refresh for delay-0 external opponents"
+
+[dependencies]
+arrayvec = "0.7.6"
+burn = { version = "0.22.0", features = ["autodiff"] }
+hashbrown = "0.16.1"
+parking_lot = "0.12.4"
+rand = "0.10.1"
+rayon = "1.12.0"
+# Same git source as rlgymppo-utils (no ?rev=). Cargo.lock pins 1b7d894.
+# An explicit rev is a different source id and duplicates the rlgym crate.
+rlgym = { git = "https://github.com/VirxEC/rlgym_rs.git" }
+rlgymppo-model = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "22c3575aac18517089044a68a0fb8787c49b57b6" }
+rlgymppo-nexto = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "22c3575aac18517089044a68a0fb8787c49b57b6" }
+rlgymppo-utils = { git = "https://github.com/SentientPlatypus/indococo-ppo", rev = "22c3575aac18517089044a68a0fb8787c49b57b6" }
+rustc-hash = "2.1.1"
+serde = { version = "1.0.208", features = ["derive"] }
+serde_json = "1.0"
+toml = { version = "1.1.2", features = ["preserve_order"] }
+
+[features]
+default = []
+# The published crate's default pulls tui and wandb. This tree is only
+# linked with default-features = false, matching the training binary.
+tui = []
+wandb = []
+
+fusion = ["burn/fusion"]
+cuda = ["burn/cuda"]
+flex = ["burn/flex"]
+metal = ["burn/metal"]
+rocm = ["burn/rocm"]
+torch = ["burn/tch"]
+wgpu = ["burn/wgpu"]

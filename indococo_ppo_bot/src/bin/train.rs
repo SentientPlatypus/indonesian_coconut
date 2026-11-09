@@ -1940,8 +1940,13 @@ fn ripple_worker(mix: &[WeightedSetter], ckpt: &Path, rdir: &Path, games: usize,
                 }
             }
             g.env.step_physics(4);
-            
-            // Decision 2: Call build+infer again (Ripple will use updated action history)
+
+            // Decision 2 sees the arena after those 4 ticks. Assigning into
+            // g.state keeps its address, so Ripple's queue stays on the same
+            // key. pre_step already applied the candidate for the whole
+            // 8-tick interval; this does not build the candidate's obs.
+            g.state = g.env.current_state();
+
             if let Some(i) = ripple_car {
                 ripple.build(&g.state, i, &mut robs, &mut rmask);
                 let actions = ripple.infer(&robs, &rmask, 1);

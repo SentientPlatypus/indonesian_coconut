@@ -1,0 +1,305 @@
+use glam::Vec3A;
+
+use super::{
+    constraint_solver::seq_impulse_constraint_solver::SeqImpulseConstraintSolver,
+    rigid_body::{ActivationState, RigidBody, RigidBodyUpdateInfo},
+    simulation_island_manager::SimulationIslandManager,
+};
+use crate::{
+    bullet::{
+        collision::{
+            broadphase::{CollisionFilterGroups, GridBroadphase},
+            dispatch::{
+                collision_world::CollisionWorld,
+                quad_ray_callbacks::{QuadRayCallback, QuadRayResultCallback},
+            },
+            narrowphase::persistent_manifold::ContactAddedCallback,
+        },
+        dynamics::rigid_body::Impulse,
+    },
+    sim::UserInfoType,
+};
+
+#[derive(Clone)]
+pub struct DiscreteDynamicsWorld {
+    collision_world: CollisionWorld,
+    solver: SeqImpulseConstraintSolver,
+    dynamic_body_idcs: Vec<usize>,
+    island_manager: SimulationIslandManager,
+    gravity: Vec3A,
+    ball_only: bool,
+}
+
+impl DiscreteDynamicsWorld {
+    pub fn new(pair_cache: GridBroadphase, gravity: Vec3A) -> Self {
+        Self {
+            collision_world: CollisionWorld::new(pair_cache),
+            solver: SeqImpulseConstraintSolver::default(),
+            dynamic_body_idcs: Vec::new(),
+            island_manager: SimulationIslandManager::default(),
+            gravity,
+            ball_only: false,
+        }
+    }
+
+    pub(crate) fn set_gravity(&mut self, gravity: Vec3A) {
+        self.gravity = gravity;
+    }
+
+    pub(crate) fn remove_rigid_body(&mut self, body_idx: usize) {
+        assert!(body_idx < self.collision_world.collision_objs.len());
+
+        let proxy = self.collision_world.collision_objs[body_idx].get_broadphase_handle();
+        self.collision_world
+            .broadphase_pair_cache
+            .remove_proxy(proxy);
+        for body in &mut self.collision_world.collision_objs {
+            body.companion_id = None;
+        }
+
+        self.collision_world.collision_objs.remove(body_idx);
+        for (index, body) in self
+            .collision_world
+            .collision_objs
+            .iter_mut()
+            .enumerate()
+            .skip(body_idx)
+        {
+            body.world_array_idx = index;
+        }
+
+        self.collision_world
+            .broadphase_pair_cache
+            .remap_client_indices(body_idx);
+        self.collision_world.dispatcher1.remove_body(body_idx);
+        self.dynamic_body_idcs.retain(|&index| index != body_idx);
+        for index in &mut self.dynamic_body_idcs {
+            if *index > body_idx {
+                *index -= 1;
+            }
+        }
+
+        self.island_manager = SimulationIslandManager::default();
+        self.solver = SeqImpulseConstraintSolver::default();
+    }
+
+    pub(crate) fn update_body_properties(
+        &mut self,
+        body_idx: usize,
+        properties: RigidBodyUpdateInfo,
+    ) {
+        self.collision_world
+            .update_body_properties(body_idx, properties);
+    }
+
+    #[inline]
+    pub fn bodies_mut(&mut self) -> &mut [RigidBody] {
+        &mut self.collision_world.collision_objs
+    }
+
+    #[inline]
+    pub fn bodies(&self) -> &[RigidBody] {
+        &self.collision_world.collision_objs
+    }
+
+    #[inline]
+    pub(crate) fn set_ball_only(&mut self, ball_only: bool) {
+        self.ball_only = ball_only;
+    }
+
+    #[inline]
+    fn for_each_dynamic_body(&mut self, mut f: impl FnMut(&mut RigidBody)) {
+        let bodies = &mut self.collision_world.collision_objs;
+        if let [body_idx] = self.dynamic_body_idcs.as_slice() {
+            f(&mut bodies[*body_idx]);
+        } else {
+            for &body_idx in &self.dynamic_body_idcs {
+                f(&mut bodies[body_idx]);
+            }
+        }
+    }
+
+    pub fn refresh_aabbs(&mut self) {
+        self.collision_world.update_aabbs();
+    }
+
+    pub fn ray_test<T: QuadRayResultCallback>(
+        &self,
+        ray_from_world: &[Vec3A; 4],
+        ray_to_world: &[Vec3A; 4],
+        result_callback: &mut T,
+    ) {
+        let mut ray_cb = QuadRayCallback::new(
+            ray_from_world,
+            ray_to_world,
+            &self.collision_world,
+            result_callback,
+        );
+
+        self.collision_world.broadphase_pair_cache.ray_test(
+            ray_from_world,
+            ray_to_world,
+            &mut ray_cb,
+        );
+    }
+
+    #[inline]
+    fn add_collision_obj(&mut self, body: RigidBody, group: u8, mask: u8) -> usize {
+        self.collision_world.add_collision_obj(body, group, mask)
+    }
+
+    pub fn add_rigid_body_default(&mut self, body: RigidBody) -> usize {
+        let (group, mask) = if body.is_static_obj() {
+            (
+                CollisionFilterGroups::Static as u8,
+                CollisionFilterGroups::ALL ^ CollisionFilterGroups::Static,
+            )
+        } else {
+            (
+                CollisionFilterGroups::Default as u8,
+                CollisionFilterGroups::ALL,
+            )
+        };
+
+        let rb_idx = self.add_collision_obj(body, group, mask);
+
+        let rb = &mut self.collision_world.collision_objs[rb_idx];
+        if rb.is_static_obj() {
+            rb.set_activation_state(ActivationState::Sleeping);
+        } else {
+            self.dynamic_body_idcs.push(rb_idx);
+        }
+
+        rb_idx
+    }
+
+    pub fn add_rigid_body(&mut self, body: RigidBody, group: u8, mask: u8) -> usize {
+        let rb_idx = self.add_collision_obj(body, group, mask);
+
+        let rb = &mut self.collision_world.collision_objs[rb_idx];
+        if rb.is_static_obj() {
+            rb.set_activation_state(ActivationState::Sleeping);
+        } else {
+            self.dynamic_body_idcs.push(rb_idx);
+        }
+
+        rb_idx
+    }
+
+    fn apply_gravity(&mut self, time_step: f32) {
+        let impulse = Impulse::Linear(self.gravity * time_step);
+        self.for_each_dynamic_body(|body| {
+            if body.is_active() {
+                body.add_impulse(impulse, false, true);
+            }
+        });
+    }
+
+    fn predict_unconstraint_motion(&mut self, time_step: f32) {
+        self.for_each_dynamic_body(|body| {
+            debug_assert!(!body.is_static_obj());
+
+            if body.activation_state() == ActivationState::Sleeping {
+                body.interp_world_trans = *body.get_world_trans();
+                return;
+            }
+
+            body.apply_damping(time_step);
+            let predicted_trans = body.predict_integration_trans(time_step);
+            body.interp_world_trans = predicted_trans;
+        });
+    }
+
+    #[inline]
+    fn solve_constraints(&mut self, time_step: f32) {
+        let dispatcher = &mut self.collision_world.dispatcher1;
+        self.solver.solve_group(
+            &mut self.collision_world.collision_objs,
+            &self.dynamic_body_idcs,
+            &mut dispatcher.persistent_manifolds,
+            &mut dispatcher.active_manifolds,
+            time_step,
+        );
+    }
+
+    fn integrate_trans_internal(&mut self, time_step: f32) {
+        self.for_each_dynamic_body(|body| {
+            debug_assert!(!body.is_static_obj());
+            if !body.is_active() {
+                return;
+            }
+
+            let predicted_trans = body.predict_integration_trans(time_step);
+            body.set_center_of_mass_trans(predicted_trans);
+        });
+    }
+
+    fn integrate_trans(&mut self, time_step: f32) {
+        if !self.dynamic_body_idcs.is_empty() {
+            self.integrate_trans_internal(time_step);
+        }
+    }
+
+    fn update_activation_state(&mut self, time_step: f32) {
+        self.for_each_dynamic_body(|body| body.update_activation_state(time_step));
+    }
+
+    pub fn clear_accum_forces(&mut self) {
+        self.for_each_dynamic_body(RigidBody::clear_accum_vels);
+    }
+
+    #[inline]
+    pub fn clear_persistent_manifolds(&mut self) {
+        self.collision_world
+            .dispatcher1
+            .clear_persistent_manifolds();
+    }
+
+    /// Count cached contact manifolds for reuse diagnostics.
+    #[inline]
+    #[must_use]
+    pub fn num_persistent_manifolds(&self) -> usize {
+        self.collision_world.dispatcher1.persistent_manifolds.len()
+    }
+
+    fn internal_single_step_simulation<T: ContactAddedCallback>(
+        &mut self,
+        time_step: f32,
+        contact_added_callback: &mut T,
+    ) {
+        self.predict_unconstraint_motion(time_step);
+
+        self.collision_world
+            .perform_discrete_collision_detection(contact_added_callback);
+
+        let dynamic_pairs = self
+            .collision_world
+            .broadphase_pair_cache
+            .overlapping_dynamic_body_pairs();
+        self.island_manager.sort_manifolds(
+            &mut self.collision_world.collision_objs,
+            &self.dynamic_body_idcs,
+            dynamic_pairs,
+            &self.collision_world.dispatcher1.persistent_manifolds,
+            &mut self.collision_world.dispatcher1.active_manifolds,
+        );
+
+        let ball_only = self.ball_only
+            && self.dynamic_body_idcs.len() == 1
+            && self.collision_world.collision_objs[self.dynamic_body_idcs[0]].user_idx
+                == UserInfoType::Ball;
+        self.solver.skip_separated_special_rows = ball_only;
+        self.solve_constraints(time_step);
+        self.integrate_trans(time_step);
+        self.update_activation_state(time_step);
+    }
+
+    pub fn step_simulation<T: ContactAddedCallback>(
+        &mut self,
+        time_step: f32,
+        contact_added_callback: &mut T,
+    ) {
+        self.apply_gravity(time_step);
+        self.internal_single_step_simulation(time_step, contact_added_callback);
+    }
+}

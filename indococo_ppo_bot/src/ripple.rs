@@ -285,7 +285,7 @@ impl RipplePolicy {
     // detect_reset() removed - dead code, was only used in old eval_player path
     // Reset detection is now handled in build() with edge-triggered logic
 
-    fn update_ball_pred(&self, state: &GameState, st: &mut RippleState) {
+    fn update_ball_pred(state: &GameState, st: &mut RippleState) {
         // Ball-only Soccar, 120 Hz, one substep per tick (step_simulation(TICK_TIME)).
         // Python rocketsim 2.1.1 Arena(SOCCAR) defaults (ArenaConfig.h noBallRot=true;
         // RLConst.h): radius 91.25, mass 30, drag 0.03, friction 0.35, restitution
@@ -293,11 +293,15 @@ impl RipplePolicy {
         // arena sets no_ball_rot because 0.3.3's ArenaConfig default is false.
         // set_ball_state copies pos, vel, and ang_vel (rad/s). 5×120 ticks matches
         // obs.py reset_ball_slices (150 × arena.step(4), emit every 30).
-        // 0.3.3 still quantizes pos/vel/angvel inside step_tick (ANG_VEL_SCALE=10000).
-        // Python 2.1.1 removed that rounding. The ~0.003 spin gap is that residual.
+        // 0.3.3 quantizes pos/vel/angvel inside step_tick (base.rs, ANG_VEL_SCALE=10000).
+        // Python 2.1.1 removed that rounding. This arena is the only one that
+        // sets quantize_physics false. Arena::new / ArenaConfig::new leave it on,
+        // so the training arena still snaps.
         thread_local! {
             static ARENA: RefCell<Arena> = RefCell::new(Arena::new_with_config(
-                ArenaConfig::new(GameMode::Soccar).with_no_ball_rot(true),
+                ArenaConfig::new(GameMode::Soccar)
+                    .with_no_ball_rot(true)
+                    .with_quantize_physics(false),
             ));
         }
         
@@ -491,7 +495,6 @@ impl RipplePolicy {
 
     #[cfg(feature = "ripple")]
     fn build_obs_internal(
-        &self,
         state: &GameState,
         car: usize,
         st: &RippleState,
@@ -766,7 +769,6 @@ impl RipplePolicy {
     /// Stub signature when ripple feature is disabled
     #[cfg(not(feature = "ripple"))]
     fn build_obs_internal(
-        &self,
         _state: &GameState,
         _car: usize,
         _st: &RippleState,
@@ -784,6 +786,8 @@ impl RipplePolicy {
 
 impl ExternalPolicy for RipplePolicy {
     fn action_delay(&self) -> u8 {
+        // 0 asks the collector to decide again at tick_skip/2. The learner
+        // stays at tick skip 8; this policy's own cadence is 4.
         0
     }
 
@@ -873,7 +877,7 @@ impl ExternalPolicy for RipplePolicy {
             (st.was_kickoff, st.was_demoed, st.last_batch, st.last_tick_count, st.last_ball_pos, st.last_car_pos) = old_tracking;
             
             // Initialize ball predictions on reset
-            self.update_ball_pred(state, st);
+            Self::update_ball_pred(state, st);
         }
         
         // Update tracking for next call
@@ -886,9 +890,9 @@ impl ExternalPolicy for RipplePolicy {
         
         // Update timers and ball predictions each step
         self.update_timers(state, car, st);
-        self.update_ball_pred(state, st);
+        Self::update_ball_pred(state, st);
 
-        let (main, mut others, ball, mut actions, boosts, _is_flipped) = self.build_obs_internal(state, car, st);
+        let (main, others, ball, actions, boosts, _is_flipped) = Self::build_obs_internal(state, car, st);
 
         // Flatten into obs
         let mut offset = 0;
@@ -1691,17 +1695,56 @@ mod tests {
             }
             
             // Infer in game order (EC2 rip16: don't clone, batch_sim :1252 doesn't clone)
-            let obs_ref = flat_obs.lock().unwrap();
-            let mask_ref = flat_mask.lock().unwrap();
-            let actions = policy.infer(&obs_ref, &mask_ref, N_GAMES * N_CARS);
-            
-            // Apply actions and update states
+            let actions = {
+                let obs_ref = flat_obs.lock().unwrap();
+                let mask_ref = flat_mask.lock().unwrap();
+                policy.infer(&obs_ref, &mask_ref, N_GAMES * N_CARS)
+            };
+
+            // First half. Assign into the Vec element so the GameState
+            // address, and the queue key, stay put for the second decision.
             for g in 0..N_GAMES {
                 for car in 0..N_CARS {
                     let action_idx = g * N_CARS + car;
                     envs[g].arena.set_car_controls(car, controls_of(actions[action_idx]));
                 }
-                envs[g].step_physics(8);
+                envs[g].step_physics(4);
+                let mut states_lock = states.lock().unwrap();
+                states_lock[g] = envs[g].current_state();
+            }
+
+            let handles: Vec<_> = (0..N_GAMES * N_CARS).map(|idx| {
+                let policy = Arc::clone(&policy);
+                let states = Arc::clone(&states);
+                let flat_obs = Arc::clone(&flat_obs);
+                let flat_mask = Arc::clone(&flat_mask);
+                let game = idx / N_CARS;
+                let car = idx % N_CARS;
+                thread::spawn(move || {
+                    let mut obs_buf = flat_obs.lock().unwrap();
+                    let mut mask_buf = flat_mask.lock().unwrap();
+                    let row_start = idx * obs_width;
+                    let obs_slice = &mut obs_buf[row_start..row_start + obs_width];
+                    let mask_start = idx * N_ACTIONS;
+                    let mask_slice = &mut mask_buf[mask_start..mask_start + N_ACTIONS];
+                    let states_lock = states.lock().unwrap();
+                    policy.build(&states_lock[game], car, obs_slice, mask_slice);
+                })
+            }).collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+            let actions2 = {
+                let obs_ref = flat_obs.lock().unwrap();
+                let mask_ref = flat_mask.lock().unwrap();
+                policy.infer(&obs_ref, &mask_ref, N_GAMES * N_CARS)
+            };
+            for g in 0..N_GAMES {
+                for car in 0..N_CARS {
+                    let action_idx = g * N_CARS + car;
+                    envs[g].arena.set_car_controls(car, controls_of(actions2[action_idx]));
+                }
+                envs[g].step_physics(4);
                 let mut states_lock = states.lock().unwrap();
                 states_lock[g] = envs[g].current_state();
             }
@@ -2089,5 +2132,199 @@ mod tests {
             assert!((roll - roll_rounded).abs() < 1e-6,
                     "Action {}: roll {} not rounded to 3 decimals", i, roll);
         }
+    }
+
+    /// Obs the second Ripple decision would build, flattened the same way as `build`.
+    fn decision_obs(state: &GameState, car: usize) -> Vec<f32> {
+        let mut st = RippleState::new();
+        RipplePolicy::update_ball_pred(state, &mut st);
+        let (main, others, ball, actions, boosts, _) =
+            RipplePolicy::build_obs_internal(state, car, &st);
+        let mut obs = vec![0.0f32; 32 + 5 * 21 + 6 * 9 + 6 * 8 + 34 * 5];
+        let mut offset = 0;
+        obs[offset..offset + 32].copy_from_slice(&main);
+        offset += 32;
+        for other in &others {
+            obs[offset..offset + 21].copy_from_slice(other);
+            offset += 21;
+        }
+        for b in &ball {
+            obs[offset..offset + 9].copy_from_slice(b);
+            offset += 9;
+        }
+        for a in &actions {
+            obs[offset..offset + 8].copy_from_slice(a);
+            offset += 8;
+        }
+        for boost in &boosts {
+            obs[offset..offset + 5].copy_from_slice(boost);
+            offset += 5;
+        }
+        obs
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_second_decision_obs_sees_post_4_tick_state() {
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+
+        let mut env = crate::env::create_env(
+            &crate::rewards::RewardConfig::default(),
+            &crate::setters::default_mix(),
+        );
+        let (reset_state, _, _) = env.reset();
+        let mut ball = BallState::default();
+        ball.phys.pos = Vec3A::new(200.0, 400.0, 200.0);
+        ball.phys.vel = Vec3A::new(1800.0, 0.0, 200.0);
+        env.arena.set_ball_state(ball);
+        let mut state = env.current_state();
+        assert_eq!(state.cars.len(), reset_state.cars.len());
+
+        // Same local the h2h worker assigns into. The address is the queue key.
+        let state_ptr = &state as *const GameState;
+        let before = state.clone();
+        let obs_before = decision_obs(&before, 0);
+        let ball_at = 32 + 5 * 21;
+
+        let acts = vec![0usize; state.cars.len()];
+        env.pre_step(&state, &acts);
+        env.step_physics(4);
+        state = env.current_state();
+
+        assert_eq!(
+            state_ptr, &state as *const GameState,
+            "refreshing the state must keep its address"
+        );
+        assert_eq!(state.tick_count, before.tick_count + 4);
+        assert!(
+            (state.ball.phys.pos.x - before.ball.phys.pos.x).abs() > 20.0,
+            "ball x moved {} uu",
+            state.ball.phys.pos.x - before.ball.phys.pos.x
+        );
+
+        let obs_after = decision_obs(&state, 0);
+        let obs_if_stale = decision_obs(&before, 0);
+        let moved = (0..3)
+            .map(|i| obs_after[ball_at + i] - obs_before[ball_at + i])
+            .map(|d| d * d)
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            moved > 1e-3,
+            "second-decision ball obs should move with the 4-tick state, delta {moved}"
+        );
+        let stale_delta = (0..9)
+            .map(|i| obs_if_stale[ball_at + i] - obs_before[ball_at + i])
+            .map(|d| d * d)
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            stale_delta < 1e-6,
+            "building on the pre-step state repeats the first obs, delta {stale_delta}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "ripple")]
+    fn test_forecast_skips_quantize_and_game_arena_does_not() {
+        use rlgymppo::rlgym::rocketsim::init_from_default;
+        init_from_default(true).expect("load collision meshes");
+
+        let raw_ang = Vec3A::new(1.234999, -0.543219, 0.25);
+        let raw_vel = Vec3A::new(123.456, -50.0, 10.0);
+        let pos = Vec3A::new(0.0, 0.0, 500.0);
+
+        let quantize_ang = |v: f32| -> f32 {
+            const SCALE: f32 = 10_000.0;
+            let rounded = (v * SCALE) as i32 as f32 / SCALE;
+            if rounded == 0.0 {
+                rounded
+            } else {
+                rounded + rounded.signum() * (0.1 / SCALE)
+            }
+        };
+
+        let mut on = Arena::new_with_config(
+            ArenaConfig::new(GameMode::Soccar).with_no_ball_rot(true),
+        );
+        let mut off = Arena::new_with_config(
+            ArenaConfig::new(GameMode::Soccar)
+                .with_no_ball_rot(true)
+                .with_quantize_physics(false),
+        );
+        assert!(on.get_config().quantize_physics);
+        assert!(!off.get_config().quantize_physics);
+        assert!(Arena::new(GameMode::Soccar).get_config().quantize_physics);
+
+        let mut ball = BallState::default();
+        ball.phys.pos = pos;
+        ball.phys.vel = raw_vel;
+        ball.phys.ang_vel = raw_ang;
+        on.set_ball_state(ball);
+        off.set_ball_state(ball);
+
+        let mut env = crate::env::create_env(
+            &crate::rewards::RewardConfig::default(),
+            &crate::setters::default_mix(),
+        );
+        let (state, _, _) = env.reset();
+        env.arena.set_ball_state(ball);
+        let acts = vec![0usize; state.cars.len()];
+        let staged = env.current_state();
+        env.pre_step(&staged, &acts);
+        env.step_physics(1);
+        on.step_tick();
+        off.step_tick();
+
+        let game_ang = env.current_state().ball.phys.ang_vel.x;
+        let on_ang = on.get_ball_state().phys.ang_vel.x;
+        let off_ang = off.get_ball_state().phys.ang_vel.x;
+        let snapped = quantize_ang(raw_ang.x);
+        assert!(
+            (snapped - raw_ang.x).abs() > 5e-5,
+            "fixture should not already lie on the quantize grid"
+        );
+        assert!(
+            (on_ang - off_ang).abs() > 5e-5,
+            "quantize on {on_ang} vs off {off_ang}"
+        );
+        assert!(
+            (game_ang - on_ang).abs() < (game_ang - off_ang).abs(),
+            "game arena ang {game_ang} should stay with the quantizing tick {on_ang}, not {off_ang}"
+        );
+        assert!(
+            (game_ang - on_ang).abs() < 1e-4,
+            "game arena {game_ang} vs default arena {on_ang}"
+        );
+
+        for _ in 1..120 {
+            on.step_tick();
+            off.step_tick();
+        }
+        let mut st = RippleState::new();
+        RipplePolicy::update_ball_pred(&staged, &mut st);
+        let forecast = st.ball_preds[1];
+        let unquantized = off.get_ball_state();
+        let forecast_ang = Vec3A::new(forecast[6], forecast[7], forecast[8]);
+        let forecast_vel = Vec3A::new(forecast[3], forecast[4], forecast[5]);
+        assert!(
+            (forecast_ang - unquantized.phys.ang_vel).length() < 1e-4,
+            "forecast ang {:?} vs unquantized {:?}",
+            forecast_ang,
+            unquantized.phys.ang_vel
+        );
+        assert!(
+            (forecast_vel - unquantized.phys.vel).length() < 1e-3,
+            "forecast vel {:?} vs unquantized {:?}",
+            forecast_vel,
+            unquantized.phys.vel
+        );
+        let quantized = on.get_ball_state();
+        assert!(
+            (forecast_ang - quantized.phys.ang_vel).length() > 5e-5,
+            "forecast should leave the quantizing arena, got {:?}",
+            forecast_ang
+        );
     }
 }

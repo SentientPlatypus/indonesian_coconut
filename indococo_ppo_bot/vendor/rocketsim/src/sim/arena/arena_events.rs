@@ -1,0 +1,114 @@
+use glam::Vec3A;
+
+use crate::RaycastHitInfo;
+
+/// Ball touched a static surface this tick (wall, floor, ceiling, goal mesh).
+///
+/// `contact_point` is in uu, `contact_normal` points off the surface.
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BallHitWorldEvent {
+    pub contact_point: Vec3A,
+    pub contact_normal: Vec3A,
+}
+
+/// A car touched the ball this tick.
+///
+/// `extra_hit_vel` (uu/s) is the additional velocity from the car's hit
+/// impulse (on top of the physics-solver bounce). Zero when the contact
+/// added no extra impulse (e.g. repeated-contact guard).
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CarHitBallEvent {
+    pub car_idx: usize,
+    pub contact_point: Vec3A,
+    pub extra_hit_vel: Vec3A,
+}
+
+/// Two cars collided this tick (tested both directions).
+///
+/// `is_demo == true` means the victim was demolished; otherwise a bump
+/// impulse was cached for the victim. See [`crate::MutatorConfig`] demo rules.
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CarHitCarEvent {
+    pub bumper_car_idx: usize,
+    pub victim_car_idx: usize,
+    pub contact_point: Vec3A,
+    pub is_demo: bool,
+}
+
+/// A car touched a static surface; also stored as
+/// `CarState::world_contact_normal` for that tick.
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CarHitWorldEvent {
+    pub car_idx: usize,
+    pub contact_point: Vec3A,
+    pub contact_normal: Vec3A,
+}
+
+/// A car collected a boost pad (`boost_pad_idx` matches
+/// `Arena::get_boost_pad_config` order).
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CarPickupBoostEvent {
+    pub car_idx: usize,
+    pub boost_pad_idx: usize,
+}
+
+/// A car's `is_on_ground` flipped `false` → `true` this tick.
+///
+/// `wheels` is a copy of [`crate::CarState::wheels_with_contact`] at landing
+/// (at least 3 entries are `Some`; the rest are airborne wheels).
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CarLandedEvent {
+    pub car_idx: usize,
+    pub wheels: [Option<RaycastHitInfo>; 4],
+}
+
+/// One tick's contact/pickup notifications.
+///
+/// Returned by [`crate::Arena::step_tick`] and
+/// [`crate::Arena::get_last_step_events`]. The arena clears these events at
+/// the next tick or when [`crate::Arena::remove_car`] changes car indices.
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ArenaEvent {
+    BallHitWorld(BallHitWorldEvent),
+    CarHitBall(CarHitBallEvent),
+    CarHitCar(CarHitCarEvent),
+    CarHitWorld(CarHitWorldEvent),
+    CarPickupBoost(CarPickupBoostEvent),
+    CarLanded(CarLandedEvent),
+}
+
+//////////////////////////////////////
+
+#[derive(Debug, Clone)]
+pub(crate) struct ArenaEventList {
+    events: Vec<ArenaEvent>,
+}
+
+impl ArenaEventList {
+    const STARTING_CAPACITY: usize = 12;
+
+    pub fn new() -> Self {
+        Self {
+            events: Vec::with_capacity(Self::STARTING_CAPACITY),
+        }
+    }
+
+    pub fn push(&mut self, event: ArenaEvent) {
+        self.events.push(event);
+    }
+
+    pub fn events(&self) -> &[ArenaEvent] {
+        &self.events
+    }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+}
