@@ -118,6 +118,67 @@ to train only the critic first: the policy learning rate is 0 until the
 checkpoint reaches that step count, then normal PPO continues in the same
 process. A resumed run skips the finished part of the warm-up.
 
+### Collection overlap and league device
+
+Both default off. A toml that does not set them, including ST22 and ST23,
+keeps the sequential loop and the historical Galactus/Megabyte placement.
+Do not set `policy_bf16` or `critic_bf16`. An earlier bf16 trial raised KL.
+
+```toml
+async_collect = true
+league_bots_device = "cuda"   # or "cpu"; omit or "default" for the historical path
+```
+
+`async_collect` trains rollout N on the GPU while the collectors gather
+rollout N+1 with the weights from before that update. That is a one-iteration
+lag. PPO's importance ratio keeps using the log-probs stored at collection
+time (the behaviour policy). It does not recompute them from the updated
+net. The opponent for N+1 is chosen from the league as it stands before this
+update's snapshot, and that choice is cloned before `on_iteration` runs.
+Checkpoints still save the post-update weights, after the in-flight
+collection has been joined. The first rollout of a run is collected with no
+overlap. `transfer_learn` stays sequential.
+
+`league_bots_device` applies to Galactus and Megabyte only. Ripple keeps
+`RIPPLE_DEVICE`. The historical path (`default`, or the key omitted) already
+runs both on CUDA: Galactus on the learner device, Megabyte on `Cuda(0)`,
+one batched forward per collection pool per decision, on the calling
+thread's stream. `"cuda"` is that same placement plus a separate CUDA stream
+and TF32 off for the duration of their forward, so the matmul stays closer
+to fp32 and can overlap the policy kernels. `"cpu"` forces both onto the
+CPU. TF32 is process-wide, so a league or Ripple forward that turns it off
+can change kernels the PPO update launches in that window when collection
+and the update run at the same time.
+
+Build on the training box from `indococo_ppo_bot`. Run from
+`/home/ubuntu/indonesian_coconut` so the collision meshes resolve. The bench
+reads the launcher's filled toml (the template under `experiments/` still
+has `@` placeholders and will not parse). It copies the newest checkpoint
+in that toml into a temp directory and writes only there. It does not
+replace `exp_ST22/indococo-train` or write the live checkpoint folder. It
+does use the GPU, so idle the trainer first; a bench beside the live process
+contends for the L4 and the timings will not match a quiet box.
+
+```sh
+cd /home/ubuntu/ippo_runs/code_fr9/indococo_ppo_bot   # crate checkout on the box
+cargo build --release --features torch,ripple
+cd /home/ubuntu/indonesian_coconut
+/home/ubuntu/ippo_runs/code_fr9/indococo_ppo_bot/target/release/indococo-train \
+  speed-bench /home/ubuntu/ippo_runs/exp_ST22/train_st.toml 3
+```
+
+If the crate on the box is this commit checked out somewhere else, build
+there and point the binary at the same filled toml. `3` is the iteration
+count. Each iteration prints
+`SPEED collect_s=... update_s=... overlap_s=... wall_s=... steps=... sps=...`.
+`overlap_s` is how much of this rollout's collection ran during the previous
+update (`max(0, collect + update - parallel_wall)`). Iteration 1 is 0.
+`wall_s = collect_s + update_s - overlap_s`. Variants, in order: flags off,
+`async_collect` only, `league_bots_device = "cuda"` only, `"cpu"` only, both
+with cuda, both with cpu. This tree does not record those timings. See
+`EXPERIMENTS.md`. The bench keeps the toml's `policy_bf16` / `critic_bf16`
+(ST22's critic is bf16; the policy is fp32). The new paths do not turn bf16 on.
+
 ### Experiment config
 
 Everything below is optional in `train.toml`; leaving it out keeps the

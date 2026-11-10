@@ -58,6 +58,21 @@ void ripple_stream_set(void* stream) {
 #endif
 }
 
+// Put this thread back on the device default stream. League forwards switch
+// to a side stream and call this before the collector's own stream is
+// reapplied, so a thread that has no collector stream stays on the default.
+void ripple_stream_restore_default(int device) {
+#if defined(RIPPLE_LIBTORCH_CUDA)
+    if (!at::globalContext().hasCUDA()) {
+        return;
+    }
+    auto stream = c10::cuda::getDefaultCUDAStream(static_cast<c10::DeviceIndex>(device));
+    c10::cuda::setCurrentCUDAStream(stream);
+#else
+    (void)device;
+#endif
+}
+
 // `dst` and `src` are tch `torch::Tensor*` values. The destination is pinned
 // host memory. A blocking copy (non_blocking == 0) waits for the current
 // stream inside libtorch. torch 2.9 implements c10::cuda::stream_synchronize

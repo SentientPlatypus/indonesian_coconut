@@ -183,6 +183,7 @@ where
                     .zip(shards.iter_mut())
                     .map(|((collector, &share), shard)| {
                         scope.spawn(move || {
+                            let _side = crate::CollectSideGuard::enter();
                             let pool_start = Instant::now();
                             let report = collector.run_into_shard(model, self_play, share, shard);
                             (report, pool_start.elapsed().as_secs_f64())
@@ -216,6 +217,7 @@ where
             }
             self.metrics[COLLECT_MERGE_TIME_KEY] = merge_start.elapsed().as_secs_f64().into();
         } else if self.num_pools == 1 {
+            let _side = crate::CollectSideGuard::enter();
             let pool_start = Instant::now();
             let (memory, metrics) = self.collectors[0].run(model, self_play, shares[0]);
             pool_max_wall = pool_start.elapsed().as_secs_f64();
@@ -231,6 +233,7 @@ where
                     .zip(&shares)
                     .map(|(collector, &share)| {
                         scope.spawn(move || {
+                            let _side = crate::CollectSideGuard::enter();
                             let pool_start = Instant::now();
                             let out = collector.run(model, self_play, share);
                             (out, pool_start.elapsed().as_secs_f64())

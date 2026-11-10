@@ -333,6 +333,10 @@ pub struct GalactusPolicy {
     device: Device,
     /// Shuffle the empty player slots each step, as the C++ does.
     pub shuffle_slots: bool,
+    /// One batched forward on a side CUDA stream with TF32 off.
+    /// The historical path leaves this false and uses the calling thread's
+    /// current stream and the process TF32 flags.
+    pub side_stream: bool,
 }
 
 // Read-only tensors after load; inference only (as `rlgymppo_model::Net`).
@@ -389,7 +393,12 @@ impl GalactusPolicy {
         if layers.len() != 7 || layers.last().unwrap().ln.is_some() {
             return Err(format!("expected 6 hidden + 1 output layers, got {}", layers.len()));
         }
-        Ok(Self { layers, device: device.clone(), shuffle_slots: true })
+        Ok(Self {
+            layers,
+            device: device.clone(),
+            shuffle_slots: true,
+            side_stream: false,
+        })
     }
 
     /// Raw logits `[rows, 90]`, row-major.
@@ -462,9 +471,161 @@ impl ExternalPolicy for GalactusPolicy {
         action_mask(&state.cars[car].1, mask);
     }
     fn infer(&self, obs: &[f32], masks: &[bool], rows: usize) -> Vec<usize> {
-        masked_argmax(&self.logits(obs, rows), masks, rows)
+        // One forward for every car in this pool's decision. `logits` is
+        // already a single matmul batch; the side stream only changes where
+        // those kernels are queued.
+        let logits = if self.side_stream {
+            crate::league_stream::with_league_forward(|| self.logits(obs, rows))
+        } else {
+            self.logits(obs, rows)
+        };
+        masked_argmax(&logits, masks, rows)
     }
     fn controls(&self, action: usize) -> CarControls {
         controls_of(action)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A few thousand states through a tiny Galactus-shaped net (6 hidden
+    /// Linear+LayerNorm + 1 output Linear). The real 1024-wide weights are
+    /// not in the repo. CPU against itself is exact. CPU against CUDA, when
+    /// a device is present, uses the side-stream TF32-off path.
+    #[test]
+    fn cpu_matches_cuda_logits_and_actions() {
+        let rows = 4096;
+        let dir = std::env::temp_dir().join(format!("galactus-parity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        write_tiny_weights(&dir);
+
+        #[allow(deprecated)]
+        let cpu_dev = Device::libtorch();
+        let cpu = GalactusPolicy::load(&dir, &cpu_dev).unwrap();
+        let cpu_again = GalactusPolicy::load(&dir, &cpu_dev).unwrap();
+        let obs = probe_obs(rows);
+        let masks = probe_masks(rows);
+        let a = cpu.logits(&obs, rows);
+        let b = cpu_again.logits(&obs, rows);
+        let cpu_diff = max_abs(&a, &b);
+        assert!(
+            cpu_diff < 1e-6,
+            "cpu vs cpu max abs logit diff {cpu_diff}"
+        );
+        let cpu_actions = cpu.infer(&obs, &masks, rows);
+
+        if !tch::Cuda::is_available() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        #[allow(deprecated)]
+        let gpu_dev = Device::libtorch_cuda(0);
+        let mut gpu = GalactusPolicy::load(&dir, &gpu_dev).unwrap();
+        gpu.side_stream = true;
+        let g = gpu.logits(&obs, rows);
+        let diff = max_abs(&a, &g);
+        assert!(
+            diff < 1e-4,
+            "cpu vs cuda max abs logit diff {diff} over {rows} states"
+        );
+        let gpu_actions = gpu.infer(&obs, &masks, rows);
+        assert_actions_within_margin(&a, &cpu_actions, &gpu_actions);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn probe_obs(rows: usize) -> Vec<f32> {
+        (0..rows * OBS_SIZE)
+            .map(|i| ((i as f32) * 0.017).sin() * 0.5)
+            .collect()
+    }
+
+    fn probe_masks(rows: usize) -> Vec<bool> {
+        (0..rows * N_ACTIONS)
+            .map(|i| i % 7 != 0)
+            .collect()
+    }
+
+    fn max_abs(a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0, f32::max)
+    }
+
+    fn assert_actions_within_margin(logits: &[f32], cpu: &[usize], gpu: &[usize]) {
+        for (row, (c, g)) in cpu.iter().zip(gpu).enumerate() {
+            if c == g {
+                continue;
+            }
+            let row_logits = &logits[row * N_ACTIONS..(row + 1) * N_ACTIONS];
+            let best = row_logits[*c];
+            let second = row_logits
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != *c)
+                .map(|(_, v)| *v)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let margin = best - second;
+            assert!(
+                margin < 2e-4,
+                "row {row} action {c} vs {g} with margin {margin}"
+            );
+        }
+    }
+
+    fn write_tiny_weights(dir: &std::path::Path) {
+        let hidden = 32usize;
+        let widths = [
+            (OBS_SIZE, hidden, true),
+            (hidden, hidden, true),
+            (hidden, hidden, true),
+            (hidden, hidden, true),
+            (hidden, hidden, true),
+            (hidden, hidden, true),
+            (hidden, N_ACTIONS, false),
+        ];
+        let mut floats = Vec::new();
+        let mut meta = Vec::new();
+        for (i, (inp, out, ln)) in widths.into_iter().enumerate() {
+            push_tensor(
+                &mut meta,
+                &mut floats,
+                "Linear",
+                vec![out, inp],
+                |n| ((n + i * 17) as f32 * 0.013).sin() * 0.02,
+            );
+            push_tensor(&mut meta, &mut floats, "Linear", vec![out], |_| 0.0);
+            if ln {
+                push_tensor(&mut meta, &mut floats, "LayerNorm", vec![out], |_| 1.0);
+                push_tensor(&mut meta, &mut floats, "LayerNorm", vec![out], |_| 0.0);
+            }
+        }
+        let bytes: Vec<u8> = floats.iter().flat_map(|x| x.to_le_bytes()).collect();
+        std::fs::write(dir.join("galactus_weights.bin"), bytes).unwrap();
+        std::fs::write(
+            dir.join("galactus_weights.json"),
+            serde_json::to_string(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn push_tensor(
+        meta: &mut Vec<serde_json::Value>,
+        floats: &mut Vec<f32>,
+        kind: &str,
+        shape: Vec<usize>,
+        fill: impl Fn(usize) -> f32,
+    ) {
+        let n: usize = shape.iter().product();
+        let offset = floats.len();
+        floats.extend((0..n).map(fill));
+        meta.push(serde_json::json!({
+            "kind": kind,
+            "shape": shape,
+            "offset": offset,
+        }));
     }
 }

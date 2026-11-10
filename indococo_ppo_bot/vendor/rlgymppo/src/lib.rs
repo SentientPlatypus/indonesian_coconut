@@ -5,9 +5,11 @@ mod environment;
 
 pub mod utils;
 
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(not(feature = "tui"))]
 use std::io::{Read, stdin};
 use std::path::{Path, PathBuf};
@@ -54,6 +56,74 @@ use utils::running_stat::Stats;
 use utils::serde::{
     load_latest_model, resolve_model_folder, save_checkpoint as save_checkpoint_files,
 };
+
+thread_local! {
+    static COLLECT_SIDE: Cell<bool> = const { Cell::new(false) };
+}
+
+static COLLECT_STREAM_HOOK: AtomicUsize = AtomicUsize::new(0);
+
+/// Register the function a collection thread calls so its CUDA launches use
+/// a stream other than the learner thread's. `None` is not representable;
+/// pass a no-op or [`clear_collect_stream_hook`] when overlap is off.
+/// The function pointer must stay valid for the process.
+pub fn set_collect_stream_hook(hook: fn()) {
+    COLLECT_STREAM_HOOK.store(hook as usize, Ordering::Relaxed);
+}
+
+/// Drop the collection-stream hook. The next collection uses the calling
+/// thread's current stream, which is the historical path.
+pub fn clear_collect_stream_hook() {
+    COLLECT_STREAM_HOOK.store(0, Ordering::Relaxed);
+}
+
+/// If this thread is inside a collection, put its CUDA stream back.
+/// League forwards call this after they restore the default stream.
+pub fn reapply_collect_stream() {
+    if !COLLECT_SIDE.with(|c| c.get()) {
+        return;
+    }
+    let ptr = COLLECT_STREAM_HOOK.load(Ordering::Relaxed);
+    if ptr != 0 {
+        let hook: fn() = unsafe { std::mem::transmute(ptr) };
+        hook();
+    }
+}
+
+pub(crate) struct CollectSideGuard;
+
+impl CollectSideGuard {
+    pub(crate) fn enter() -> Self {
+        COLLECT_SIDE.with(|c| c.set(true));
+        let ptr = COLLECT_STREAM_HOOK.load(Ordering::Relaxed);
+        if ptr != 0 {
+            let hook: fn() = unsafe { std::mem::transmute(ptr) };
+            hook();
+        }
+        Self
+    }
+}
+
+impl Drop for CollectSideGuard {
+    fn drop(&mut self) {
+        COLLECT_SIDE.with(|c| c.set(false));
+    }
+}
+
+/// Seconds of `collect_s` and `update_s` that ran during `parallel_wall_s`.
+fn overlap_seconds(collect_s: f64, update_s: f64, parallel_wall_s: f64) -> f64 {
+    (collect_s + update_s - parallel_wall_s).max(0.0)
+}
+
+fn maybe_print_speed(collect_s: f64, update_s: f64, overlap_s: f64, wall_s: f64, steps: u64) {
+    if std::env::var_os("INDOCOCO_SPEED").is_none() {
+        return;
+    }
+    let sps = steps as f64 / wall_s.max(1e-12);
+    println!(
+        "SPEED collect_s={collect_s:.4} update_s={update_s:.4} overlap_s={overlap_s:.4} wall_s={wall_s:.4} steps={steps} sps={sps:.1}"
+    );
+}
 
 #[derive(Clone, Copy)]
 enum HumanInput {
@@ -568,6 +638,9 @@ pub struct LearnerConfig {
     /// Optional path to a local `.jsonl` file where per-iteration metrics are appended.
     /// Disabled by default and when `None`.
     pub metrics_jsonl: Option<PathBuf>,
+    /// Gather rollout N+1 with the pre-update policy while the PPO update
+    /// trains on rollout N. Off by default: the loop below stays sequential.
+    pub async_collect: bool,
 }
 
 impl Default for LearnerConfig {
@@ -598,6 +671,7 @@ impl Default for LearnerConfig {
             wandb_group_name: None,
             wandb_run_name: None,
             metrics_jsonl: None,
+            async_collect: false,
         }
     }
 }
@@ -906,6 +980,7 @@ impl LearnerConfig {
             version_mgr,
             skill_tracker,
             skill_metric_rx: Some(skill_metric_rx),
+            async_collect: self.async_collect,
         }
     }
 }
@@ -957,6 +1032,7 @@ where
     skill_metric_rx: Option<Receiver<SkillTrackerUpdate>>,
 
     collector: ThreadSim<SS, OBS, ACT, REW, TERM, TRUNC, SI>,
+    async_collect: bool,
 }
 
 impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
@@ -1079,6 +1155,260 @@ where
     }
 
     /// Train the model, and automatically saves it before exiting.
+    fn behaviour_model(&mut self) -> Actic {
+        let mut model = self.model.valid();
+        if let Some(quantizer) = &mut self.quantizer {
+            model = model.quantize_weights(quantizer);
+        }
+        model
+    }
+
+    fn publish_renderer(&self, model: &Actic) {
+        let (controls, start_rendering) = &*self.renderer_controls;
+        let mut guard = controls.lock();
+        guard.model = Some(model.clone());
+        drop(guard);
+        start_rendering.notify_all();
+    }
+
+    /// Opponent for the rollout about to be collected. Reads the version list
+    /// as it stands now and clones the chosen policy, so a later
+    /// `on_iteration` does not change this rollout.
+    fn pick_self_play(&mut self) -> Option<(Opponent, usize)> {
+        self.self_play_config
+            .pick_opponent(self.version_mgr.versions.len(), &mut self.rng)
+            .map(|pick| {
+                let old_team = if self.rng.next_u32().is_multiple_of(2) { 0 } else { 1 };
+                let (name, model) = match pick {
+                    OpponentPick::PastVersion(i) => {
+                        let v = &self.version_mgr.versions[i];
+                        (
+                            format!("old version {}", v.timesteps),
+                            Opponent::Model(v.model.clone()),
+                        )
+                    }
+                    OpponentPick::Fixed(i) => {
+                        let o = &self.self_play_config.fixed_opponents[i];
+                        (
+                            format!("fixed opponent {}", o.name),
+                            Opponent::Model(o.model.clone()),
+                        )
+                    }
+                    OpponentPick::External(i) => {
+                        let o = &self.self_play_config.external_opponents[i];
+                        (
+                            format!("external opponent {}", o.name),
+                            Opponent::External(o.policy.clone()),
+                        )
+                    }
+                };
+                #[cfg(not(feature = "tui"))]
+                println!(" > Training against {name} (team {old_team})");
+                #[cfg(feature = "tui")]
+                let _ = name;
+                (model, old_team)
+            })
+    }
+
+    fn collect_owned(&mut self) -> (Memory, Report, f64) {
+        let start = Instant::now();
+        let model = self.behaviour_model();
+        self.publish_renderer(&model);
+        let play = self.pick_self_play();
+        let (memory, report) = self.collector.run(model, play);
+        let elapsed = start.elapsed().as_secs_f64();
+        (memory.clone(), report, elapsed)
+    }
+
+    /// Train rollout N while collection of rollout N+1 runs on the policy
+    /// weights from before that update. The first rollout is collected with
+    /// no overlap. The stored log-probs are the behaviour policy's.
+    fn learn_overlapped(
+        &mut self,
+        metric_tx: &Sender<MetricEvent>,
+        input_rx: &Receiver<HumanInput>,
+        tui_notifier: Option<&TuiNotifier>,
+        initial_updates: u64,
+    ) {
+        let mut ready: Option<(Memory, Report)> = None;
+        let mut ready_collect_s = 0.0;
+        let mut ready_overlap_s = 0.0;
+
+        while self
+            .num_additional_iterations
+            .is_none_or(|n| self.stats.cumulative_model_updates - initial_updates < n)
+        {
+            if ready.is_none() {
+                let (memory, report, elapsed) = self.collect_owned();
+                ready = Some((memory, report));
+                ready_collect_s = elapsed;
+                ready_overlap_s = 0.0;
+            }
+            let (memory, mut metrics) = ready.take().unwrap();
+            let collect_elapsed = ready_collect_s;
+            let overlap_s = ready_overlap_s;
+
+            let updates_done = self.stats.cumulative_model_updates - initial_updates;
+            let last = self
+                .num_additional_iterations
+                .is_some_and(|n| updates_done + 1 >= n);
+
+            let mut next: Option<(Memory, Report, f64)> = None;
+            let mut prefetch_wall_s = 0.0;
+            let is_first_iteration = self.stats.cumulative_model_updates == 0;
+            let num_new_steps;
+            let update_s;
+            if last {
+                let parked = self.model.valid();
+                let model = std::mem::replace(&mut self.model, parked);
+                let train_start = Instant::now();
+                let (model, steps) = self.ppo.learn(
+                    model,
+                    &memory,
+                    &mut self.rng,
+                    &mut metrics,
+                    &mut self.stats,
+                    is_first_iteration,
+                );
+                self.model = model;
+                num_new_steps = steps;
+                update_s = train_start.elapsed().as_secs_f64();
+            } else {
+                // `learn` takes the network by value. Park a clone in `self.model`
+                // for the duration so the closure borrows `self` instead of moving it.
+                let prep_start = Instant::now();
+                let behaviour = self.behaviour_model();
+                let parked = behaviour.clone();
+                let model = std::mem::replace(&mut self.model, parked);
+                self.publish_renderer(&behaviour);
+                let play = self.pick_self_play();
+                let parallel_start = Instant::now();
+                let joined = std::thread::scope(|scope| {
+                    let collector = &mut self.collector;
+                    let handle = scope.spawn(move || {
+                        let start = Instant::now();
+                        let (memory, report) = collector.run(behaviour, play);
+                        (memory.clone(), report, start.elapsed().as_secs_f64())
+                    });
+                    let train_start = Instant::now();
+                    let (model, steps) = self.ppo.learn(
+                        model,
+                        &memory,
+                        &mut self.rng,
+                        &mut metrics,
+                        &mut self.stats,
+                        is_first_iteration,
+                    );
+                    let learn_s = train_start.elapsed().as_secs_f64();
+                    let collected = handle.join().expect("overlapped collection");
+                    (model, steps, learn_s, collected)
+                });
+                self.model = joined.0;
+                num_new_steps = joined.1;
+                // The weight copy that freezes the behaviour policy is on the
+                // critical path before both the update and the prefetch.
+                update_s = joined.2 + parallel_start.duration_since(prep_start).as_secs_f64();
+                next = Some(joined.3);
+                prefetch_wall_s = prep_start.elapsed().as_secs_f64();
+            }
+
+            let prev_timesteps = self.stats.cumulative_timesteps - num_new_steps as u64;
+            let nodiff_model_snapshot = self.model.valid();
+
+            if let Some(ref mut st) = self.skill_tracker {
+                st.poll_updates(&mut self.version_mgr.versions);
+            }
+            let cur_ratings = self.skill_tracker.as_ref().map(|st| &st.cur_ratings);
+            self.version_mgr.on_iteration(
+                &nodiff_model_snapshot,
+                self.stats.cumulative_timesteps,
+                prev_timesteps,
+                cur_ratings,
+            );
+
+            let ep_len = calculate_episode_length(&memory);
+            let wall_s = (collect_elapsed + update_s - overlap_s).max(1e-12);
+            metrics["Collect/episode length"] = ep_len.into();
+            metrics["Collect/timesteps"] = num_new_steps.into();
+            metrics["Timing/collection"] = collect_elapsed.into();
+            metrics["Timing/consumption"] = update_s.into();
+            metrics["Timing/overlap"] = overlap_s.into();
+            metrics["Timing/parallel_wall"] = prefetch_wall_s.into();
+            metrics["Throughput/collected"] =
+                (num_new_steps as f64 / collect_elapsed.max(1e-12)).into();
+            metrics["Throughput/consumption"] = (num_new_steps as f64 / update_s.max(1e-12)).into();
+            metrics["Throughput/overall"] = (num_new_steps as f64 / wall_s).into();
+            metrics["Cumulative/steps"] = self.stats.cumulative_timesteps.into();
+            metrics["Cumulative/epochs"] = self.stats.cumulative_epochs.into();
+            metrics["Cumulative/updates"] = self.stats.cumulative_model_updates.into();
+            maybe_print_speed(
+                collect_elapsed,
+                update_s,
+                overlap_s,
+                wall_s,
+                num_new_steps as u64,
+            );
+
+            let waiting_for_skill_eval = if let Some(ref mut st) = self.skill_tracker {
+                let eval_id =
+                    st.on_iteration(&nodiff_model_snapshot, &mut self.version_mgr.versions);
+                if eval_id.is_none() {
+                    st.report_ratings(&mut metrics);
+                }
+                eval_id
+            } else {
+                None
+            };
+
+            let _ = metric_tx.send(MetricEvent::Report(PendingMetricReport {
+                waiting_for_skill_eval,
+                #[cfg(feature = "tui")]
+                fresh_rating: false,
+                report: metrics,
+            }));
+
+            let (keep_running, handled_inputs) = self.drain_input(input_rx);
+            if let Some(notifier) = tui_notifier {
+                for input in handled_inputs {
+                    Self::notify_input(notifier, input);
+                }
+            } else {
+                drop(handled_inputs);
+            }
+
+            if let Some((next_memory, next_report, next_collect_s)) = next {
+                let hidden = if prefetch_wall_s > 0.0 {
+                    overlap_seconds(next_collect_s, update_s, prefetch_wall_s)
+                } else {
+                    0.0
+                };
+                if keep_running {
+                    ready = Some((next_memory, next_report));
+                    ready_collect_s = next_collect_s;
+                    ready_overlap_s = hidden;
+                }
+            }
+
+            if !keep_running {
+                break;
+            }
+
+            if self.stats.cumulative_timesteps - self.last_save_timestep > self.timesteps_per_save {
+                if let Some(notifier) = tui_notifier {
+                    let _ = notifier.notify("Auto-saving model...");
+                }
+                if let Some(ref st) = self.skill_tracker {
+                    self.stats.skill_ratings = Some(st.cur_ratings.data.clone());
+                }
+                self.save_checkpoint();
+                self.version_mgr.save_versions();
+                self.last_save_timestep = self.stats.cumulative_timesteps;
+            }
+
+            Self::print_controls_prompt();
+        }
+    }
+
     pub fn learn(mut self) {
         #[cfg(not(feature = "wandb"))]
         assert_eq!(
@@ -1187,6 +1517,19 @@ where
         Self::print_controls_prompt();
 
         let inital_cumulative_updates = self.stats.cumulative_model_updates;
+        if self.async_collect {
+            println!(
+                " > async_collect: rollout N+1 is gathered with the pre-update policy while \
+                 rollout N is trained. Importance ratios use the log-probs stored at collection. \
+                 The league snapshot used for N+1 is the one from before this update."
+            );
+            self.learn_overlapped(
+                &metric_tx,
+                &r,
+                tui_notifier.as_ref(),
+                inital_cumulative_updates,
+            );
+        } else {
         'train: while self
             .num_additional_iterations
             .is_none_or(|n| self.stats.cumulative_model_updates - inital_cumulative_updates < n)
@@ -1209,44 +1552,7 @@ where
             }
 
             // ── Self‑play: stochastically pick a past version or fixed opponent ──
-            let self_play = self
-                .self_play_config
-                .pick_opponent(self.version_mgr.versions.len(), &mut self.rng)
-                .map(|pick| {
-                    let old_team = if self.rng.next_u32().is_multiple_of(2) {
-                        0
-                    } else {
-                        1
-                    };
-                    let (name, model) = match pick {
-                        OpponentPick::PastVersion(i) => {
-                            let v = &self.version_mgr.versions[i];
-                            (
-                                format!("old version {}", v.timesteps),
-                                Opponent::Model(v.model.clone()),
-                            )
-                        }
-                        OpponentPick::Fixed(i) => {
-                            let o = &self.self_play_config.fixed_opponents[i];
-                            (
-                                format!("fixed opponent {}", o.name),
-                                Opponent::Model(o.model.clone()),
-                            )
-                        }
-                        OpponentPick::External(i) => {
-                            let o = &self.self_play_config.external_opponents[i];
-                            (
-                                format!("external opponent {}", o.name),
-                                Opponent::External(o.policy.clone()),
-                            )
-                        }
-                    };
-                    #[cfg(not(feature = "tui"))]
-                    println!(" > Training against {name} (team {old_team})");
-                    #[cfg(feature = "tui")]
-                    let _ = name;
-                    (model, old_team)
-                });
+            let self_play = self.pick_self_play();
 
             // collect steps
             let (memory, mut metrics) = self.collector.run(nodiff_model, self_play);
@@ -1291,11 +1597,19 @@ where
             metrics["Collect/timesteps"] = num_new_steps.into();
             metrics["Timing/collection"] = collect_elapsed.into();
             metrics["Timing/consumption"] = consumption_elapsed.into();
+            metrics["Timing/overlap"] = 0.0.into();
             metrics["Throughput/collected"] = (num_new_steps as f64 / collect_elapsed).into();
             metrics["Throughput/consumption"] =
                 (num_new_steps as f64 / consumption_elapsed.max(1e-12)).into();
-            metrics["Throughput/overall"] =
-                (num_new_steps as f64 / collect_start.elapsed().as_secs_f64()).into();
+            let wall_s = collect_start.elapsed().as_secs_f64();
+            metrics["Throughput/overall"] = (num_new_steps as f64 / wall_s).into();
+            maybe_print_speed(
+                collect_elapsed,
+                consumption_elapsed,
+                0.0,
+                wall_s,
+                num_new_steps as u64,
+            );
             metrics["Cumulative/steps"] = self.stats.cumulative_timesteps.into();
             metrics["Cumulative/epochs"] = self.stats.cumulative_epochs.into();
             metrics["Cumulative/updates"] = self.stats.cumulative_model_updates.into();
@@ -1348,6 +1662,7 @@ where
 
             Self::print_controls_prompt();
         }
+        }
 
         {
             // Make render thread exit
@@ -1399,6 +1714,11 @@ where
     pub fn transfer_learn(mut self, teacher: TeacherConfig, tl: TransferLearnConfig) {
         teacher.validate();
         tl.validate();
+        if self.async_collect {
+            println!(
+                " > async_collect is ignored by transfer_learn; distillation stays sequential."
+            );
+        }
 
         #[cfg(not(feature = "wandb"))]
         assert_eq!(
@@ -1817,5 +2137,13 @@ mod tests {
         );
 
         assert_eq!(calculate_episode_length(&memory), 1.5);
+    }
+
+    #[test]
+    fn overlap_hides_the_shorter_of_collect_and_update() {
+        assert!((overlap_seconds(1.4, 3.07, 3.07) - 1.4).abs() < 1e-9);
+        assert!((overlap_seconds(1.4, 3.07, 3.5) - 0.97).abs() < 1e-9);
+        assert_eq!(overlap_seconds(1.4, 3.07, 4.47), 0.0);
+        assert_eq!(overlap_seconds(1.0, 1.0, 3.0), 0.0);
     }
 }

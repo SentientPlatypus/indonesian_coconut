@@ -86,6 +86,26 @@ struct TrainConfig {
     /// Weighted reset mix, see `indococo_bot::setters`.
     #[serde(default = "default_mix")]
     state_setters: Vec<WeightedSetter>,
+    /// Gather rollout N+1 with the pre-update policy while rollout N is
+    /// trained. Off keeps the sequential loop.
+    #[serde(default)]
+    async_collect: bool,
+    /// Where Galactus and Megabyte run. `default` is the historical
+    /// placement (both on CUDA, the calling thread's stream). `cuda` is
+    /// that placement plus a side stream and TF32 off for their forward.
+    /// `cpu` forces both onto the CPU.
+    #[serde(default)]
+    league_bots_device: LeagueBotsDevice,
+}
+
+/// Device for the Galactus and Megabyte forwards.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum LeagueBotsDevice {
+    #[default]
+    Default,
+    Cpu,
+    Cuda,
 }
 
 /// `[lr_schedule]`: constant, or flat until `hold_steps` cumulative steps and
@@ -192,23 +212,33 @@ fn ripple_external_specs(cfg: &OpponentsConfig) -> Vec<ExternalOpponentConfig> {
     specs
 }
 
-/// Loads the external opponents (inference on `dev`).
-fn load_external_opponents(cfg: &OpponentsConfig, dev: &Device) -> Vec<ExternalOpponent> {
+/// Loads the external opponents. `league` selects the Galactus and
+/// Megabyte device. Ripple keeps its own `RIPPLE_DEVICE` selection.
+fn load_external_opponents(
+    cfg: &OpponentsConfig,
+    dev: &Device,
+    league: LeagueBotsDevice,
+) -> Vec<ExternalOpponent> {
     ripple_external_specs(cfg)
         .iter()
         .map(|o| {
             let policy: std::sync::Arc<dyn rlgymppo::ExternalPolicy> = match o.kind.as_str() {
-                "galactus" => std::sync::Arc::new(
-                    indococo_bot::galactus::GalactusPolicy::load(&o.path, dev)
-                        .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
-                ),
+                "galactus" => {
+                    let gdev = league_galactus_device(league, dev);
+                    let mut policy = indococo_bot::galactus::GalactusPolicy::load(&o.path, &gdev)
+                        .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name));
+                    policy.side_stream = league == LeagueBotsDevice::Cuda;
+                    std::sync::Arc::new(policy)
+                }
                 "megabyte" => {
-                    // Megabyte requires tch backend; map from Burn device
-                    let tch_dev = tch::Device::Cuda(0);  // TODO: extract index from dev when it's libtorch_cuda
-                    std::sync::Arc::new(
-                        indococo_bot::megabyte::MegabytePolicy::load(&o.path, tch_dev)
-                            .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
-                    )
+                    let tch_dev = match league {
+                        LeagueBotsDevice::Cpu => tch::Device::Cpu,
+                        LeagueBotsDevice::Default | LeagueBotsDevice::Cuda => tch::Device::Cuda(0),
+                    };
+                    let mut policy = indococo_bot::megabyte::MegabytePolicy::load(&o.path, tch_dev)
+                        .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name));
+                    policy.side_stream = league == LeagueBotsDevice::Cuda;
+                    std::sync::Arc::new(policy)
                 }
                 "ripple" => std::sync::Arc::new(
                     indococo_bot::ripple::RipplePolicy::load(&o.path)
@@ -313,6 +343,14 @@ fn precision(bf16: bool) -> ComputePrecision {
     }
 }
 
+#[allow(deprecated)]
+fn league_galactus_device(league: LeagueBotsDevice, learner: &Device) -> Device {
+    match league {
+        LeagueBotsDevice::Cpu => Device::libtorch(),
+        LeagueBotsDevice::Default | LeagueBotsDevice::Cuda => learner.clone(),
+    }
+}
+
 fn device(backend: &str) -> Device {
     match backend {
         #[cfg(feature = "torch")]
@@ -393,6 +431,7 @@ fn learner_config(
         render_device: device.clone(),
         device: device.autodiff(),
         skill_tracker_device: None,
+        async_collect: cfg.async_collect,
         ..Default::default()
     }
 }
@@ -400,11 +439,20 @@ fn learner_config(
 fn train(config: &Path) {
     let text = std::fs::read_to_string(config).expect("read train config");
     let cfg: TrainConfig = toml::from_str(&text).expect("parse train config");
+    train_cfg(cfg);
+}
+
+fn train_cfg(cfg: TrainConfig) {
+    if cfg.async_collect {
+        rlgymppo::set_collect_stream_hook(indococo_bot::install_league_collect_stream);
+    } else {
+        rlgymppo::clear_collect_stream_hook();
+    }
     let rewards = read_rewards(&cfg.reward_config);
     init_from_default(true).expect("load collision meshes");
     let dev = device(&cfg.backend);
     let fixed = load_fixed_opponents(&cfg.opponents, &dev);
-    let external = load_external_opponents(&cfg.opponents, &dev);
+    let external = load_external_opponents(&cfg.opponents, &dev, cfg.league_bots_device);
     for phase in plan_phases(&cfg, checkpoint_steps(&cfg.checkpoints)) {
         println!(
             "PHASE policy_lr={} iterations={:?}",
@@ -1022,6 +1070,94 @@ fn rates(setters_toml: &Path, candidate: &Path, opponent: &str, steps: usize, th
     println!("{out}");
 }
 
+fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Newest numeric checkpoint directory, if the folder exists and holds one.
+fn newest_checkpoint(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir).ok()?.flatten().filter_map(|e| {
+        let name = e.file_name();
+        let text = name.to_str()?;
+        text.parse::<u64>().ok().map(|n| (n, e.path()))
+    }).max_by_key(|(n, _)| *n).map(|(_, p)| p)
+}
+
+/// Four training shapes, plus the CPU league placement, each for `iters`
+/// PPO updates. Checkpoints are written only under a fresh temp directory.
+/// The newest checkpoint in the toml's `checkpoints` path is copied in
+/// (read-only) so the step count and network match that run; a missing
+/// folder starts from a fresh init. Prints one `SPEED` line per iteration.
+/// Iteration 1 has overlap 0. Later iterations report how much of that
+/// rollout's collection ran during the previous update.
+fn speed_bench(config: &Path, iters: u64) {
+    assert!(iters > 0, "speed-bench needs at least one iteration");
+    let text = std::fs::read_to_string(config).expect("read train config");
+    unsafe { std::env::set_var("INDOCOCO_SPEED", "1"); }
+    let variants = [
+        ("off", false, LeagueBotsDevice::Default),
+        ("async", true, LeagueBotsDevice::Default),
+        ("league_cuda", false, LeagueBotsDevice::Cuda),
+        ("league_cpu", false, LeagueBotsDevice::Cpu),
+        ("both", true, LeagueBotsDevice::Cuda),
+        ("both_cpu", true, LeagueBotsDevice::Cpu),
+    ];
+    println!(
+        "speed-bench iters={iters} (iteration 1 overlap is 0; later lines are the overlapped collect)"
+    );
+    for (name, async_collect, league) in variants {
+        let mut cfg: TrainConfig = toml::from_str(&text).expect("parse train config");
+        let dir = std::env::temp_dir().join(format!(
+            "indococo-speed-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp checkpoint dir");
+        let live_checkpoints = cfg.checkpoints.clone();
+        cfg.async_collect = async_collect;
+        cfg.league_bots_device = league;
+        cfg.iterations = iters;
+        cfg.critic_warmup_steps = 0;
+        cfg.save_every = u64::MAX / 4;
+        cfg.checkpoints = dir.clone();
+        if let Some(src) = newest_checkpoint(&live_checkpoints) {
+            let dst = dir.join(src.file_name().unwrap_or_default());
+            match copy_dir(&src, &dst) {
+                Ok(()) => println!(
+                    "VARIANT {name} resumed a read-only copy of {}",
+                    src.display()
+                ),
+                Err(e) => println!(
+                    "VARIANT {name} fresh init (copy {} failed: {e})",
+                    src.display()
+                ),
+            }
+        } else {
+            println!(
+                "VARIANT {name} fresh init (no checkpoint under {})",
+                live_checkpoints.display()
+            );
+        }
+        unsafe { std::env::set_var("INDOCOCO_METRICS", dir.join("metrics.jsonl")); }
+        println!("VARIANT {name} async_collect={async_collect} league_bots_device={league:?}");
+        train_cfg(cfg);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| -> &str {
@@ -1093,6 +1229,7 @@ fn main() {
             arg(2).parse().expect("steps"),
             Path::new(arg(3)),
         ),
+        "speed-bench" => speed_bench(Path::new(arg(1)), arg(2).parse().expect("iters")),
         other => panic!("unknown mode {other:?}"),
     }
 }
@@ -1570,6 +1707,18 @@ mod tests {
         assert_eq!(c.opponents.chance, 0.15);
         assert!(c.opponents.fixed.is_empty());
         assert_eq!(c.state_setters, default_mix());
+        assert!(!c.async_collect);
+        assert_eq!(c.league_bots_device, LeagueBotsDevice::Default);
+    }
+
+    #[test]
+    fn speed_flags_parse_and_default_off() {
+        let c = parse("async_collect = true\nleague_bots_device = \"cuda\"\n");
+        assert!(c.async_collect);
+        assert_eq!(c.league_bots_device, LeagueBotsDevice::Cuda);
+        let cpu = parse("league_bots_device = \"cpu\"\n");
+        assert_eq!(cpu.league_bots_device, LeagueBotsDevice::Cpu);
+        assert!(!cpu.async_collect);
     }
 
     #[test]

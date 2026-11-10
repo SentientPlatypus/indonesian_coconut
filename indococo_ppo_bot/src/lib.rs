@@ -16,6 +16,8 @@ pub mod events;
 pub mod expert;
 #[cfg(feature = "train")]
 pub mod galactus;
+#[cfg(feature = "torch")]
+mod league_stream;
 #[cfg(feature = "train")]
 pub mod megabyte;
 #[cfg(feature = "train")]
@@ -25,7 +27,15 @@ pub mod obs;
 pub mod resets;
 pub mod rewards;
 pub mod setters;
+pub mod speed;
 pub mod state;
+
+/// Collection-thread CUDA stream used when `async_collect` is on.
+/// Registered with `rlgymppo::set_collect_stream_hook`.
+#[cfg(feature = "torch")]
+pub fn install_league_collect_stream() {
+    league_stream::install_collect_stream();
+}
 
 /// Hidden layers of the policy and critic (`1v1.pt` DiscreteFF).
 pub const LAYERS: [usize; 4] = [2048, 2048, 1024, 1024];

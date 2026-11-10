@@ -461,6 +461,9 @@ pub struct MegabytePolicy {
     device: tch::Device,
     /// Shuffle the empty player slots each step, as the C++ does.
     pub shuffle_slots: bool,
+    /// One batched forward on a side CUDA stream with TF32 off.
+    /// The historical path leaves this false (Cuda(0), current stream).
+    pub side_stream: bool,
 }
 
 // Read-only tensors after load; inference only (as `rlgymppo_model::Net`).
@@ -472,7 +475,13 @@ impl MegabytePolicy {
     pub fn load(dir: &Path, device: tch::Device) -> Result<Self, String> {
         let shared = SequentialModule::load(&dir.join("SHARED_HEAD.lt"), device)?;
         let policy = SequentialModule::load(&dir.join("POLICY.lt"), device)?;
-        Ok(Self { shared, policy, device, shuffle_slots: true })
+        Ok(Self {
+            shared,
+            policy,
+            device,
+            shuffle_slots: true,
+            side_stream: false,
+        })
     }
 
     /// Raw logits `[rows, 90]`.
@@ -541,9 +550,145 @@ impl ExternalPolicy for MegabytePolicy {
         action_mask(&state.cars[car].1, mask);
     }
     fn infer(&self, obs: &[f32], masks: &[bool], rows: usize) -> Vec<usize> {
-        masked_argmax(&self.logits(obs, rows), masks, rows)
+        // One forward for every car in this pool's decision.
+        let logits = if self.side_stream {
+            crate::league_stream::with_league_forward(|| self.logits(obs, rows))
+        } else {
+            self.logits(obs, rows)
+        };
+        masked_argmax(&logits, masks, rows)
     }
     fn controls(&self, action: usize) -> CarControls {
         controls_of(action)
+    }
+}
+
+#[cfg(test)]
+impl MegabytePolicy {
+    /// Tiny Linear -> LayerNorm -> ReLU stack with the same forward as the
+    /// exported GigaLearn sequential. Hidden width 32, not the real 1024.
+    fn tiny(device: tch::Device) -> Self {
+        let shared = SequentialModule {
+            layers: tiny_stack(OBS_SIZE as i64, 32, device),
+            device,
+        };
+        let policy = SequentialModule {
+            layers: vec![
+                tiny_linear(32, N_ACTIONS as i64, 3.0, device),
+                tiny_layernorm(N_ACTIONS as i64, device),
+                Layer::ReLU,
+            ],
+            device,
+        };
+        // The real policy head is a final Linear with no ReLU. Keep a ReLU
+        // here so the test still covers that op; the last linear above is
+        // not last because of the LayerNorm. Add the true output linear.
+        let mut policy = policy;
+        policy.layers.push(tiny_linear(N_ACTIONS as i64, N_ACTIONS as i64, 5.0, device));
+        Self {
+            shared,
+            policy,
+            device,
+            shuffle_slots: false,
+            side_stream: false,
+        }
+    }
+}
+
+#[cfg(test)]
+fn tiny_linear(inp: i64, out: i64, seed: f32, device: tch::Device) -> Layer {
+    let n = (inp * out) as usize;
+    let w: Vec<f32> = (0..n)
+        .map(|i| ((i as f32 + seed) * 0.013).sin() * 0.02)
+        .collect();
+    let b = vec![0.0f32; out as usize];
+    Layer::Linear {
+        w: tch::Tensor::from_slice(&w)
+            .view([inp, out])
+            .to(device),
+        b: tch::Tensor::from_slice(&b).to(device),
+    }
+}
+
+#[cfg(test)]
+fn tiny_layernorm(dim: i64, device: tch::Device) -> Layer {
+    let ones = vec![1.0f32; dim as usize];
+    let zeros = vec![0.0f32; dim as usize];
+    Layer::LayerNorm {
+        weight: tch::Tensor::from_slice(&ones).to(device),
+        bias: tch::Tensor::from_slice(&zeros).to(device),
+        eps: 1e-5,
+    }
+}
+
+#[cfg(test)]
+fn tiny_stack(inp: i64, hidden: i64, device: tch::Device) -> Vec<Layer> {
+    vec![
+        tiny_linear(inp, hidden, 1.0, device),
+        tiny_layernorm(hidden, device),
+        Layer::ReLU,
+        tiny_linear(hidden, hidden, 2.0, device),
+        tiny_layernorm(hidden, device),
+        Layer::ReLU,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_matches_cuda_logits_and_actions() {
+        let rows = 4096;
+        let obs: Vec<f32> = (0..rows * OBS_SIZE)
+            .map(|i| ((i as f32) * 0.017).sin() * 0.5)
+            .collect();
+        let masks: Vec<bool> = (0..rows * N_ACTIONS).map(|i| i % 7 != 0).collect();
+        let cpu = MegabytePolicy::tiny(tch::Device::Cpu);
+        let cpu_again = MegabytePolicy::tiny(tch::Device::Cpu);
+        let a = cpu.logits(&obs, rows);
+        let b = cpu_again.logits(&obs, rows);
+        let cpu_diff = max_abs(&a, &b);
+        assert!(cpu_diff < 1e-6, "cpu vs cpu max abs logit diff {cpu_diff}");
+        assert_eq!(a.len(), rows * N_ACTIONS);
+
+        if !tch::Cuda::is_available() {
+            return;
+        }
+        let mut gpu = MegabytePolicy::tiny(tch::Device::Cuda(0));
+        gpu.side_stream = true;
+        let g = gpu.logits(&obs, rows);
+        let diff = max_abs(&a, &g);
+        assert!(
+            diff < 1e-4,
+            "cpu vs cuda max abs logit diff {diff} over {rows} states"
+        );
+        let cpu_actions = cpu.infer(&obs, &masks, rows);
+        let gpu_actions = gpu.infer(&obs, &masks, rows);
+        for (row, (c, g_act)) in cpu_actions.iter().zip(&gpu_actions).enumerate() {
+            if c == g_act {
+                continue;
+            }
+            let row_logits = &a[row * N_ACTIONS..(row + 1) * N_ACTIONS];
+            let best = row_logits[*c];
+            let second = row_logits
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != *c)
+                .map(|(_, v)| *v)
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                best - second < 2e-4,
+                "row {row} action {c} vs {g_act} with margin {}",
+                best - second
+            );
+        }
+    }
+
+    fn max_abs(a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0, f32::max)
     }
 }
