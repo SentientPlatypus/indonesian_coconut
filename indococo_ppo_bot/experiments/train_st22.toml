@@ -1,9 +1,11 @@
 # ST learner settings (EXPERIMENTS.md ST). Filled in by st_launch.sh from
-# st_<VARIANT>.env. ST22 = ST21 + OPPCH 0.70 (one change; chance = @OPPCH@ is
-# filled from st_ST22.env). Same gal4 setters as ST19/ST20/ST21 (normal play x0.8 +
-# aerial_defense 0.15 + demo_threat 0.05) and same league weights as ST21. With
-# OPPCH 0.70: Galactus 29.2% / Ripple 5.8% / Megabyte 9.1% / other league 25.9% /
-# self-play 30%. Measured vs BEST at launch (ST20r unless ST21 promotes).
+# st_<VARIANT>.env. ST22 = ST21 + air_dribble_wall_challenge at 10% of starts
+# (one change; binary indococo-train-rip-9d4b2a6). Other gal4 setters keep
+# their ST21 relative proportions, scaled by 0.9 (kickoff 0.324, random
+# 0.108+0.108, replay 0.180, aerial_defense 0.135, demo_threat 0.045).
+# SetterMix normalizes by total weight. League/OPPCH same as ST21 (0.60):
+# Galactus 25% / Ripple 5% / Megabyte 7.8%. Measured vs BEST at launch
+# (ST20r unless ST21 promotes).
 reward_config = "@RUN@/cfg/experiments/st.toml"
 checkpoints = "@RUN@/checkpoints"
 backend = "torch"
@@ -44,30 +46,34 @@ weight = 0.816
 
 [[state_setters]]
 kind = "kickoff"
-weight = 0.36
+weight = 0.324
 [[state_setters]]
 kind = "random"
-weight = 0.12
+weight = 0.108
 ball_speed = true
 car_speed = true
 [[state_setters]]
 kind = "random"
-weight = 0.12
+weight = 0.108
 ball_speed = true
 cars_on_ground = true
 [[state_setters]]
 kind = "replay"
-weight = 0.20
+weight = 0.180
 path = "@SNAP@"
 [[state_setters]]
 kind = "aerial_defense"
-weight = 0.15
+weight = 0.135
 [[state_setters]]
 kind = "demo_threat"
-weight = 0.05
+weight = 0.045
 
-# ST22: Rust Ripple v1.1 (e429d1a, LibTorch CUDA; RIPPLE_DEVICE=cuda), same
-# weight as ST21; ~5.8% of iterations (0.7*1.286/15.427) because OPPCH is 0.70.
+[[state_setters]]
+kind = "air_dribble_wall_challenge"
+weight = 0.10
+
+# ST22: Rust Ripple v1.1 (9d4b2a6 binary, LibTorch CUDA; RIPPLE_DEVICE=cuda) at
+# ~5% of iterations (0.6*1.286/15.427), same weight as ST21.
 [[opponents.external]]
 name = "ripple"
 kind = "ripple"

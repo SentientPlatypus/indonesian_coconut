@@ -1483,7 +1483,7 @@ boost = [30.0, 100.0]
 ```
 
 #### `air_dribble_wall_challenge` (configurable, default off)
-Mid air dribble with the other car on a wall between the ball and its own goal, wheels on the wall and jump still available. Trains keeping the ball when a wall defender (Galactus, Megabyte) jumps off, boosts, and 50/50s the dribble. Which car dribbles is random and the field is mirrored, so each team practices both roles. Same side wall 60%, back wall by the challenger's goal 25%, opposite side wall 15% (`same_wall_frac`, `back_wall_frac`, `opposite_wall_frac`). Absent from a mix, weight is 0 and existing configs are unchanged.
+Mid air dribble with the other car on a wall between the ball and its own goal, wheels on the wall and jump still available. Trains keeping the ball when a wall defender (Galactus, Megabyte) jumps off, boosts, and 50/50s the dribble. Which car dribbles is random and the field is mirrored, so each team practices both roles. Same side wall 60%, back wall by the challenger's goal 25%, opposite side wall 15% (`same_wall_frac`, `back_wall_frac`, `opposite_wall_frac`). Absent from a mix, weight is 0 and existing configs are unchanged. ST22 is the first run to schedule it, at 10% of starts.
 
 **Integration:** Exposed via the `[[state_setters]]` toml config chain (train_st.toml, st.toml, etc.) following the existing pattern. Existing configs with no `aerial_defense`, `demo_threat`, or `air_dribble_wall_challenge` entry behave identically (weight = 0 when absent).
 
@@ -1576,6 +1576,14 @@ Recipe unchanged from `cd89eae`. Gal4 setters, OPPCH 0.60, Megabyte `MEGA_WEIGHT
 
 Started from ST20r's checkpoint at 17642.6M, training toward 18642.6M, measured against ST20r.
 
-## ST22 (queued after ST21): OPPCH 0.60 -> 0.70
+## ST22 (queued after ST21): air_dribble_wall_challenge at 10% of starts
 
-One change on the ST21 recipe: league fraction vs self-play 60% to 70% (`experiments/st_ST22.env`, `experiments/train_st22.toml`). League weights stay ST21's (GAL 6.429, MEGA 2.0, Ripple toml 1.286, others 0.816, total 15.427). `RIPPLE_DEVICE=cuda` is exported. `RIPPLE_WEIGHT` is not set. Realized shares at OPPCH 0.70: Galactus 29.2%, Ripple 5.8% (`0.7*1.286/15.427`), Megabyte 9.1%, other league 25.9%, self-play 30%. Measured vs the BEST in force at launch (ST20r, unless ST21 promotes).
+One change on the ST21 recipe, plus the binary that contains the setter (`experiments/st_ST22.env`, `experiments/train_st22.toml`). Galactus and Megabyte jump off the wall and 50/50 the bot mid air dribble, and it loses possession. `air_dribble_wall_challenge` (commit `9d4b2a6`) is 10% of starts (weight 0.10). The other gal4 setters keep ST21's relative proportions, scaled by 0.9: kickoff 0.324, random 0.108+0.108, replay 0.180, aerial_defense 0.135, demo_threat 0.045. The weights sum to 1, and SetterMix samples in [0, total weight), so 0.10 is 10% of episodes.
+
+League and OPPCH stay ST21's: OPPCH 0.60, GAL 6.429, MEGA 2.0, Ripple toml 1.286, others 0.816, total 15.427. Realized shares: Galactus 25.0%, Ripple 5.0% (`0.6*1.286/15.427`), Megabyte 7.8%, other league 22.2%, self-play 40%. Binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-9d4b2a6`. ST21 stays on `indococo-train-rip-e429d1a`. `RIPPLE_DEVICE=cuda` is exported. `RIPPLE_WEIGHT` is not set. Measured vs the BEST in force at launch (ST20r, unless ST21 promotes).
+
+Box check of `9d4b2a6`: 88 lib tests passed. A pools=2 smoke from the ST20r checkpoint with the setter at weight 0.5 gave share 0.386 (expected 0.333), average episode length 346, flip-reset events fired, and no panics.
+
+## ST23 (queued after ST22): OPPCH 0.60 -> 0.70
+
+One change on ST22: league fraction vs self-play 60% to 70% (`experiments/st_ST23.env`, `experiments/train_st23.toml`). Conditional on ST22 not regressing. If ST22 regresses, the setter mix and the OPPCH bump are not a combined success. Inherits ST22's setter mix (`air_dribble_wall_challenge` at 10%) and binary `indococo-train-rip-9d4b2a6`. League weights stay ST21/ST22's (GAL 6.429, MEGA 2.0, Ripple toml 1.286, others 0.816, total 15.427). `RIPPLE_DEVICE=cuda` is exported. `RIPPLE_WEIGHT` is not set. Realized shares at OPPCH 0.70: Galactus 29.2%, Ripple 5.8% (`0.7*1.286/15.427`), Megabyte 9.1%, other league 25.9%, self-play 30%. Measured vs the BEST in force at launch (ST20r, unless ST21 or ST22 promotes).

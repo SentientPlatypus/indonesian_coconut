@@ -1298,7 +1298,7 @@ The panel is mixed. Ripple's ST20 share was toml weight 1.286. `RIPPLE_WEIGHT` w
 
 ST21 kept that recipe (Ripple 5%, Megabyte 7.8%, Galactus 25% via `GAL_WEIGHT` 6.429) and later started from ST20r. See §11.8r. `RIPPLE_DEVICE=cuda` is exported in the env. `RIPPLE_WEIGHT` is not set. Binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-e429d1a`.
 
-### 11.8r ST20r promoted; ST21 training vs ST20r; ST22 queued (2026-11-10)
+### 11.8r ST20r promoted; ST21 training vs ST20r; ST22 then ST23 queued (2026-11-10)
 
 ST20r is the current best. User-approved manual promote 2026-11-10 00:16 ET. Checkpoint `exp_ST20r/checkpoints/1794276990` at 17642.6M, continued from ST20's selected checkpoint at 16880.9M, same ST20 recipe (Ripple 5%, Galactus 20%, Megabyte 7.8%). Shipped as `checkpoints_to_test/st20r_17643M.bpk` (commit `7504b5a`). ST19r (`st19r_15919M.bpk`) is the previous best.
 
@@ -1317,7 +1317,9 @@ Gates vs ST19r all pass: h2h 56.4 ≥ 52, FR4 75.8 ≥ 70.6, pool 92.42 ≥ 91.6
 
 ST21 is training (started 2026-11-10 04:44 UTC) from 17642.6M toward 18642.6M, measured against ST20r. Recipe unchanged from `cd89eae`: Galactus 25% / Ripple 5% (toml weight 1.286) / Megabyte 7.8%. `RIPPLE_WEIGHT` is not set.
 
-ST22 is queued after ST21 (`indococo_ppo_bot/experiments/st_ST22.env`, `train_st22.toml`). One change: OPPCH 0.60 to 0.70. Realized shares: Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%, other league 25.9%, self-play 30%. League weights stay ST21's. Measured vs the BEST in force at launch.
+ST22 is queued after ST21 (`indococo_ppo_bot/experiments/st_ST22.env`, `train_st22.toml`). One change on the ST21 recipe: `air_dribble_wall_challenge` at 10% of starts (weight 0.10; other gal4 setters scaled by 0.9). Galactus and Megabyte jump off the wall and 50/50 the bot mid air dribble, and it loses possession. League and OPPCH stay ST21's (0.60): Galactus 25.0%, Ripple 5.0%, Megabyte 7.8%, other league 22.2%, self-play 40%. Binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-9d4b2a6` (ST21 stays on e429d1a). `RIPPLE_WEIGHT` is not set. Measured vs the BEST in force at launch (ST20r unless ST21 promotes). Box check of `9d4b2a6`: 88 lib tests passed. A pools=2 smoke from the ST20r checkpoint at setter weight 0.5 gave share 0.386 (expected 0.333), average episode length 346, flip-reset events fired, and no panics.
+
+ST23 is queued after ST22 (`st_ST23.env`, `train_st23.toml`). One change: OPPCH 0.60 to 0.70, conditional on ST22 not regressing. Same setter mix and binary as ST22. Realized shares: Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%, other league 25.9%, self-play 30%. League weights stay ST21's. `RIPPLE_WEIGHT` is not set. Measured vs the BEST in force at launch (ST20r unless ST21 or ST22 promotes).
 
 ## Appendix A: data and figures
 

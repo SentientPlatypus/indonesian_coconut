@@ -427,9 +427,21 @@ OPPCH 0.60, binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-e429d1a`.
 `experiments/st_ST21.env` exports `RIPPLE_DEVICE=cuda` and does not set `RIPPLE_WEIGHT`.
 
 ST22 is queued after ST21 (`experiments/st_ST22.env`, `experiments/train_st22.toml`):
-ST21 with one change, OPPCH 0.60 to 0.70. Realized shares: Galactus 29.2%, Ripple 5.8%,
-Megabyte 9.1%, other league 25.9%, self-play 30%. League weights stay those of ST21.
-`RIPPLE_WEIGHT` is not set. Measured vs the BEST in force at launch.
+ST21 plus `air_dribble_wall_challenge` at 10% of starts. Galactus and Megabyte
+jump off the wall and 50/50 the bot mid air dribble, and it loses possession.
+The other gal4 setters keep ST21's proportions scaled by 0.9 (kickoff 0.324,
+random 0.108+0.108, replay 0.180, aerial_defense 0.135, demo_threat 0.045).
+League and OPPCH stay ST21's (0.60): Galactus 25.0%, Ripple 5.0%, Megabyte 7.8%,
+other league 22.2%, self-play 40%. Binary
+`/opt/dlami/nvme/ippo_bins/indococo-train-rip-9d4b2a6` (ST21 stays on e429d1a).
+`RIPPLE_DEVICE=cuda`. `RIPPLE_WEIGHT` is not set. Measured vs the BEST in force
+at launch (ST20r unless ST21 promotes).
+
+ST23 is queued after ST22 (`experiments/st_ST23.env`, `experiments/train_st23.toml`):
+ST22 plus OPPCH 0.60 to 0.70, only if ST22 does not regress. Same setter mix and
+the same `9d4b2a6` binary. Realized shares: Galactus 29.2%, Ripple 5.8%,
+Megabyte 9.1%, other league 25.9%, self-play 30%. `RIPPLE_WEIGHT` is not set.
+Measured vs the BEST in force at launch (ST20r unless ST21 or ST22 promotes).
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench
