@@ -14,7 +14,21 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
-### st20r_17643M.bpk (current best)
+### st21_18054M.bpk (current best)
+
+| | |
+|---|---|
+| Lineage | ST21 (ST20r recipe + Galactus 25% / Ripple 5% / Megabyte 7.8%, GAL_WEIGHT 6.429, MEGA_WEIGHT 2.0, Ripple toml 1.286, OPPCH 0.60, ENT 0.016, gal4 setters), continued from ST20r 17642.6M, keep-best chunk `1794296692` (18053.6M steps; training ended at 18642.8M). 106-input obs (`INDOCOCO_OBS_EXT=1`). **Manual promote** 2026-11-10 08:57 ET (user). The auto gate failed only on bp5 68.17 vs ST20r 69.74 (about 1.6 short of the −1.0 tolerance). All other gates passed |
+| H2H | **52.8%** vs ST20r (264-236), **75.4%** vs FR4 (ST20r 75.8%), over 500 games each |
+| Pool | **92.75** on pool400 (ST20r 92.42): 1v1.pt 85.5, 430M 85.0, Nexto 92.5, Necto 98.25, Element 98.5, Immortal 96.75 |
+| Botpack5 | **68.17** avg (ST20r 69.74): Ripple 71.75, Kira 66.5, Dice 57.25, Chronos 76.75, Galactus 37.0, Seer 99.75 |
+| Galactus | **35.6%** over 500 games (ST20r 34.2%) |
+| Megabyte | **81.6%** over 500 games (report-only; ST20r 79.2%) |
+| Gen panel | min **0.356** / mean **0.8034** (ST20r 0.342 / 0.8107) |
+| sha256 | `505b0249d4c233bdf8b40e46a5b4422065fdef79c5b8890ebde36b107bd6a9e5` |
+
+### st20r_17643M.bpk
+
 
 | | |
 |---|---|
