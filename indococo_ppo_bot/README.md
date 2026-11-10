@@ -404,20 +404,32 @@ iteration at about 2.1× a normal one. Early ST20 production does not: Ripple wa
 17/346 iterations (4.9%), the median Ripple iteration took about 5.5 s (the same as other iterations),
 and throughput is 51.2k steps/s against 54.5k for ST19r (about −6%).
 
-ST20 finished and was not promoted. The user declined on Nov 9. BEST stays ST19r
-(`checkpoints_to_test/st19r_15919M.bpk`). Selected checkpoint
+ST20 finished and was not promoted. The user declined on Nov 9. Selected checkpoint
 `exp_ST20/checkpoints/1794253717` at 16880.9M (`st20_final`). Finals vs ST19r: h2h 54.4,
 FR4 73.6 (ST19r 71.6), pool 91.88 (92.62), bp5 67.0 (67.38), Galactus 33.0 (34.2),
 Megabyte 78.8 (report-only), gen-panel min 0.33 / mean 0.7954 (ST19r 0.342 / 0.800).
-No bpk was exported.
+No bpk was exported. ST19r (`checkpoints_to_test/st19r_15919M.bpk`) was BEST until ST20r.
 
-ST21 is queued after the running ST20r (`experiments/st_ST21.env`,
-`experiments/train_st21.toml`). It keeps the ST20 recipe: Ripple weight 1.286 in the
-toml (5% of iterations), Megabyte `MEGA_WEIGHT=2.0` (7.8%), gal4 setters, OPPCH 0.60,
-binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-e429d1a`. `st_ST21.env` exports
-`RIPPLE_DEVICE=cuda` and does not set `RIPPLE_WEIGHT`. The one change is Galactus from
-20% to 25% (`GAL_WEIGHT` 6.429, was 5.143). The extra 5% comes from past versions, FR4,
-and EXTRA_OPPS, each scaled to 0.816. Evals stay against ST19r.
+ST20r is the current best (user-approved manual promote 2026-11-10 00:16 ET). Checkpoint
+`exp_ST20r/checkpoints/1794276990` at 17642.6M, continued from ST20 16880.9M, same ST20
+recipe (Ripple 5%, Galactus 20%, Megabyte 7.8%). Shipped as
+`checkpoints_to_test/st20r_17643M.bpk` (commit `7504b5a`). Finals: h2h 58.4% vs ST20
+(the auto-gate baseline), FR4 75.8, pool400 92.42, bp5 69.74, Galactus 34.2, Megabyte
+79.2 (report-only), gen-panel min 0.342 / mean 0.8107. A separate 500-game h2h vs ST19r
+is 282-218 (56.4%). Gates vs ST19r all pass: h2h 56.4 ≥ 52, FR4 75.8 ≥ 70.6, pool 92.42
+≥ 91.62, bp5 69.74 ≥ 66.38, Galactus 34.2 ≥ 30.2. Previous best ST19r: FR4 71.6, pool
+92.62, bp5 67.38, Galactus 34.2, Megabyte 81.0, gen-panel mean 0.800.
+
+ST21 is training (started 2026-11-10 04:44 UTC) from that 17642.6M checkpoint toward
+18642.6M, measured against ST20r. Recipe unchanged from `cd89eae`: Galactus 25% /
+Ripple 5% (toml weight 1.286) / Megabyte 7.8% (`MEGA_WEIGHT=2.0`), gal4 setters,
+OPPCH 0.60, binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-e429d1a`.
+`experiments/st_ST21.env` exports `RIPPLE_DEVICE=cuda` and does not set `RIPPLE_WEIGHT`.
+
+ST22 is queued after ST21 (`experiments/st_ST22.env`, `experiments/train_st22.toml`):
+ST21 with one change, OPPCH 0.60 to 0.70. Realized shares: Galactus 29.2%, Ripple 5.8%,
+Megabyte 9.1%, other league 25.9%, self-play 30%. League weights stay those of ST21.
+`RIPPLE_WEIGHT` is not set. Measured vs the BEST in force at launch.
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench
