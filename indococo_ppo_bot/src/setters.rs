@@ -37,8 +37,10 @@ use serde::Deserialize;
 
 use crate::curriculum::CurriculumLog;
 
-/// Side wall `|x|`, and the car's half height when resting on a surface.
+/// Side wall `|x|`, back wall `|y|`, and the car's half height when resting
+/// on a surface.
 const SIDE_WALL_X: f32 = 4096.0;
+const BACK_WALL_Y: f32 = 5120.0;
 const CAR_REST_HEIGHT: f32 = 17.0;
 
 /// One entry of the mix.
@@ -85,6 +87,9 @@ pub enum SetterKind {
     AerialDefense(AerialDefense),
     /// Demo threat starts: opponent supersonic heading toward our car.
     DemoThreat(DemoThreat),
+    /// Mid air dribble, with the other car on a wall between the ball and
+    /// that car's own goal, ready to jump off and challenge.
+    AirDribbleWallChallenge(AirDribbleWallChallenge),
 }
 
 impl SetterKind {
@@ -102,6 +107,7 @@ impl SetterKind {
             Self::ResetReplay(_) => "reset_replay",
             Self::AerialDefense(_) => "aerial_defense",
             Self::DemoThreat(_) => "demo_threat",
+            Self::AirDribbleWallChallenge(_) => "air_dribble_wall_challenge",
         }
     }
 }
@@ -227,6 +233,7 @@ impl SetterKind {
             }
             Self::AerialDefense(ref s) => Box::new(s.clone()),
             Self::DemoThreat(ref s) => Box::new(s.clone()),
+            Self::AirDribbleWallChallenge(ref s) => Box::new(s.clone()),
         }
     }
 }
@@ -778,6 +785,247 @@ impl<SI: SharedInfoRng> StateSetter<SI> for DemoThreat {
     }
 }
 
+/// Which wall the challenger defends from.
+#[derive(Clone, Copy)]
+enum ChallengeWall {
+    /// Same side wall as the dribble, ahead of the ball.
+    Same,
+    /// Back wall beside the challenger's own goal.
+    Back,
+    /// The other side wall, still goal-side of the ball.
+    Opposite,
+}
+
+/// Air-dribble 50/50: one car carries the ball in the air along a side, and
+/// the other is on a wall between the ball and its own goal, wheels on the
+/// wall and jump still available. Which car dribbles is random, and the
+/// field is mirrored, so each team practices both roles. Weight 0 leaves the
+/// default mix unchanged.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AirDribbleWallChallenge {
+    /// Dribbler height.
+    pub dribbler_height: [f32; 2],
+    /// Gap between the dribbler and the side wall when it hugs the wall.
+    pub off_wall: [f32; 2],
+    /// Chance the dribbler is farther into the field instead of hugging the wall.
+    pub into_field_frac: f32,
+    /// Gap from the side wall on that farther spawn.
+    pub into_field: [f32; 2],
+    /// Speed of the car and the ball along the nose.
+    pub speed: [f32; 2],
+    /// Cone of the nose around the direction to the opponent goal, in degrees.
+    pub nose_spread_deg: f32,
+    /// Ball center ahead of the car center, along the nose.
+    pub ball_ahead: [f32; 2],
+    /// Ball center above the car center, along the car's up.
+    pub ball_above: [f32; 2],
+    pub dribbler_boost: [f32; 2],
+    /// Share of challenges on the same side wall. Normalized with the other two.
+    pub same_wall_frac: f32,
+    /// Share on the back wall by the challenger's own goal.
+    pub back_wall_frac: f32,
+    /// Share on the opposite side wall.
+    pub opposite_wall_frac: f32,
+    pub challenger_height: [f32; 2],
+    /// Distance from the ball toward the challenger's goal, along the field.
+    pub challenger_dist: [f32; 2],
+    /// Speed along the wall.
+    pub challenger_speed: [f32; 2],
+    /// Cone of the challenger's nose around the ball, in degrees.
+    pub face_spread_deg: f32,
+    pub challenger_boost: [f32; 2],
+}
+
+impl Default for AirDribbleWallChallenge {
+    fn default() -> Self {
+        Self {
+            dribbler_height: [400.0, 1400.0],
+            off_wall: [50.0, 250.0],
+            into_field_frac: 0.35,
+            into_field: [500.0, 1600.0],
+            speed: [900.0, 1700.0],
+            nose_spread_deg: 25.0,
+            ball_ahead: [120.0, 180.0],
+            ball_above: [40.0, 80.0],
+            dribbler_boost: [20.0, 80.0],
+            same_wall_frac: 0.60,
+            back_wall_frac: 0.25,
+            opposite_wall_frac: 0.15,
+            challenger_height: [300.0, 1200.0],
+            challenger_dist: [600.0, 2000.0],
+            challenger_speed: [0.0, 600.0],
+            face_spread_deg: 20.0,
+            challenger_boost: [30.0, 100.0],
+        }
+    }
+}
+
+/// Up axis for a car whose nose is `forward` and whose roof points mostly up.
+fn upright_from_forward(forward: Vec3A) -> Vec3A {
+    let forward = forward.normalize();
+    let right = forward.cross(Vec3A::Z);
+    let right = if right.length() < 1e-4 {
+        forward.cross(Vec3A::X).normalize()
+    } else {
+        right.normalize()
+    };
+    right.cross(forward).normalize()
+}
+
+/// Move `a` and `b` by the same xy delta so both sit inside the walls.
+fn shift_pair_inside(a: Vec3A, b: Vec3A) -> (Vec3A, Vec3A) {
+    let lim_x = SIDE_WALL_X - 1.0;
+    let lim_y = BACK_WALL_Y - 1.0;
+    let mut dx: f32 = 0.0;
+    let mut dy: f32 = 0.0;
+    for p in [a, b] {
+        if p.x > lim_x {
+            dx = dx.min(lim_x - p.x);
+        }
+        if p.x < -lim_x {
+            dx = dx.max(-lim_x - p.x);
+        }
+        if p.y > lim_y {
+            dy = dy.min(lim_y - p.y);
+        }
+        if p.y < -lim_y {
+            dy = dy.max(-lim_y - p.y);
+        }
+    }
+    let d = Vec3A::new(dx, dy, 0.0);
+    (a + d, b + d)
+}
+
+impl<SI: SharedInfoRng> StateSetter<SI> for AirDribbleWallChallenge {
+    fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
+        arena.reset_to_random_kickoff(None);
+        let rng = shared_info.rng();
+        let cars = arena.num_cars().max(1);
+        let dribbler_idx = rng.random_range(0..cars.min(2));
+        let challenger_idx = 1 - dribbler_idx;
+        // Blue (car 0) attacks +y. Orange attacks -y. The challenger defends
+        // the goal the dribbler is driving at.
+        let attack_sign: f32 = if dribbler_idx == 0 { 1.0 } else { -1.0 };
+        let wall_side: f32 = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+
+        let same = self.same_wall_frac.max(0.0);
+        let back = self.back_wall_frac.max(0.0);
+        let opposite = self.opposite_wall_frac.max(0.0);
+        let sum = (same + back + opposite).max(f32::EPSILON);
+        let draw = rng.random_range(0.0..sum);
+        let wall = if draw < same {
+            ChallengeWall::Same
+        } else if draw < same + back {
+            ChallengeWall::Back
+        } else {
+            ChallengeWall::Opposite
+        };
+
+        let into = rng.random_bool(self.into_field_frac.clamp(0.0, 1.0) as f64);
+        let off = if into {
+            range(rng, self.into_field)
+        } else {
+            range(rng, self.off_wall)
+        };
+        let attack = Vec3A::new(0.0, attack_sign, 0.0);
+        let forward = tilted_toward(rng, attack, self.nose_spread_deg.to_radians());
+        let up = upright_from_forward(forward);
+        let ahead = range(rng, self.ball_ahead);
+        let above = range(rng, self.ball_above);
+        let speed = range(rng, self.speed);
+        let dist = range(rng, self.challenger_dist);
+
+        // Anchor the car, not the ball, so the dribbler is the one 50+ uu off
+        // the side wall. The ball sits on the nose and may be closer to the wall.
+        let car_x = wall_side * (SIDE_WALL_X - off);
+        let car_z = range(rng, self.dribbler_height);
+        let car_y = if matches!(wall, ChallengeWall::Back) {
+            let ball_y = attack_sign * (BACK_WALL_Y - CAR_REST_HEIGHT - dist);
+            ball_y - forward.y * ahead - up.y * above
+        } else {
+            attack_sign * rng.random_range(-1200.0..2400.0)
+        };
+        let dribbler_pos = Vec3A::new(car_x, car_y, car_z);
+        let ball_pos = dribbler_pos + forward * ahead + up * above;
+        let (dribbler_pos, ball_pos) = shift_pair_inside(dribbler_pos, ball_pos);
+
+        let vel = forward * speed;
+        let mut dribbler = CarState::DEFAULT;
+        dribbler.phys.pos = dribbler_pos;
+        dribbler.phys.vel = vel;
+        dribbler.phys.rot_mat = Mat3A::from_cols(forward, up.cross(forward), up);
+        dribbler.boost = range(rng, self.dribbler_boost);
+        dribbler.has_jumped = true;
+        arena.set_ball_state(ball_at(ball_pos, vel));
+        arena.set_car_state(dribbler_idx, dribbler.core());
+
+        if challenger_idx >= arena.num_cars() {
+            return;
+        }
+        let (ch_pos, ch_up) = match wall {
+            ChallengeWall::Same => {
+                let x = wall_side * (SIDE_WALL_X - CAR_REST_HEIGHT);
+                let y = ball_pos.y + attack_sign * dist;
+                (
+                    Vec3A::new(x, y, range(rng, self.challenger_height)),
+                    Vec3A::new(-wall_side, 0.0, 0.0),
+                )
+            }
+            ChallengeWall::Opposite => {
+                let side = -wall_side;
+                let x = side * (SIDE_WALL_X - CAR_REST_HEIGHT);
+                let y = ball_pos.y + attack_sign * dist;
+                (
+                    Vec3A::new(x, y, range(rng, self.challenger_height)),
+                    Vec3A::new(-side, 0.0, 0.0),
+                )
+            }
+            ChallengeWall::Back => {
+                let y = attack_sign * (BACK_WALL_Y - CAR_REST_HEIGHT);
+                let x = wall_side * rng.random_range(1400.0..3600.0);
+                (
+                    Vec3A::new(x, y, range(rng, self.challenger_height)),
+                    Vec3A::new(0.0, -attack_sign, 0.0),
+                )
+            }
+        };
+        let lim_y = BACK_WALL_Y - CAR_REST_HEIGHT;
+        let ch_pos = Vec3A::new(
+            ch_pos.x.clamp(-(SIDE_WALL_X - CAR_REST_HEIGHT), SIDE_WALL_X - CAR_REST_HEIGHT),
+            ch_pos.y.clamp(-lim_y, lim_y),
+            ch_pos.z.clamp(
+                self.challenger_height[0],
+                self.challenger_height[1].max(self.challenger_height[0]),
+            ),
+        );
+        let to_ball = ball_pos - ch_pos;
+        let in_plane = to_ball - ch_up * to_ball.dot(ch_up);
+        let base = if in_plane.length() < 1e-3 {
+            ch_up.cross(Vec3A::Z).normalize()
+        } else {
+            in_plane.normalize()
+        };
+        let ang = rng.random_range(-1.0..1.0) * self.face_spread_deg.to_radians();
+        let ch_forward = (base * ang.cos() + ch_up.cross(base) * ang.sin()).normalize();
+        let tangent = ch_up.cross(Vec3A::Z);
+        let tangent = if tangent.length() < 1e-4 {
+            Vec3A::X
+        } else {
+            tangent.normalize()
+        };
+        let along = tangent.dot(to_ball).signum();
+        let along = if along == 0.0 { 1.0 } else { along };
+        let mut challenger = CarState::DEFAULT;
+        challenger.phys.pos = ch_pos;
+        challenger.phys.vel = tangent * along * range(rng, self.challenger_speed);
+        challenger.phys.rot_mat = Mat3A::from_cols(ch_forward, ch_up.cross(ch_forward), ch_up);
+        challenger.boost = range(rng, self.challenger_boost);
+        challenger.has_jumped = false;
+        arena.set_car_state(challenger_idx, challenger.core());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand::SeedableRng;
@@ -836,6 +1084,15 @@ mod tests {
         let parse = |t: &str| toml::from_str::<WeightedSetter>(t);
         assert!(parse("kind = \"teleport\"\nweight = 1.0").is_err());
         assert!(parse("kind = \"air_near_ball\"\nweight = 1.0\nheight = [1.0, 2.0]").is_err());
+        assert!(
+            parse("kind = \"air_dribble_wall_challenge\"\nweight = 1.0\nnope = 1.0").is_err()
+        );
+        assert_eq!(
+            parse("kind = \"air_dribble_wall_challenge\"\nweight = 1.0")
+                .unwrap()
+                .kind,
+            SetterKind::AirDribbleWallChallenge(AirDribbleWallChallenge::default())
+        );
     }
 
     #[test]
@@ -1204,4 +1461,107 @@ impl<SI: SharedInfoRng> StateSetter<SI> for Replay {
             arena.set_car_state(idx, car.core());
         }
     }
+}
+
+#[test]
+fn air_dribble_wall_challenge_invariants() {
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+    use rlgymppo_utils::rlgym::rocketsim::{Arena, CarBodyConfig, GameMode, Team, init_from_default};
+    use rlgymppo_utils::shared_info::SharedInfoRng;
+
+    struct TestSharedInfo {
+        rng: SmallRng,
+    }
+
+    impl SharedInfoRng for TestSharedInfo {
+        type Rng = SmallRng;
+        fn rng(&mut self) -> &mut SmallRng {
+            &mut self.rng
+        }
+    }
+
+    init_from_default(true).unwrap();
+    let mut arena = Arena::new(GameMode::Soccar);
+    arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+    arena.add_car(Team::Orange, CarBodyConfig::OCTANE);
+    let mut setter = AirDribbleWallChallenge::default();
+    let mut shared_info = TestSharedInfo {
+        rng: SmallRng::seed_from_u64(7),
+    };
+
+    let on_side = |x: f32| (SIDE_WALL_X - x.abs() - CAR_REST_HEIGHT).abs() < 2.0;
+    let on_back = |y: f32| (BACK_WALL_Y - y.abs() - CAR_REST_HEIGHT).abs() < 2.0;
+    let in_bounds = |p: Vec3A| {
+        p.x.abs() <= SIDE_WALL_X && p.y.abs() <= BACK_WALL_Y && p.z >= 0.0 && p.z <= 2044.0
+    };
+
+    let mut dribbler_0 = 0;
+    for _ in 0..10_000 {
+        setter.apply(&mut arena, &mut shared_info);
+        let ball = arena.get_ball_state().phys.pos;
+        let cars = [arena.get_car_state(0), arena.get_car_state(1)];
+        assert!(in_bounds(ball), "ball out of bounds: {:?}", ball);
+        for (idx, car) in cars.iter().enumerate() {
+            assert!(
+                in_bounds(car.phys.pos),
+                "car {idx} out of bounds: {:?}",
+                car.phys.pos
+            );
+        }
+        let wheels_on_wall = |car: &rlgymppo_utils::rlgym::rocketsim::CarState| {
+            let up = car.phys.rot_mat.z_axis;
+            (on_side(car.phys.pos.x) && up.x * -car.phys.pos.x.signum() > 0.9)
+                || (on_back(car.phys.pos.y) && up.y * -car.phys.pos.y.signum() > 0.9)
+        };
+        let c0_wall = wheels_on_wall(&cars[0]);
+        let c1_wall = wheels_on_wall(&cars[1]);
+        assert!(
+            c0_wall ^ c1_wall,
+            "expected exactly one car on a wall: c0 {:?} wall {c0_wall} c1 {:?} wall {c1_wall} ball {:?}",
+            cars[0].phys.pos,
+            cars[1].phys.pos,
+            ball
+        );
+        let (challenger, dribbler, dribbler_idx) = if c0_wall {
+            (&cars[0], &cars[1], 1)
+        } else {
+            (&cars[1], &cars[0], 0)
+        };
+        if dribbler_idx == 0 {
+            dribbler_0 += 1;
+        }
+        assert!(
+            dribbler.phys.pos.z >= 400.0 && dribbler.phys.pos.z <= 1400.0,
+            "dribbler not airborne: z={}",
+            dribbler.phys.pos.z
+        );
+        assert!(
+            (ball - dribbler.phys.pos).length() <= 250.0,
+            "ball not on the nose: {}",
+            (ball - dribbler.phys.pos).length()
+        );
+        let up = challenger.phys.rot_mat.z_axis;
+        if on_side(challenger.phys.pos.x) {
+            let away = -challenger.phys.pos.x.signum();
+            assert!(up.x * away > 0.9, "side-wall up not away from the wall: {up:?}");
+        } else {
+            let away = -challenger.phys.pos.y.signum();
+            assert!(up.y * away > 0.9, "back-wall up not away from the wall: {up:?}");
+        }
+        let toward = (challenger.phys.pos.y - ball.y).signum();
+        let goal = toward * BACK_WALL_Y;
+        assert!(
+            toward != 0.0 && (challenger.phys.pos.y - goal).abs() < (ball.y - goal).abs(),
+            "challenger not goal-side of the ball: car {} ball {} goal {goal}",
+            challenger.phys.pos.y,
+            ball.y
+        );
+        assert!(!challenger.has_jumped, "challenger already used its jump");
+    }
+    let frac = dribbler_0 as f32 / 10_000.0;
+    assert!(
+        (0.45..=0.55).contains(&frac),
+        "dribbler selection not balanced: {frac:.3}"
+    );
 }

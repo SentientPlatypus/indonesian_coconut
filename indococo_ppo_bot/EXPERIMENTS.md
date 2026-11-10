@@ -1482,7 +1482,10 @@ ball_dist = [1000.0, 3000.0]
 boost = [30.0, 100.0]
 ```
 
-**Integration:** Exposed via the `[[state_setters]]` toml config chain (train_st.toml, st.toml, etc.) following the existing pattern. Existing configs with no `aerial_defense` or `demo_threat` entry behave identically (weight = 0 when absent).
+#### `air_dribble_wall_challenge` (configurable, default off)
+Mid air dribble with the other car on a wall between the ball and its own goal, wheels on the wall and jump still available. Trains keeping the ball when a wall defender (Galactus, Megabyte) jumps off, boosts, and 50/50s the dribble. Which car dribbles is random and the field is mirrored, so each team practices both roles. Same side wall 60%, back wall by the challenger's goal 25%, opposite side wall 15% (`same_wall_frac`, `back_wall_frac`, `opposite_wall_frac`). Absent from a mix, weight is 0 and existing configs are unchanged.
+
+**Integration:** Exposed via the `[[state_setters]]` toml config chain (train_st.toml, st.toml, etc.) following the existing pattern. Existing configs with no `aerial_defense`, `demo_threat`, or `air_dribble_wall_challenge` entry behave identically (weight = 0 when absent).
 
 **Metrics:** Per-setter episode counts and flip-reset rates already tracked via the `Setters/<kind> share` metrics.
 
