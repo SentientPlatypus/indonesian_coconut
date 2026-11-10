@@ -14,7 +14,20 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
-### st19r_15919M.bpk (current best)
+### st20r_17643M.bpk (current best)
+
+| | |
+|---|---|
+| Lineage | ST20r (repeat of the ST20 recipe: ST19 gal4 setters + Rust Ripple v1.1 at 5%, GAL_WEIGHT 5.143 ~20%, MEGA_WEIGHT 2.0, OPPCH 0.60, ENT 0.016), continued from ST20 16880.9M, chunk `1794276990` (17642.6M steps). 106-input obs (`INDOCOCO_OBS_EXT=1`). **Manual promote** 2026-11-10 00:16 ET (user). The auto gate was scored against ST20 (wrong baseline) and the formal h2h vs ST19r was skipped. A 500-game h2h vs ST19r finished just before and is report-only: 56.4% (282-218). Every gate vs ST19r passes |
+| H2H | 56.4% vs ST19r (282-218, report-only), 58.4% vs ST20 (292-208), **75.8%** vs FR4 (ST19r 71.6%), over 500 games each |
+| Pool | **92.42** on pool400 (ST19r 92.62): 1v1.pt 82.75, 430M 83.25, Nexto 94.25, Necto 98.5, Element 99.0, Immortal 96.75 |
+| Botpack5 | **69.74** avg (ST19r 67.38): Ripple 72.5, Kira 67.5, Dice 67.7, Chronos 76.75, Galactus 34.25, Seer 99.75 |
+| Galactus | **34.2%** over 500 games (ST19r 34.2%) |
+| Megabyte | **79.2%** over 500 games (report-only; ST19r 81.0%) |
+| Gen panel | min **0.342** / mean **0.811** (ST19r 0.342 / 0.800) |
+| sha256 | `4711f09d65be97030088f49af76a7b8f9bfec53b69aea9f12f4eb5df77ef78a4` |
+
+### st19r_15919M.bpk
 
 | | |
 |---|---|
