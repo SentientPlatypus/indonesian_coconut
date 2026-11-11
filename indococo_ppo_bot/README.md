@@ -547,6 +547,14 @@ selection and finals h2h measure vs ST25 (its own parent). The running launcher 
 BESTF=st23_final, so ST26's st_promote.py baselines and demos_h2h need a re-score vs
 st25_final after finals.
 
+ST27 is queued after ST26 (`experiments/st_ST27.env`, `experiments/train_st27.toml`): ST26
+with one change, `FR4_final` league weight 0.816 -> 2.0 (realized 3.7% -> 8.4% of
+iterations; Galactus 29.2% -> 27.1%). Why: FR4 is the weakest gate metric, and a 200-game
+diagnostic vs FR4 shows we lose 44% of FR4's kickoffs and concede mostly aerial and
+out-of-position goals, which no setter reproduces. The same diagnostic vs Galactus showed
+the ST25 demo drill did not cut the demo-goal share (62% vs ST23 59%), while aerial goals
+against fell from 24 to 15. Validated in `/opt/dlami/nvme/st27_validate`.
+
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench
 0.0118 ms/row at 1024 rows and 0.0237 ms/row at 256, with the forward at about 5 ms per call. The

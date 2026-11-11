@@ -1393,6 +1393,27 @@ The auto gate failed only on FR4: 78.4 < 78.6 (ST23 79.6 minus the 1.0 tolerance
 
 ST26 (ST25 without `ST20r_final`) started 2026-11-11 11:54 AM ET from ST25's 20727.5M checkpoint with BESTF=st23_final. `exp_ST26/opp_BEST.toml` was re-pointed to st25_final at 12:17 PM ET, before ST26's first mid eval, so all its mids, final selection and finals h2h measure vs ST25, which is also its start checkpoint. The running launcher keeps BESTF=st23_final in memory, so ST26's `PROMOTE.json` baselines (FR4/pool/bp5/Galactus) and demos_h2h must be re-scored vs st25_final after finals.
 
+### 11.8w ST25 diagnostics; ST27 queued (FR4_final @ 2.0) (2026-11-11)
+
+Diagnostics on ST25 (200 games each, `~/ippo_runs/diag_gal/`, same per-goal method as ST23):
+
+| Metric | ST25 | ST23 |
+|---|---|---|
+| vs Galactus wr (200 g) | 38.5% (77-123) | 38.0% (76-124) |
+| Galactus goals within 3.5 s of a demo on us | 76/123 (62%) | 73/124 (59%) |
+| wr when demoed / not demoed | 12.6% (12/95) / 61.9% (65/105) | 9.7% (9/93) / 62.6% (67/107) |
+| Galactus aerial goals against (z>300) | 15 | 24 |
+| we demo Galactus | 16 | 7 |
+| vs FR4 wr (200 g) | 77.0% (154-46) | 74.5% (149-51) |
+| kickoffs lost vs FR4 | 88/200 (44%) | 79/200 (40%) |
+| FR4 goals: aerial / out of position / after demo | 14 / 14 / 10 | 18 / 9 / 12 |
+
+Botpack5 per-bot for ST25 vs ST23: Dice 61.75 vs 65.25 (still below ST20r's 67.67), Galactus 40.25 vs 36.25, Chronos 78.75 vs 75.25, Ripple 68.25 vs 67.25, Kira 66.5 vs 68.5. Megabyte 500 g: 84.0 (420-80) vs 83.2 (416-84).
+
+The demo drill did not reduce the share of Galactus goals that follow a demo. ST25's Galactus gain comes with fewer aerial goals against. The FR4 gate miss is within noise (ST25 is ahead of ST23 vs FR4 on the 200-game diagnostic and on mid evals). FR4 wins mainly off its kickoff and aerial play, which only FR4 produces.
+
+ST27 (`st_ST27.env`, `train_st27.toml`) = ST26 with one change: `FR4_final` league weight 0.816 -> 2.0 (realized 3.7% -> 8.4%; Galactus 29.2% -> 27.1%). It is queued after ST26 (`ST_QUEUE` = `ST27 ST27`) and validated in `/opt/dlami/nvme/st27_validate` (parse, setter sum 1.0, `rates` 40k steps, no panics).
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):
