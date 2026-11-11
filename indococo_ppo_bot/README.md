@@ -502,7 +502,7 @@ h2h 50.6% vs ST21, FR4 76.0 (ST21 75.4), pool400 92.58 (92.75), bp5 68.75 (68.17
 Galactus 35.8 (35.6), Megabyte 84.8 (report-only). promote stayed false (h2h 50.6% < 52%;
 the other gates would pass vs ST21). No bpk was exported. ST21 remained BEST until ST23.
 
-ST23 is the current best (auto promote, user confirmed 2026-11-10 11:30 PM ET). Keep-best
+ST23 was BEST until ST25 (auto promote, user confirmed 2026-11-10 11:30 PM ET). Keep-best
 checkpoint `exp_ST23/checkpoints/1794367057` at 19015.7M, continued from ST21 18053.6M
 (training ended at 19053.8M). Restarted 4:10 PM ET Nov 10 from ST21, not from ST22:
 ST21 + OPPCH 0.70 + 1 PPO epoch, ST21 setter mix, no `air_dribble_wall_challenge`,
@@ -524,17 +524,28 @@ gate fails), pool400 93.0 (93.21), bp5 67.0 (68.67; gate fails), Galactus 37.0 (
 Megabyte 83.2, gen-panel min 0.37 / mean 0.801. Dice fell to 57.75 (ST23 65.25), so
 ST20r did not do its job.
 
-ST25 is training (`experiments/st_ST25.env`, `experiments/train_st25.toml`), started
-2026-11-11 5:37 AM ET from ST24's 19727.3M toward 20727.3M, BESTF=st23_final. It is
-ST24's config with the demo_threat drill retuned to the Galactus demo failure mode
-(diag_gal: 59% of goals conceded to Galactus come within 3.5 s of a demo on us):
-demo_threat 0.05 @ 800-1500 uu -> 0.15 @ 1800-3000 uu, normal play x0.875,
-aerial_defense 0.15. It still has ST20r@2.0.
+ST25 is the current best (manual promote, user-approved 2026-11-11 12:16 PM ET).
+Selected checkpoint `exp_ST25/checkpoints/1794413355` at 20727.5M, continued from ST24's
+19727.3M (`experiments/st_ST25.env`, `experiments/train_st25.toml`). It is ST24's config
+with the demo_threat drill retuned to the Galactus demo failure mode (diag_gal: 59% of
+goals conceded to Galactus come within 3.5 s of a demo on us): demo_threat 0.05 @
+800-1500 uu -> 0.15 @ 1800-3000 uu, normal play x0.875, aerial_defense 0.15. It still has
+ST20r@2.0. Shipped as `checkpoints_to_test/st25_20728M.bpk`. Finals vs ST23: h2h 56.2%
+(281-219), FR4 78.4 (ST23 79.6), pool400 93.33 (93.21), bp5 69.21 (68.67), Galactus 40.8
+(35.4, best so far), Megabyte 84.0 (report-only), gen-panel min 0.408 / mean 0.8132
+(0.354 / 0.8087). The auto gate failed only on FR4 (1.2 below ST23; tolerance 1.0).
+PROMOTE.json was backed up to `PROMOTE.json.bak_auto_false` and set promote=true with a
+manual_override note. Previous best ST23 (`st23_19016M.bpk`).
 
-ST26 is queued after ST25 (`ST_QUEUE` = `ST26 ST26`; `experiments/st_ST26.env`,
-`experiments/train_st26.toml`): ST25 with one change, `ST20r_final` removed from the
-league, so the league is ST23's again (Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%,
-other league 26.0%, self-play 30%). Start ckpt and BEST follow the launcher.
+ST26 is training (`experiments/st_ST26.env`, `experiments/train_st26.toml`), started
+2026-11-11 11:54 AM ET from ST25's 20727.5M checkpoint toward 21727.5M: ST25 with one
+change, `ST20r_final` removed from the league, so the league is ST23's again (Galactus
+29.2%, Ripple 5.8%, Megabyte 9.1%, other league 26.0%, self-play 30%). It launched with
+BESTF=st23_final (ST25 had not promoted yet). `exp_ST26/opp_BEST.toml` was re-pointed to
+st25_final at 12:17 PM ET Nov 11, before the first mid eval, so all ST26 mids, final
+selection and finals h2h measure vs ST25 (its own parent). The running launcher still has
+BESTF=st23_final, so ST26's st_promote.py baselines and demos_h2h need a re-score vs
+st25_final after finals.
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench

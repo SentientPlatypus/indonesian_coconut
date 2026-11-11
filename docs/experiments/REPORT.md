@@ -1339,7 +1339,7 @@ ST22 started from ST21's 18053.6M checkpoint (`st_ST22.env`, `train_st22.toml`):
 
 ### 11.8t ST23 promote (2026-11-10)
 
-ST23 is the current best. Auto gate passed; user confirmed 2026-11-10 11:30 PM ET. Keep-best checkpoint `exp_ST23/checkpoints/1794367057` at 19015.7M, continued from ST21 18053.6M (training ended at 19053.8M). Recipe: ST21 + OPPCH 0.70 + 1 PPO epoch, ST21 setters, no `air_dribble_wall_challenge`, binary `9d4b2a6` (user-approved restart 4:07 PM ET Nov 10, from ST21 rather than ST22). The OPPCH bump and the 1-epoch switch are confounded, and the wall-challenge setter was also dropped, so the gain cannot be credited to one change alone. Shipped as `checkpoints_to_test/st23_19016M.bpk`. ST21 (`st21_18054M.bpk`) is the previous best.
+ST23 was BEST until ST25 (§11.8v). Auto gate passed; user confirmed 2026-11-10 11:30 PM ET. Keep-best checkpoint `exp_ST23/checkpoints/1794367057` at 19015.7M, continued from ST21 18053.6M (training ended at 19053.8M). Recipe: ST21 + OPPCH 0.70 + 1 PPO epoch, ST21 setters, no `air_dribble_wall_challenge`, binary `9d4b2a6` (user-approved restart 4:07 PM ET Nov 10, from ST21 rather than ST22). The OPPCH bump and the 1-epoch switch are confounded, and the wall-challenge setter was also dropped, so the gain cannot be credited to one change alone. Shipped as `checkpoints_to_test/st23_19016M.bpk`. ST21 (`st21_18054M.bpk`) is the previous best.
 
 | Metric | ST23 19015.7M | ST21 (previous best) |
 |---|---|---|
@@ -1373,6 +1373,25 @@ Gates: h2h passes, but FR4 (77.0 < 78.6) and bp5 (67.0 < 67.67) fail. The oppone
 ST25 (`st_ST25.env`, `train_st25.toml`) = ST24's config with the demo_threat setter retuned to the diag_gal finding: 59% of goals ST23 concedes to Galactus come within 3.5 s of a demo on us, with Galactus closing from ~2.5k uu. demo_threat goes from 0.05 @ 800-1500 uu to 0.15 @ 1800-3000 uu, normal play ×0.875, aerial_defense 0.15. It started 2026-11-11 5:37 AM ET from ST24's 19727.3M with BESTF=st23_final. It still carries ST20r@2.0.
 
 ST26 (`st_ST26.env`, `train_st26.toml`) is queued after ST25 (`ST_QUEUE` = `ST26 ST26`). It is ST25 with one change: `ST20r_final` is removed, so the league is ST23's again (total 15.427: Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%, other league 26.0%, self-play 30%). Setters and learner settings are ST25's. Start ckpt and BEST follow the launcher (ST25's selected final; BEST is st25_final if it promotes, else st23_final). The rendered config was validated in `/opt/dlami/nvme/st26_validate`: it parses, and `rates` ran 40k steps with no panics.
+
+### 11.8v ST25 manual promote; ST26 training vs ST25 (2026-11-11)
+
+ST25 is the current best. User-approved manual promote 2026-11-11 12:16 PM ET. Selected checkpoint `exp_ST25/checkpoints/1794413355` at 20727.5M (training ended there), continued from ST24 19727.3M. Recipe: ST24's config (ST23 + `ST20r_final` @ 2.0) with demo_threat 0.15 @ 1800-3000 uu. Finals 2026-11-11 11:53 AM ET. Shipped as `checkpoints_to_test/st25_20728M.bpk`. ST23 (`st23_19016M.bpk`) is the previous best.
+
+| Metric | ST25 20727.5M | ST23 (previous best) |
+|---|---|---|
+| h2h vs ST23, 500 g | 56.2% (281-219) | — |
+| FR4 | 78.4 | 79.6 |
+| pool400 | 93.33 | 93.21 |
+| botpack5 | 69.21 | 68.67 |
+| Dice (in botpack5) | 61.75 | 65.25 |
+| Galactus | 40.8 | 35.4 |
+| Megabyte (report-only) | 84.0 | 83.2 |
+| gen-panel min / mean | 0.408 / 0.8132 | 0.354 / 0.8087 |
+
+The auto gate failed only on FR4: 78.4 < 78.6 (ST23 79.6 minus the 1.0 tolerance). h2h, pool, bp5 and Galactus all passed. `PROMOTE.json` was backed up to `PROMOTE.json.bak_auto_false` and set to promote=true with a manual_override note. Galactus 40.8% is the best result so far (ST19 first broke 34%); the anti-demo drill looks like it worked. Demos per 200 kickoff games (cand/opp): vs ST23 85/70, vs FR4 13/99.
+
+ST26 (ST25 without `ST20r_final`) started 2026-11-11 11:54 AM ET from ST25's 20727.5M checkpoint with BESTF=st23_final. `exp_ST26/opp_BEST.toml` was re-pointed to st25_final at 12:17 PM ET, before ST26's first mid eval, so all its mids, final selection and finals h2h measure vs ST25, which is also its start checkpoint. The running launcher keeps BESTF=st23_final in memory, so ST26's `PROMOTE.json` baselines (FR4/pool/bp5/Galactus) and demos_h2h must be re-scored vs st25_final after finals.
 
 ## Appendix A: data and figures
 

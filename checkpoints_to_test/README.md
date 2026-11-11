@@ -14,7 +14,20 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
-### st23_19016M.bpk (current best)
+### st25_20728M.bpk (current best)
+
+| | |
+|---|---|
+| Lineage | ST25 (ST24 config = ST23 recipe + `ST20r_final` @ 2.0, OPPCH 0.70, 1 PPO epoch, binary `9d4b2a6`; demo_threat setter retuned to 0.15 of starts at 1800-3000 uu, normal play x0.875, aerial_defense 0.15), continued from ST24 19727.3M, selected chunk `1794413355` (20727.5M steps; training ended there). 106-input obs (`INDOCOCO_OBS_EXT=1`). **Manual promote**, user-approved 2026-11-11 12:16 PM ET. Auto gate failed only on FR4 (78.4 vs ST23 79.6, 1.2 below; tolerance 1.0) |
+| H2H | **56.2%** vs ST23 (281-219), **78.4%** vs FR4 (ST23 79.6%), over 500 games each |
+| Pool | **93.33** on pool400 (ST23 93.21): 1v1.pt 85.75, 430M 86.75, Nexto 92.5, Necto 99.25, Element 99.0, Immortal 96.74 |
+| Botpack5 | **69.21** avg (ST23 68.67): Ripple 68.25, Kira 66.5, Dice 61.75, Chronos 78.75, Galactus 40.25, Seer 99.75 |
+| Galactus | **40.8%** over 500 games (ST23 35.4%), best so far |
+| Megabyte | **84.0%** over 500 games (report-only; ST23 83.2%) |
+| Gen panel | min **0.408** / mean **0.8132** (ST23 0.354 / 0.8087) |
+| sha256 | `db3f77b4cdbbec57c7f227e32fd5210c450fda250b042dfabe704d0989923ed8` |
+
+### st23_19016M.bpk
 
 | | |
 |---|---|
