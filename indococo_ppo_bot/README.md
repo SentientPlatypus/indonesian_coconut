@@ -517,15 +517,24 @@ gen-panel min 0.354 / mean 0.8087. All auto gates passed: h2h 56.0 ≥ 52, FR4 7
 floor). Previous best ST21: FR4 75.4, pool 92.75, bp5 68.17, Galactus 35.6, Megabyte
 81.6, gen-panel mean 0.8034.
 
-ST24 is training (`experiments/st_ST24.env`, `experiments/train_st24.toml`), started
-2026-11-10 11:18 PM ET from ST23's 19015.7M checkpoint toward 20015.7M. One change on
-the restarted ST23 recipe: `ST20r_final` in the league at weight 2.0, aimed at bp5 /
-Dice recovery. Realized shares at OPPCH 0.70 / total 17.427: Galactus 25.8%, Ripple
-5.2%, Megabyte 8.0%, ST20r 8.0%, other league 23.0%, self-play 30%. Because ST23
-already auto-promoted, the launcher started ST24 with BESTF=st23_final;
-`exp_ST24/opp_BEST.toml` points at st23_final. Mid evals, finals, and the promote gate
-measure vs ST23. Mid evals are every 100M (`CHUNK=100000000`). After ST24, ST_QUEUE is
-empty and needs a designed next run (do not rely on ST24r).
+ST24 (`experiments/st_ST24.env`, `experiments/train_st24.toml`) = restarted ST23 plus
+`ST20r_final` in the league at weight 2.0, aimed at bp5 / Dice recovery. Not promoted
+(finals 2026-11-11 5:36 AM ET, selected 19727.3M). Vs ST23: h2h 53.6%, FR4 77.0 (79.6;
+gate fails), pool400 93.0 (93.21), bp5 67.0 (68.67; gate fails), Galactus 37.0 (35.4),
+Megabyte 83.2, gen-panel min 0.37 / mean 0.801. Dice fell to 57.75 (ST23 65.25), so
+ST20r did not do its job.
+
+ST25 is training (`experiments/st_ST25.env`, `experiments/train_st25.toml`), started
+2026-11-11 5:37 AM ET from ST24's 19727.3M toward 20727.3M, BESTF=st23_final. It is
+ST24's config with the demo_threat drill retuned to the Galactus demo failure mode
+(diag_gal: 59% of goals conceded to Galactus come within 3.5 s of a demo on us):
+demo_threat 0.05 @ 800-1500 uu -> 0.15 @ 1800-3000 uu, normal play x0.875,
+aerial_defense 0.15. It still has ST20r@2.0.
+
+ST26 is queued after ST25 (`ST_QUEUE` = `ST26 ST26`; `experiments/st_ST26.env`,
+`experiments/train_st26.toml`): ST25 with one change, `ST20r_final` removed from the
+league, so the league is ST23's again (Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%,
+other league 26.0%, self-play 30%). Start ckpt and BEST follow the launcher.
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench

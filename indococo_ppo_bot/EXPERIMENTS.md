@@ -1598,13 +1598,31 @@ Auto gate passed (`promote=true`). User confirmed the promote 2026-11-10 11:30 P
 
 Finals keep-best checkpoint `exp_ST23/checkpoints/1794367057` at 19015.7M. Panel vs ST21: h2h 56.0% (280-220 / 500 g), FR4 79.6 (ST21 75.4), pool400 93.21 (92.75), bp5 68.67 (68.17), Galactus 35.4 (35.6), Megabyte 83.2 (81.6, report-only), gen-panel min 0.354 / mean 0.8087 (0.356 / 0.8034). Gates: h2h 56.0 ≥ 52, FR4 79.6 ≥ 74.4, pool 93.21 ≥ 91.75, bp5 68.67 ≥ 67.17, Galactus 35.4 ≥ 31.6 (and above the 0.27 floor). All pass. Botpack5 per-bot: Ripple 67.25, Kira 68.5, Dice 65.25, Chronos 75.25, Galactus 36.25, Seer 99.5. Pool400 per-bot: 1v1.pt 86.5, 430M 85.0, Nexto 91.8, Necto 98.8, Element 99.0, Immortal 98.2.
 
-## ST24 (training after ST23): ST20r_final @ 2.0 for bp5 / Dice recovery (2026-11-10)
+## ST24 results: ST20r_final @ 2.0 for bp5 / Dice recovery, not promoted (2026-11-11)
 
 ST24 = restarted ST23 (ST21 recipe + OPPCH 0.70 + 1 PPO epoch, ST21 setters, no `air_dribble_wall_challenge`, binary `9d4b2a6`) with one change: add `ST20r_final` (`exp_ST20r/checkpoints/1794276990`) as a fixed league opponent at weight 2.0 (`experiments/st_ST24.env`, `experiments/train_st24.toml`).
 
 Why: ST21's auto-promote miss was bp5 68.17 vs ST20r 69.74; ST22 was 68.75; ST23 recovered to 68.67, still short of ST20r. The earlier drop was almost entirely Dice (ST20r 67.67, ST21 57.25, ST22 60.25, ST23 65.25). Dice/Kira/Chronos/Seer are Python botpack bots and are not a valid `[[opponents.external]]` kind in this binary (only `galactus`, `megabyte`, `ripple`). ST20r is the last policy that held the Dice matchup, and fixed checkpoints are the existing league knob.
 
 Realized shares at OPPCH 0.70 / total weight 17.427: Galactus 25.8%, Ripple 5.2%, Megabyte 8.0%, ST20r 8.0%, other league 23.0%, self-play 30%. Started 2026-11-10 11:18 PM ET from ST23's keep-best at 19015.7M toward 20015.7M. Because ST23 already auto-promoted, the launcher started ST24 with BESTF=st23_final; mid evals, finals, and the promote gate measure vs ST23. Mid evals are every 100M (`CHUNK=100000000` in `st_ST24.env`, and that is now the `st_launch.sh` default). After ST24, ST_QUEUE is empty and needs a designed next run (do not rely on ST24r).
+
+**ST24 result (finals 2026-11-11 5:36 AM ET): not promoted.** Selected checkpoint `exp_ST24/checkpoints/1794384802` at 19727.3M (training ended at 20015.9M). Panel vs ST23: h2h 53.6% (268-232 / 500 g), FR4 77.0 (ST23 79.6; gate needs ≥ 78.6, so it misses by 1.6, 2.6 below ST23), pool400 93.0 (93.21), bp5 67.0 (68.67; gate needs ≥ 67.67, fails), Galactus 37.0 (35.4), Megabyte 83.2 (83.2, report-only), gen-panel min 0.37 / mean 0.801 (0.354 / 0.8087). Botpack5 per-bot: Ripple 64.5, Kira 67.25, Dice 57.75 (ST23 65.25), Chronos 76.75, Galactus 35.75, Seer 100. Pool400 per-bot: 1v1.pt 83.75, 430M 84.75, Nexto 93.0, Necto 99.0, Element 99.0, Immortal 98.5. Demos per 200 kickoff games (cand/opp): vs ST23 71/72, vs FR4 10/113. Mid evals (10 chunks of 100M) vs FR4 averaged 76.2, the same as ST23's 76.1. Verdict: the ST20r opponent did not do its job. Dice fell 7.5 points instead of recovering, and FR4 missed the gate. ST25 had already been designed on top of ST24 and kept ST20r, so ST26 removes it (below).
+
+## ST25 (training after ST24): demo_threat retuned to the Galactus demo failure mode (2026-11-11)
+
+ST25 = ST24's config (ST23 recipe + `ST20r_final` @ 2.0, OPPCH 0.70, 1 PPO epoch, binary `9d4b2a6`) with one change in the setter mix (`experiments/st_ST25.env`, `experiments/train_st25.toml`): `demo_threat` goes from 0.05 of starts at 800-1500 uu to 0.15 at 1800-3000 uu. The extra 0.10 comes out of normal play (kickoff/random/replay scaled ×0.875: kickoff 0.315, random 0.105+0.105, replay 0.175). aerial_defense stays at 0.15.
+
+Why (diag_gal, 200 g ST23 vs Galactus, `~/ippo_runs/diag_gal/`): 59% of conceded goals (73/124) come within 3.5 s of us being demoed (ST16: 29%). Aerial goals fell from 55 to 24 after the ST19 aerial_defense setter. 93/200 games had a demo on us; we won 9.7% of those vs ~63% of the rest. One second before the demo, Galactus is ~2.5k uu away (p25-p75 2.1k-2.9k) at ~2050 uu/s, and we are on the ground, goal-side, ~0.5k uu from our goal line, with ~93 boost. The ST19 drill (5%, 800-1500 uu) had not moved this.
+
+Started 2026-11-11 5:37 AM ET from ST24's selected 19727.3M toward 20727.3M, with BESTF=st23_final (ST24 not promoted). Mid evals every 100M. Because it still carries ST20r, its result is read together with ST26.
+
+## ST26 (queued after ST25): ST25 without the ST20r_final opponent (2026-11-11)
+
+ST26 = ST25 with one change: `ST20r_final` (weight 2.0) is removed from `EXTRA_OPPS` (`experiments/st_ST26.env`, `experiments/train_st26.toml`; the toml is ST25's with comments updated and no non-comment change). Setters stay ST25's (demo_threat 0.15 @ 1800-3000 uu, aerial_defense 0.15, normal play ×0.875). OPPCH 0.70, 1 epoch, TPI 300k, MB 100k, LR 5e-5, ENT 0.016, CHUNK 100M, binary `9d4b2a6`, Galactus 6.429, Megabyte 2.0, Ripple 1.286 (toml) all unchanged.
+
+Why: ST24 showed the ST20r opponent did not recover bp5 or Dice (Dice 57.75 vs ST23 65.25) and FR4 missed the gate. Mid evals vs FR4 were flat, so it bought nothing measurable. Removing it puts the league back to ST23's exactly (total weight 15.427). Realized shares at OPPCH 0.70: Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%, other league 26.0%, self-play 30%. ST26 then tests the demo_threat retune on the ST23 league.
+
+Start checkpoint and BEST follow the launcher: ST25's selected final, +1000M; BESTF is st25_final if ST25 promotes, else the newest promote=true final (st23_final). Queued as `ST26 ST26` in `~/ippo_runs/ST_QUEUE` on 2026-11-11 6:12 AM ET (backup `ST_QUEUE.bak_pre_st26_20261111_0612`), so the chain will not fall back to ST25r. Validation in `/opt/dlami/nvme/st26_validate`: the launcher-rendered `train_st.toml` parses, has no `@` placeholders and no ST20r, and its setter weights sum to 1.0. Its only non-comment diff from the ST25 render is the ST20r block (plus warmup/hold steps, which depend on the start). `indococo-train-rip-9d4b2a6 rates` ran 40k steps from st23_final over the mix with no panics, and all 5 setter kinds fired.
 
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 

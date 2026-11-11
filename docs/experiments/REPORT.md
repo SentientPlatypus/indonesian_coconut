@@ -1337,7 +1337,7 @@ Auto gate failed only on bp5 68.17 vs 69.74 (about 1.6 short of the −1.0 toler
 
 ST22 started from ST21's 18053.6M checkpoint (`st_ST22.env`, `train_st22.toml`): ST21 plus `air_dribble_wall_challenge` at 10% of starts. League and OPPCH stay ST21's (0.60). Binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-9d4b2a6`. `RIPPLE_WEIGHT` is not set. It launched with BESTF=st20r_final. `exp_ST22/opp_BEST.toml` was re-pointed to st21_final at 2026-11-10 9:00 AM ET. After finals, `PROMOTE.json` was re-scored vs st21_final. Selected checkpoint `exp_ST22/checkpoints/1794327975` at 18564.8M. Panel vs ST21: h2h 50.6%, FR4 76.0, pool 92.58, bp5 68.75, Galactus 35.8, Megabyte 84.8 (report-only). promote stayed false (h2h 50.6% < 52%). No bpk was exported.
 
-### 11.8t ST23 promote; ST24 training vs ST23 (2026-11-10)
+### 11.8t ST23 promote (2026-11-10)
 
 ST23 is the current best. Auto gate passed; user confirmed 2026-11-10 11:30 PM ET. Keep-best checkpoint `exp_ST23/checkpoints/1794367057` at 19015.7M, continued from ST21 18053.6M (training ended at 19053.8M). Recipe: ST21 + OPPCH 0.70 + 1 PPO epoch, ST21 setters, no `air_dribble_wall_challenge`, binary `9d4b2a6` (user-approved restart 4:07 PM ET Nov 10, from ST21 rather than ST22). The OPPCH bump and the 1-epoch switch are confounded, and the wall-challenge setter was also dropped, so the gain cannot be credited to one change alone. Shipped as `checkpoints_to_test/st23_19016M.bpk`. ST21 (`st21_18054M.bpk`) is the previous best.
 
@@ -1353,7 +1353,26 @@ ST23 is the current best. Auto gate passed; user confirmed 2026-11-10 11:30 PM E
 
 All auto gates passed: h2h 56.0 ≥ 52, FR4 79.6 ≥ 74.4, pool 93.21 ≥ 91.75, bp5 68.67 ≥ 67.17, Galactus 35.4 ≥ 31.6 (and above the 0.27 floor).
 
-ST24 is training from ST23's 19015.7M checkpoint (`st_ST24.env`, `train_st24.toml`): restarted ST23 plus `ST20r_final` at weight 2.0, aimed at bp5 / Dice recovery. Realized shares at OPPCH 0.70 / total 17.427: Galactus 25.8%, Ripple 5.2%, Megabyte 8.0%, ST20r 8.0%, other league 23.0%, self-play 30%. It started 11:18 PM ET with BESTF=st23_final already (the ST23 auto-promote follow-up), so mid evals, finals, and the promote gate measure vs ST23. Mid evals are every 100M. After ST24, ST_QUEUE is empty and needs a designed next run.
+### 11.8u ST24 not promoted; ST25 training; ST26 queued (2026-11-11)
+
+ST24 (`st_ST24.env`, `train_st24.toml`) = restarted ST23 plus `ST20r_final` at weight 2.0, aimed at bp5 / Dice recovery. Realized shares at OPPCH 0.70 / total 17.427: Galactus 25.8%, Ripple 5.2%, Megabyte 8.0%, ST20r 8.0%, other league 23.0%, self-play 30%. It started 2026-11-10 11:18 PM ET from ST23's 19015.7M checkpoint and measured vs ST23. Selected checkpoint `exp_ST24/checkpoints/1794384802` at 19727.3M. Finals 2026-11-11 5:36 AM ET: not promoted.
+
+| Metric | ST24 19727.3M | ST23 (BEST) |
+|---|---|---|
+| h2h vs ST23, 500 g | 53.6% (268-232) | — |
+| FR4 | 77.0 | 79.6 |
+| pool400 | 93.0 | 93.21 |
+| botpack5 | 67.0 | 68.67 |
+| Dice (in botpack5) | 57.75 | 65.25 |
+| Galactus | 37.0 | 35.4 |
+| Megabyte (report-only) | 83.2 | 83.2 |
+| gen-panel min / mean | 0.37 / 0.801 | 0.354 / 0.8087 |
+
+Gates: h2h passes, but FR4 (77.0 < 78.6) and bp5 (67.0 < 67.67) fail. The opponent was meant to restore Dice, and Dice got worse. Mid evals vs FR4 were flat (mean 76.2 vs ST23's 76.1).
+
+ST25 (`st_ST25.env`, `train_st25.toml`) = ST24's config with the demo_threat setter retuned to the diag_gal finding: 59% of goals ST23 concedes to Galactus come within 3.5 s of a demo on us, with Galactus closing from ~2.5k uu. demo_threat goes from 0.05 @ 800-1500 uu to 0.15 @ 1800-3000 uu, normal play ×0.875, aerial_defense 0.15. It started 2026-11-11 5:37 AM ET from ST24's 19727.3M with BESTF=st23_final. It still carries ST20r@2.0.
+
+ST26 (`st_ST26.env`, `train_st26.toml`) is queued after ST25 (`ST_QUEUE` = `ST26 ST26`). It is ST25 with one change: `ST20r_final` is removed, so the league is ST23's again (total 15.427: Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%, other league 26.0%, self-play 30%). Setters and learner settings are ST25's. Start ckpt and BEST follow the launcher (ST25's selected final; BEST is st25_final if it promotes, else st23_final). The rendered config was validated in `/opt/dlami/nvme/st26_validate`: it parses, and `rates` ran 40k steps with no panics.
 
 ## Appendix A: data and figures
 
