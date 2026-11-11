@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ST strength chain (EXPERIMENTS.md ST): 1v1 strength only, no flip reset terms,
 # no BC/KL refresh. RUN=ST1 VARIANT=ST1 bash st_launch.sh (resumes). Chunks of
-# 50M; after each chunk: 200 g vs BEST (FR8-final) + 200 g vs FR4 -> mid.jsonl.
+# 100M (CHUNK); after each chunk: 200 g vs BEST (FR8-final) + 200 g vs FR4 -> mid.jsonl.
 # Guard: 2 chunks in a row < 45% vs FR4 -> roll back to the best chunk.
 # Also 200 g vs Galactus per chunk (field galactus_200) and 500 g in finals
 # (galactus_final.jsonl). Finals (<run>_final): 500 g vs BEST + FR4 (seed 424242), pool400, botpack5, Galactus 500 g, and
@@ -30,7 +30,7 @@ R=/home/ubuntu/ippo_runs; RUN=${RUN:-ST1}; VARIANT=${VARIANT:-ST1}; X=$R/exp_$RU
 C=${C:-$R/code_fr9/indococo_ppo_bot}; B0=${BIN:-$R/code_fr9/bin/indococo-train-fr9}
 export INDOCOCO_OBS_EXT=1
 THREADS=${THREADS:-24}; GAMES=${GAMES:-512}; H2H_GAMES=${H2H_GAMES:-200}; PROCS=${PROCS:-16}
-FIN_H2H=${FIN_H2H:-500}; FIN_POOL=${FIN_POOL:-400}; FIN_BP5=${FIN_BP5:-400}; FIN_BP5_ON=${FIN_BP5_ON:-1}; GAL_GAMES=${GAL_GAMES:-200}; FIN_GAL=${FIN_GAL:-500}; CHUNK=${CHUNK:-50000000}
+FIN_H2H=${FIN_H2H:-500}; FIN_POOL=${FIN_POOL:-400}; FIN_BP5=${FIN_BP5:-400}; FIN_BP5_ON=${FIN_BP5_ON:-1}; GAL_GAMES=${GAL_GAMES:-200}; FIN_GAL=${FIN_GAL:-500}; CHUNK=${CHUNK:-100000000}
 export LD_LIBRARY_PATH=$R/e8b2_1v1/bin/sp/torch/lib TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 INDOCOCO_METRICS=$X/logs/metrics.jsonl
 PYT=/home/ubuntu/coco-venv/bin/python; T=$C/tools/pool_eval; SNAP=$R/fr7_snap
 GALP=$C/experiments/pool_galactus.toml   # Galactus (botpack5, the bot we have not beaten): tracked every chunk + finals

@@ -14,7 +14,21 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
-### st21_18054M.bpk (current best)
+### st23_19016M.bpk (current best)
+
+| | |
+|---|---|
+| Lineage | ST23 (ST21 recipe + OPPCH 0.70 + 1 PPO epoch, ST21 setters, no `air_dribble_wall_challenge`, GAL_WEIGHT 6.429, MEGA_WEIGHT 2.0, Ripple toml 1.286, ENT 0.016), continued from ST21 18053.6M, keep-best chunk `1794367057` (19015.7M steps; training ended at 19053.8M). 106-input obs (`INDOCOCO_OBS_EXT=1`). **Auto promote**, user confirmed 2026-11-10 11:30 PM ET. All gates passed. The OPPCH bump and the 1-epoch switch are confounded, and the wall-challenge setter was also dropped |
+| H2H | **56.0%** vs ST21 (280-220), **79.6%** vs FR4 (ST21 75.4%), over 500 games each |
+| Pool | **93.21** on pool400 (ST21 92.75): 1v1.pt 86.5, 430M 85.0, Nexto 91.8, Necto 98.8, Element 99.0, Immortal 98.2 |
+| Botpack5 | **68.67** avg (ST21 68.17): Ripple 67.25, Kira 68.5, Dice 65.25, Chronos 75.25, Galactus 36.25, Seer 99.5 |
+| Galactus | **35.4%** over 500 games (ST21 35.6%) |
+| Megabyte | **83.2%** over 500 games (report-only; ST21 81.6%) |
+| Gen panel | min **0.354** / mean **0.8087** (ST21 0.356 / 0.8034) |
+| sha256 | `b135fae887d0a0733c2ef712cccdd0737a979af54a69bbfdd4c2e0b5f4f81e57` |
+
+### st21_18054M.bpk
+
 
 | | |
 |---|---|

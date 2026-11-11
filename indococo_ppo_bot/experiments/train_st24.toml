@@ -1,0 +1,87 @@
+# ST learner settings (EXPERIMENTS.md ST). Filled in by st_launch.sh from
+# st_<VARIANT>.env. ST24 = restarted ST23 (ST21 + OPPCH 0.70 + ppo epochs 1,
+# ST21 setter mix, no air_dribble_wall_challenge, binary 9d4b2a6) plus ONE
+# change: ST20r_final in the league at weight 2.0, aimed at bp5 recovery.
+# Evidence: ST21 bp5 68.17 vs ST20r 69.74 was almost entirely Dice
+# (67.67 -> 57.25); Kira/Ripple slipped only ~1 pt, Galactus improved.
+# Dice/Kira/Chronos/Seer are Python botpack bots and are not a valid
+# [[opponents.external]] kind in this binary (only galactus, megabyte,
+# ripple). ST20r is the last policy that held Dice 67.7 / bp5 69.74, and
+# fixed checkpoints are the existing league knob. With OPPCH 0.70 and
+# total weight 17.427 the realized shares are Galactus 25.8% / Ripple 5.2%
+# / Megabyte 8.0% / ST20r 8.0% / other league 23.0% / self-play 30%.
+# Start ckpt = ST23 selected final (launcher default). Measured vs BEST
+# at launch (st21_final unless ST23 promotes).
+reward_config = "@RUN@/cfg/experiments/st.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+# League: past bests as fixed opponents (scaled 0.816). ST20r@2.0 is added
+# via EXTRA_OPPS in st_ST24.env, not here.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = 0.816
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 0.816
+
+# ST21 setter mix (kickoff 0.36, random 0.12+0.12, replay 0.20,
+# aerial_defense 0.15, demo_threat 0.05). No air_dribble_wall_challenge.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.36
+[[state_setters]]
+kind = "random"
+weight = 0.12
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.12
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "replay"
+weight = 0.20
+path = "@SNAP@"
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.15
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.05
+
+# ST24: Rust Ripple v1.1 (9d4b2a6 binary, LibTorch CUDA; RIPPLE_DEVICE=cuda)
+# at ~5.2% of iterations (0.7*1.286/17.427) because OPPCH is 0.70 and
+# ST20r@2.0 was added to the league.
+[[opponents.external]]
+name = "ripple"
+kind = "ripple"
+path = "/home/ubuntu/eval_bots/ripple/bots/v1.1"
+weight = 1.286

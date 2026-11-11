@@ -1319,9 +1319,9 @@ ST21 started from ST20r at 17642.6M (2026-11-10 04:44 UTC) and later became BEST
 
 ST22 and ST23 were queued here; their status after the ST21 promote is in §11.8s. Box check of `9d4b2a6`: 88 lib tests passed. A pools=2 smoke from the ST20r checkpoint at setter weight 0.5 gave share 0.386 (expected 0.333), average episode length 346, flip-reset events fired, and no panics.
 
-### 11.8s ST21 manual promote; ST22 training vs ST21; ST23 queued (2026-11-10)
+### 11.8s ST21 manual promote; ST22 later finished unpromoted (2026-11-10)
 
-ST21 is the current best. User-approved manual promote 2026-11-10 08:57 ET. Keep-best checkpoint `exp_ST21/checkpoints/1794296692` at 18053.6M, continued from ST20r 17642.6M (training ended at 18642.8M). Same ST21 recipe (Galactus 25%, Ripple 5%, Megabyte 7.8%). Shipped as `checkpoints_to_test/st21_18054M.bpk`. ST20r (`st20r_17643M.bpk`) is the previous best.
+ST21 was BEST until ST23 (§11.8t). User-approved manual promote 2026-11-10 08:57 ET. Keep-best checkpoint `exp_ST21/checkpoints/1794296692` at 18053.6M, continued from ST20r 17642.6M (training ended at 18642.8M). Same ST21 recipe (Galactus 25%, Ripple 5%, Megabyte 7.8%). Shipped as `checkpoints_to_test/st21_18054M.bpk`. ST20r (`st20r_17643M.bpk`) is the previous best.
 
 | Metric | ST21 18053.6M | ST20r (previous best) |
 |---|---|---|
@@ -1335,9 +1335,25 @@ ST21 is the current best. User-approved manual promote 2026-11-10 08:57 ET. Keep
 
 Auto gate failed only on bp5 68.17 vs 69.74 (about 1.6 short of the −1.0 tolerance). Other gates pass: h2h 52.8 ≥ 52, FR4 75.4 ≥ 74.8, pool 92.75 ≥ 91.42, Galactus 35.6 ≥ 30.2.
 
-ST22 is training from ST21's 18053.6M checkpoint (`st_ST22.env`, `train_st22.toml`): ST21 plus `air_dribble_wall_challenge` at 10% of starts. League and OPPCH stay ST21's (0.60). Binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-9d4b2a6`. `RIPPLE_WEIGHT` is not set. It launched with BESTF=st20r_final. `exp_ST22/opp_BEST.toml` was re-pointed to st21_final at 2026-11-10 9:00 AM ET, so later mids, final selection and finals h2h measure vs ST21. The first three mids (18113.9/18164.0/18214.1M) were already scored vs ST20r. st_promote.py baselines and demos_h2h still use in-memory BESTF=st20r_final and should be re-scored vs st21_final after finals.
+ST22 started from ST21's 18053.6M checkpoint (`st_ST22.env`, `train_st22.toml`): ST21 plus `air_dribble_wall_challenge` at 10% of starts. League and OPPCH stay ST21's (0.60). Binary `/opt/dlami/nvme/ippo_bins/indococo-train-rip-9d4b2a6`. `RIPPLE_WEIGHT` is not set. It launched with BESTF=st20r_final. `exp_ST22/opp_BEST.toml` was re-pointed to st21_final at 2026-11-10 9:00 AM ET. After finals, `PROMOTE.json` was re-scored vs st21_final. Selected checkpoint `exp_ST22/checkpoints/1794327975` at 18564.8M. Panel vs ST21: h2h 50.6%, FR4 76.0, pool 92.58, bp5 68.75, Galactus 35.8, Megabyte 84.8 (report-only). promote stayed false (h2h 50.6% < 52%). No bpk was exported.
 
-ST23 is queued after ST22 (`st_ST23.env`, `train_st23.toml`). One change: OPPCH 0.60 to 0.70, conditional on ST22 not regressing. Same setter mix and binary as ST22. Realized shares: Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%, other league 25.9%, self-play 30%. Measured vs ST22 if that run promotes, otherwise vs ST21.
+### 11.8t ST23 promote; ST24 training vs ST23 (2026-11-10)
+
+ST23 is the current best. Auto gate passed; user confirmed 2026-11-10 11:30 PM ET. Keep-best checkpoint `exp_ST23/checkpoints/1794367057` at 19015.7M, continued from ST21 18053.6M (training ended at 19053.8M). Recipe: ST21 + OPPCH 0.70 + 1 PPO epoch, ST21 setters, no `air_dribble_wall_challenge`, binary `9d4b2a6` (user-approved restart 4:07 PM ET Nov 10, from ST21 rather than ST22). The OPPCH bump and the 1-epoch switch are confounded, and the wall-challenge setter was also dropped, so the gain cannot be credited to one change alone. Shipped as `checkpoints_to_test/st23_19016M.bpk`. ST21 (`st21_18054M.bpk`) is the previous best.
+
+| Metric | ST23 19015.7M | ST21 (previous best) |
+|---|---|---|
+| h2h vs ST21, 500 g | 56.0% (280-220) | — |
+| FR4 | 79.6 | 75.4 |
+| pool400 | 93.21 | 92.75 |
+| botpack5 | 68.67 | 68.17 |
+| Galactus | 35.4 | 35.6 |
+| Megabyte (report-only) | 83.2 | 81.6 |
+| gen-panel min / mean | 0.354 / 0.8087 | 0.356 / 0.8034 |
+
+All auto gates passed: h2h 56.0 ≥ 52, FR4 79.6 ≥ 74.4, pool 93.21 ≥ 91.75, bp5 68.67 ≥ 67.17, Galactus 35.4 ≥ 31.6 (and above the 0.27 floor).
+
+ST24 is training from ST23's 19015.7M checkpoint (`st_ST24.env`, `train_st24.toml`): restarted ST23 plus `ST20r_final` at weight 2.0, aimed at bp5 / Dice recovery. Realized shares at OPPCH 0.70 / total 17.427: Galactus 25.8%, Ripple 5.2%, Megabyte 8.0%, ST20r 8.0%, other league 23.0%, self-play 30%. It started 11:18 PM ET with BESTF=st23_final already (the ST23 auto-promote follow-up), so mid evals, finals, and the promote gate measure vs ST23. Mid evals are every 100M. After ST24, ST_QUEUE is empty and needs a designed next run.
 
 ## Appendix A: data and figures
 

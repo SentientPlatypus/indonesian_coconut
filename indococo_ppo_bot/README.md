@@ -406,7 +406,7 @@ used by the `reset_replay` setter (same code as `replay`, own label
 
 ### ST pipeline (strength only, no flip resets)
 `experiments/st_launch.sh` (RUN, VARIANT=ST1|ST2|ST3 from `st_<V>.env`): rewards `st.toml` (= aud.toml),
-100% normal-play setters, league of past bests (`train_st.toml`), no BC/KL refresh. Per 50M chunk: 200 g vs
+100% normal-play setters, league of past bests (`train_st.toml`), no BC/KL refresh. Per 100M chunk (`CHUNK` default since 2026-11-10; earlier ST runs used 50M): 200 g vs
 the current best and FR4, plus 200 g vs Galactus (`experiments/pool_galactus.toml`, field `galactus_200`, ~45 s)
 -> `exp_<run>/logs/mid.jsonl`. Finals on the best chunk: 1000 g vs best + FR4, pool400, bp5, 1000 g vs Galactus
 (`galactus1000.jsonl`, seed 424242; blocks promotion only if > 4 pts below the best's), `st_promote.py` -> `<run>_final/PROMOTE.json`. Then the next `RUN VARIANT` line of `~/ippo_runs/ST_QUEUE`
@@ -481,7 +481,7 @@ is 282-218 (56.4%). Gates vs ST19r all pass: h2h 56.4 ≥ 52, FR4 75.8 ≥ 70.6,
 ≥ 91.62, bp5 69.74 ≥ 66.38, Galactus 34.2 ≥ 30.2. Previous best ST19r: FR4 71.6, pool
 92.62, bp5 67.38, Galactus 34.2, Megabyte 81.0, gen-panel mean 0.800.
 
-ST21 is the current best (user-approved manual promote 2026-11-10 08:57 ET). Keep-best
+ST21 was BEST until ST23. User-approved manual promote 2026-11-10 08:57 ET. Keep-best
 checkpoint `exp_ST21/checkpoints/1794296692` at 18053.6M, continued from ST20r 17642.6M
 (training ended at 18642.8M). Recipe unchanged from `cd89eae`: Galactus 25% / Ripple 5%
 (toml weight 1.286) / Megabyte 7.8% (`MEGA_WEIGHT=2.0`), gal4 setters, OPPCH 0.60, binary
@@ -494,26 +494,38 @@ gen-panel min 0.356 / mean 0.8034. Auto gate failed only on bp5 68.17 vs 69.74 (
 pool 92.75 ≥ 91.42, Galactus 35.6 ≥ 30.2. Previous best ST20r: FR4 75.8, pool 92.42,
 bp5 69.74, Galactus 34.2, Megabyte 79.2, gen-panel mean 0.8107.
 
-ST22 is training (`experiments/st_ST22.env`, `experiments/train_st22.toml`), started
-from ST21's 18053.6M checkpoint: ST21 plus `air_dribble_wall_challenge` at 10% of
-starts. Galactus and Megabyte jump off the wall and 50/50 the bot mid air dribble,
-and it loses possession. The other gal4 setters keep ST21's proportions scaled by
-0.9 (kickoff 0.324, random 0.108+0.108, replay 0.180, aerial_defense 0.135,
-demo_threat 0.045). League and OPPCH stay ST21's (0.60): Galactus 25.0%, Ripple 5.0%,
-Megabyte 7.8%, other league 22.2%, self-play 40%. Binary
-`/opt/dlami/nvme/ippo_bins/indococo-train-rip-9d4b2a6`. `RIPPLE_DEVICE=cuda`.
-`RIPPLE_WEIGHT` is not set. Mid evals after the 2026-11-10 9:00 AM ET repoint, finals
-h2h, and final selection measure vs ST21 (`exp_ST22/opp_BEST.toml` -> st21_final).
-The first three mids (18113.9/18164.0/18214.1M) were already scored vs ST20r. The
-running launcher still has BESTF=st20r_final, so ST22's st_promote.py baselines and
-demos_h2h need a re-score vs st21_final after finals.
+ST22 finished and was not promoted. Selected checkpoint `exp_ST22/checkpoints/1794327975`
+at 18564.8M (`st22_final`). Recipe: ST21 plus `air_dribble_wall_challenge` at 10% of
+starts (`experiments/st_ST22.env`, `experiments/train_st22.toml`), binary
+`/opt/dlami/nvme/ippo_bins/indococo-train-rip-9d4b2a6`. After a re-score vs st21_final:
+h2h 50.6% vs ST21, FR4 76.0 (ST21 75.4), pool400 92.58 (92.75), bp5 68.75 (68.17),
+Galactus 35.8 (35.6), Megabyte 84.8 (report-only). promote stayed false (h2h 50.6% < 52%;
+the other gates would pass vs ST21). No bpk was exported. ST21 remained BEST until ST23.
 
-ST23 is queued after ST22 (`experiments/st_ST23.env`, `experiments/train_st23.toml`):
-ST22 plus OPPCH 0.60 to 0.70, only if ST22 does not regress. Same setter mix and
-the same `9d4b2a6` binary. Realized shares: Galactus 29.2%, Ripple 5.8%,
-Megabyte 9.1%, other league 25.9%, self-play 30%. `RIPPLE_WEIGHT` is not set.
-Measured vs ST22 if that run promotes, otherwise vs ST21 (the launcher refreshes
-BESTF from the newest promote=true final when ST22 does not promote).
+ST23 is the current best (auto promote, user confirmed 2026-11-10 11:30 PM ET). Keep-best
+checkpoint `exp_ST23/checkpoints/1794367057` at 19015.7M, continued from ST21 18053.6M
+(training ended at 19053.8M). Restarted 4:10 PM ET Nov 10 from ST21, not from ST22:
+ST21 + OPPCH 0.70 + 1 PPO epoch, ST21 setter mix, no `air_dribble_wall_challenge`,
+binary `9d4b2a6` (`experiments/st_ST23.env`, `experiments/train_st23.toml`). Realized
+shares: Galactus 29.2%, Ripple 5.8%, Megabyte 9.1%, other league 25.9%, self-play 30%.
+The OPPCH bump and the 1-epoch switch are confounded; the wall-challenge setter was
+also dropped, so the gain cannot be credited to one change alone. Shipped as
+`checkpoints_to_test/st23_19016M.bpk`. Finals vs ST21: h2h 56.0% (280-220), FR4 79.6
+(ST21 75.4), pool400 93.21, bp5 68.67, Galactus 35.4, Megabyte 83.2 (report-only),
+gen-panel min 0.354 / mean 0.8087. All auto gates passed: h2h 56.0 ≥ 52, FR4 79.6 ≥
+74.4, pool 93.21 ≥ 91.75, bp5 68.67 ≥ 67.17, Galactus 35.4 ≥ 31.6 (and above the 0.27
+floor). Previous best ST21: FR4 75.4, pool 92.75, bp5 68.17, Galactus 35.6, Megabyte
+81.6, gen-panel mean 0.8034.
+
+ST24 is training (`experiments/st_ST24.env`, `experiments/train_st24.toml`), started
+2026-11-10 11:18 PM ET from ST23's 19015.7M checkpoint toward 20015.7M. One change on
+the restarted ST23 recipe: `ST20r_final` in the league at weight 2.0, aimed at bp5 /
+Dice recovery. Realized shares at OPPCH 0.70 / total 17.427: Galactus 25.8%, Ripple
+5.2%, Megabyte 8.0%, ST20r 8.0%, other league 23.0%, self-play 30%. Because ST23
+already auto-promoted, the launcher started ST24 with BESTF=st23_final;
+`exp_ST24/opp_BEST.toml` points at st23_final. Mid evals, finals, and the promote gate
+measure vs ST23. Mid evals are every 100M (`CHUNK=100000000`). After ST24, ST_QUEUE is
+empty and needs a designed next run (do not rely on ST24r).
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench

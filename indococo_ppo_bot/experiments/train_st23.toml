@@ -1,10 +1,10 @@
 # ST learner settings (EXPERIMENTS.md ST). Filled in by st_launch.sh from
-# st_<VARIANT>.env. ST23 = ST22 + OPPCH 0.70 (one change; chance = @OPPCH@ is
-# filled from st_ST23.env). Same 9d4b2a6 binary and same setter mix as ST22
-# (air_dribble_wall_challenge 10%; other gal4 setters scaled 0.9). Conditional
-# on ST22 not regressing. Same league weights as ST21/ST22; with OPPCH 0.70:
-# Galactus 29.2% / Ripple 5.8% / Megabyte 9.1% / other league 25.9% /
-# self-play 30%. Measured vs BEST at launch (ST20r unless ST21/ST22 promote).
+# st_<VARIANT>.env. ST23 = ST21 + OPPCH 0.70 + ppo epochs 1 (user-approved
+# 4:07 PM ET Nov 10 restart: drop air_dribble_wall_challenge, restore ST21
+# setter weights, start from ST21 keep-best 1794296692 @18053.6M). Binary
+# remains indococo-train-rip-9d4b2a6. League with OPPCH 0.70: Galactus 29.2%
+# / Ripple 5.8% / Megabyte 9.1% / other league 25.9% / self-play 30%.
+# Measured vs BEST = st21_final.
 reward_config = "@RUN@/cfg/experiments/st.toml"
 checkpoints = "@RUN@/checkpoints"
 backend = "torch"
@@ -13,7 +13,7 @@ pools = 2
 games = 512
 timesteps_per_iteration = @TPI@
 mini_batch_size = @MB@
-epochs = 2
+epochs = 1
 policy_lr = @LR@
 critic_lr = @LR@
 entropy = @ENT@
@@ -34,7 +34,8 @@ hold_steps = @HOLD@
 decay_steps = @DECAY@
 min_scale = @MINLR@
 
-# League: past bests as fixed opponents (scaled 0.816 so Galactus can take 25%).
+# League: past bests as fixed opponents (scaled 0.816 so Galactus can take 25%
+# at OPPCH 0.60; at OPPCH 0.70 the realized Galactus share is 29.2%).
 [opponents]
 chance = @OPPCH@
 past_versions_weight = 0.816
@@ -43,37 +44,34 @@ name = "FR4_final"
 checkpoint = "@RUN@/opponents/FR4_final"
 weight = 0.816
 
+# ST21 setter mix (kickoff 0.36, random 0.12+0.12, replay 0.20,
+# aerial_defense 0.15, demo_threat 0.05). No air_dribble_wall_challenge.
 [[state_setters]]
 kind = "kickoff"
-weight = 0.324
+weight = 0.36
 [[state_setters]]
 kind = "random"
-weight = 0.108
+weight = 0.12
 ball_speed = true
 car_speed = true
 [[state_setters]]
 kind = "random"
-weight = 0.108
+weight = 0.12
 ball_speed = true
 cars_on_ground = true
 [[state_setters]]
 kind = "replay"
-weight = 0.180
+weight = 0.20
 path = "@SNAP@"
 [[state_setters]]
 kind = "aerial_defense"
-weight = 0.135
+weight = 0.15
 [[state_setters]]
 kind = "demo_threat"
-weight = 0.045
+weight = 0.05
 
-[[state_setters]]
-kind = "air_dribble_wall_challenge"
-weight = 0.10
-
-# ST23: Rust Ripple v1.1 (9d4b2a6 binary, LibTorch CUDA; RIPPLE_DEVICE=cuda),
-# same weight as ST21/ST22; ~5.8% of iterations (0.7*1.286/15.427) because
-# OPPCH is 0.70.
+# ST23: Rust Ripple v1.1 (9d4b2a6 binary, LibTorch CUDA; RIPPLE_DEVICE=cuda)
+# at ~5.8% of iterations (0.7*1.286/15.427) because OPPCH is 0.70.
 [[opponents.external]]
 name = "ripple"
 kind = "ripple"
