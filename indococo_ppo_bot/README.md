@@ -537,23 +537,24 @@ ST20r@2.0. Shipped as `checkpoints_to_test/st25_20728M.bpk`. Finals vs ST23: h2h
 PROMOTE.json was backed up to `PROMOTE.json.bak_auto_false` and set promote=true with a
 manual_override note. Previous best ST23 (`st23_19016M.bpk`).
 
-ST26 is training (`experiments/st_ST26.env`, `experiments/train_st26.toml`), started
-2026-11-11 11:54 AM ET from ST25's 20727.5M checkpoint toward 21727.5M: ST25 with one
-change, `ST20r_final` removed from the league, so the league is ST23's again (Galactus
-29.2%, Ripple 5.8%, Megabyte 9.1%, other league 26.0%, self-play 30%). It launched with
-BESTF=st23_final (ST25 had not promoted yet). `exp_ST26/opp_BEST.toml` was re-pointed to
-st25_final at 12:17 PM ET Nov 11, before the first mid eval, so all ST26 mids, final
-selection and finals h2h measure vs ST25 (its own parent). The running launcher still has
-BESTF=st23_final, so ST26's st_promote.py baselines and demos_h2h need a re-score vs
-st25_final after finals.
+ST26 (`experiments/st_ST26.env`, `experiments/train_st26.toml`; ST25 without `ST20r_final`)
+finished 2026-11-11 6:19 PM ET and was not promoted. Selected checkpoint 21639.5M
+(`exp_ST26/checkpoints/1794434780`). Finals: h2h 49.0% vs ST25, FR4 72.2 (ST25 78.4), pool400
+93.21 (93.33), bp5 68.33 (69.21; Dice 68.25 vs 61.75), Galactus 34.6 (40.8), Megabyte 82.6.
+Re-score vs st25_final in `st26_final/PROMOTE_vs_st25.json`. Dropping ST20r helped Dice and
+cost Galactus and FR4; both effects are about 2 SE or less (EXPERIMENTS.md ST26 results).
 
-ST27 is queued after ST26 (`experiments/st_ST27.env`, `experiments/train_st27.toml`): ST26
-with one change, `FR4_final` league weight 0.816 -> 2.0 (realized 3.7% -> 8.4% of
-iterations; Galactus 29.2% -> 27.1%). Why: FR4 is the weakest gate metric, and a 200-game
-diagnostic vs FR4 shows we lose 44% of FR4's kickoffs and concede mostly aerial and
-out-of-position goals, which no setter reproduces. The same diagnostic vs Galactus showed
-the ST25 demo drill did not cut the demo-goal share (62% vs ST23 59%), while aerial goals
-against fell from 24 to 15. Validated in `/opt/dlami/nvme/st27_validate`.
+ST27 is training (`experiments/st_ST27.env`, `experiments/train_st27.toml`), started
+2026-11-11 6:21 PM ET from ST26's 21639.5M checkpoint toward 22639.5M: ST26 with one change,
+`FR4_final` league weight 0.816 -> 2.0 (realized 3.7% -> 8.4%; Galactus 29.2% -> 27.1%).
+The launcher has BESTF=st25_final and `exp_ST27/opp_BEST.toml` points at st25_final, so its
+mids and finals are scored against ST25 with no re-score needed.
+
+ST28 is queued after ST27 (`experiments/st_ST28.env`, `experiments/train_st28.toml`,
+`experiments/st28.toml`): ST27 with one change, the reward for getting demoed,
+`demo.victim_punishment` 1.0 -> 3.0 (a demo on us costs 150 instead of 50). Why: 62% of the
+goals Galactus scores come within 3.5 s of a demo on us, and the ST25 demo drill did not lower
+that share. Validated in `/opt/dlami/nvme/st28_validate`.
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench

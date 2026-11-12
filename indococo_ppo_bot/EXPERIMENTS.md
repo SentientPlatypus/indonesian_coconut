@@ -1622,7 +1622,7 @@ Started 2026-11-11 5:37 AM ET from ST24's selected 19727.3M toward 20727.3M, wit
 
 **FR4 diagnostic (same protocol, `diag_gal/diag_fr4.py` vs `exp_FR4/logs/final_policy.safetensors`, `st25_fr4_summary.txt` / `st23_fr4_summary.txt`).** ST25 77.0% (154-46) vs ST23 74.5% (149-51), so on this protocol ST25 is not worse vs FR4. The 1.2-point finals gap (78.4 vs 79.6, se ~1.8 at 500 g) is inside the noise, and the FR4 mid mean went up (77.4 vs 76.1). How FR4 beats ST25: we lose 44% of kickoffs to FR4 (88/200; only 15% vs Galactus) and win 70.5% after a lost kickoff vs 83.3% after a won one (`kick_split.py`); 12 of 46 losses are goals within 15 s of a lost kickoff. Goals conceded: aerial 14 (30%), ground out of position 14 (30%), after a demo 10 (22%), median shot height at FR4's last touch 405 uu. FR4 rarely demos us (32 per 200 g), so the demo drill does not touch this matchup.
 
-## ST26 (training after ST25): ST25 without the ST20r_final opponent (2026-11-11)
+## ST26 (trained after ST25, results below): ST25 without the ST20r_final opponent (2026-11-11)
 
 ST26 = ST25 with one change: `ST20r_final` (weight 2.0) is removed from `EXTRA_OPPS` (`experiments/st_ST26.env`, `experiments/train_st26.toml`; the toml is ST25's with comments updated and no non-comment change). Setters stay ST25's (demo_threat 0.15 @ 1800-3000 uu, aerial_defense 0.15, normal play ×0.875). OPPCH 0.70, 1 epoch, TPI 300k, MB 100k, LR 5e-5, ENT 0.016, CHUNK 100M, binary `9d4b2a6`, Galactus 6.429, Megabyte 2.0, Ripple 1.286 (toml) all unchanged.
 
@@ -1630,7 +1630,7 @@ Why: ST24 showed the ST20r opponent did not recover bp5 or Dice (Dice 57.75 vs S
 
 Start checkpoint and BEST follow the launcher: ST25's selected final, +1000M; BESTF is st25_final if ST25 promotes, else the newest promote=true final (st23_final). **Actual:** ST25 did not auto-promote, so ST26 started 2026-11-11 11:54 AM ET from `exp_ST25/checkpoints/1794413355` (20727.5M -> 21727.5M) with BESTF=st23_final. After the user-approved ST25 promote, `exp_ST26/opp_BEST.toml` was re-pointed to st25_final at 12:17 PM ET (backup `opp_BEST.toml.bak_st23`), before the first mid eval. All ST26 mids, final selection and finals h2h therefore measure vs ST25, which is ST26's own start checkpoint. The running launcher keeps BESTF=st23_final in memory, so st_promote.py baselines and demos_h2h will be vs ST23; re-score `st26_final/PROMOTE.json` vs st25_final after finals. Queued as `ST26 ST26` in `~/ippo_runs/ST_QUEUE` on 2026-11-11 6:12 AM ET (backup `ST_QUEUE.bak_pre_st26_20261111_0612`), so the chain will not fall back to ST25r. Validation in `/opt/dlami/nvme/st26_validate`: the launcher-rendered `train_st.toml` parses, has no `@` placeholders and no ST20r, and its setter weights sum to 1.0. Its only non-comment diff from the ST25 render is the ST20r block (plus warmup/hold steps, which depend on the start). `indococo-train-rip-9d4b2a6 rates` ran 40k steps from st23_final over the mix with no panics, and all 5 setter kinds fired.
 
-## ST27 (queued after ST26): FR4_final league weight 0.816 -> 2.0 (2026-11-11)
+## ST27 (training after ST26): FR4_final league weight 0.816 -> 2.0 (2026-11-11)
 
 ST27 = ST26 (ST25 setters, no ST20r, ST23 league, OPPCH 0.70, 1 epoch, binary `9d4b2a6`, CHUNK 100M) with one change in `experiments/train_st27.toml`: the fixed `FR4_final` opponent goes from weight 0.816 to 2.0. `experiments/st_ST27.env` is ST26's env with `TRAIN_TMPL=train_st27.toml` (EXTRA_OPPS ST13-16/HUNT @ 0.816, GAL_WEIGHT 6.429, MEGA_WEIGHT 2.0 unchanged).
 
@@ -1641,6 +1641,49 @@ Realized shares at OPPCH 0.70 / total weight 16.611 (was 15.427): FR4 8.43% (3.7
 Read against ST26 (its parent), not ST25. Success = FR4 final ≥ ST25's 78.4 + 1 with Galactus not below 40.8 − 4 and h2h ≥ 52 vs BEST. If FR4 does not move, league weight is not the FR4 lever either, and the next FR4 idea is a kickoff-specific change.
 
 Start checkpoint and BEST follow the launcher: ST26's selected final, +1000M; BESTF = the newest promote=true final (st25_final unless ST26 promotes; note the running launcher scores ST26's PROMOTE.json against st23_final baselines, so an ST26 auto-promote would make st26_final BESTF). Queued as `ST27 ST27` in `~/ippo_runs/ST_QUEUE` on 2026-11-11 12:23 PM ET (backup `ST_QUEUE.bak_pre_st27_20261111_1723`, queue was empty). Validation in `/opt/dlami/nvme/st27_validate`: the launcher-rendered `train_st.toml` parses, has no `@` placeholders and no ST20r, setter weights sum to 1.0, all fixed-opponent checkpoints exist, and the only non-comment diff from the ST26 template is `weight = 2.0` on FR4_final. `indococo-train-rip-9d4b2a6 rates` ran 40k steps (192 episodes) from st25's checkpoint `exp_ST25/checkpoints/1794413355` at nice 19 with no panics, and all 5 setter kinds fired.
+
+## ST26 results: ST25 without ST20r_final, not promoted (2026-11-11)
+
+Finals done 2026-11-11 6:19 PM ET. Selected checkpoint `exp_ST26/checkpoints/1794434780` at 21639.5M (st_select_final: re-eval h2h 50.6% / Galactus 35.6%, score 0.446). `st26_final/opp_BEST.toml` points at st25_final (re-pointed before the first mid), so the finals h2h is vs ST25. The launcher's in-memory BESTF was st23_final, so the auto `PROMOTE.json` used ST23 baselines; the re-score vs st25_final is `st26_final/PROMOTE_vs_st25.json` (promote=false either way). demos_h2h ran vs ST23's checkpoint (stale BESTF) and is report-only.
+
+| Metric | ST26 | ST25 (BEST) | ST24 | ST23 |
+|---|---|---|---|---|
+| h2h vs BEST (500 g) | 49.0% (245-255, vs ST25) | — | 53.6% (vs ST23) | 56.0% (vs ST21) |
+| FR4 (500 g) | 72.2 | 78.4 | 77.0 | 79.6 |
+| pool400 | 93.21 | 93.33 | 93.0 | 93.21 |
+| bp5 | 68.33 | 69.21 | 67.0 | 68.67 |
+| bp5 Dice | 68.25 | 61.75 | 57.75 | 65.25 |
+| bp5 Ripple / Kira / Chronos / Seer | 66.5 / 64.5 / 74.75 / 99.5 | 68.25 / 66.5 / 78.75 / 99.75 | 64.5 / 67.25 / 76.75 / 100 | 67.25 / 68.5 / 75.25 / 99.5 |
+| Galactus (500 g) | 34.6 | 40.8 | 37.0 | 35.4 |
+| bp5 Galactus (400 g) | 36.5 | 40.25 | 35.75 | 36.25 |
+| Megabyte (500 g, report-only) | 82.6 | 84.0 | 83.2 | 83.2 |
+| gen min / mean | 0.346 / 0.8061 | 0.408 / 0.8132 | 0.370 / 0.801 | 0.354 / 0.8087 |
+
+Gate vs ST25: h2h 49.0 < 52, FR4 −6.2 (tolerance 1.0), pool −0.12, bp5 −0.88, Galactus −6.2 (tolerance 4). No ST26 mid beat ST25 (h2h_BEST_200 0.41–0.515 over 10 chunks).
+
+Reading the ST20r question with standard errors (about 2.2 pts at 500 g, 2.4 at 400 g; a difference of two runs has SE about 3.1–3.4): Dice is 65.25 / 68.25 in the two runs without ST20r (ST23, ST26) and 57.75 / 61.75 with it (ST24, ST25), a gap of about 7 pts, roughly 2 SE. Galactus (500 g) goes the other way: 35.4 / 34.6 without vs 37.0 / 40.8 with, about 4 pts, roughly 1.3–2 SE, and ST25 also had the demo-drill change. FR4 has no pattern (79.6 / 72.2 without, 77.0 / 78.4 with). The runs are chained, so each comparison also carries the drift of its start checkpoint. Best reading: ST20r probably costs Dice and may help Galactus; neither effect is large enough to build ST28 on.
+
+## ST27 baseline check (2026-11-11 7:15 PM ET)
+
+The running launcher (PID 3518576, exec'd as RUN=ST27) has BESTF=/home/ubuntu/ippo_runs/st25_final in its environment, `exp_ST27/opp_BEST.toml` points at `st25_final/final_policy.safetensors`, and `exp_ST27/START` is `exp_ST26/checkpoints/1794434780 21639500000 ST27` (ST26's selected final). Nothing needed re-pointing, and ST27's finals and PROMOTE.json will be scored against ST25 directly. ST27 first mid (21749.9M): 0.51 vs ST25, FR4 0.745, Galactus 0.385, Megabyte 0.865.
+
+## ST28 (queued after ST27): penalty for getting demoed 50 -> 150 (2026-11-11)
+
+ST28 = ST27 (ST26 + `FR4_final` @ 2.0; ST25 setters, no ST20r, OPPCH 0.70, 1 epoch, TPI 300k, MB 100k, LR 5e-5, ENT 0.016, CHUNK 100M, binary `9d4b2a6`, Galactus 6.429, Megabyte 2.0, Ripple 1.286) with one change: `train_st28.toml` sets `reward_config = @RUN@/cfg/experiments/st28.toml`, and `experiments/st28.toml` is `extends = "st.toml"` plus `[demo] victim_punishment = 3.0` (default 1.0). At `weights.demo = 50` a demo on us now costs 150 instead of 50. The attacker's reward (+50), the `air_dribble_bump` zero-sum demo terms, flip_reset 70 and every other weight are unchanged. `st_ST28.env` is ST27's env with `TRAIN_TMPL=train_st28.toml`. League shares are ST27's (FR4 8.4%, Galactus 27.1%, Megabyte 8.4%, Ripple 5.4%, self-play 30%).
+
+Why: Galactus is the gen-panel minimum in every run since ST5 and the opponent the user cares about most. In the ST25 diagnostic (200 g) 62% of Galactus goals (76/123) come within 3.5 s of a demo on us, and we win 12.6% of games in which we get demoed vs 61.9% otherwise. ST25 added exposure (demo_threat 0.15 @ 1800-3000 uu) and the share did not move (ST23 59%), so the bot sees the situation but is not learning to avoid it. Today the only immediate cost of being demoed is the 50 demo term plus about 52 from `air_dribble_bump`; the goal that follows (1200, about 0.66 goals per Galactus demo) arrives 1-3 s later and is shared with everything else that happened. Tripling the victim term makes the avoid-the-demo signal immediate and about 1/8 of a goal. It applies in every matchup, including self-play, so it is not Galactus-specific.
+
+Alternatives considered and not chosen:
+- Dice as the target. Dice is a Python bot with no Rust port, so it can't be a league opponent or a drill. Its only lever in the data is ST20r, which seems to trade Dice for Galactus (above), and Dice (61.75–68.25) is not the gen-panel minimum.
+- Re-adding ST20r, maybe at 1.0. Its evidence is about 2 SE in each direction and confounded with the chain; it would also be a second change on top of ST27's FR4 weight.
+- More Galactus league weight or a larger league fraction (OPPCH 0.70 -> 0.80). Raising Galactus weight (ST18 onward) has never moved the Galactus score, and the league fraction was already raised in ST17/ST23.
+- A bigger batch per iteration with 1 epoch (TPI 300k -> 600k). Collection is the bottleneck (about 1.46 s collect vs 1.7 s update), so this halves updates per sample for little wall-clock gain, and it targets no failure mode.
+- Opponent perturbations (noise on league actions). Not in the trainer config; it would need a code change through a cloud agent.
+- Entropy 0.016 -> 0.02. Generic exploration, no evidence the policy is under-exploring; ST7 already moved entropy.
+
+Read ST28 against ST27 (its parent). Success = Galactus final at least ST27's + 4 (about 2 SE at 500 g), with FR4/pool/bp5 inside the gate, and, on a diag_gal rerun, the post-demo share of Galactus goals clearly below 59-62%. Watch `Events/Demos per min`, `Reward/demo` and `Player/Ball Touch Ratio` in metrics.jsonl: if touches or possession fall while FR4 or pool drop more than 1, the penalty made the bot passive. Then revert to 1.0, or try 2.0.
+
+Start checkpoint and BEST follow the launcher: ST27's selected final, +1000M; BESTF is st27_final if ST27 promotes, else the newest promote=true final (st25_final). Queued as `ST28 ST28` in `~/ippo_runs/ST_QUEUE` on 2026-11-11 7:17 PM ET (backup `ST_QUEUE.bak_pre_st28_20261112_0017`, queue was empty). The files were copied atomically into both `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` (the launcher's `C`, copied into `exp_ST28/cfg` at start) and this tree. Validation in `/opt/dlami/nvme/st28_validate` (render script and checker in `/opt/dlami/nvme/st28_stage/`): the launcher-rendered `train_st.toml` parses (tomllib), has no `@` placeholders and no ST20r, setter weights sum to 1.0, all six fixed-opponent checkpoints exist, and its only non-comment diffs from the ST27 render are `reward_config` and the start-dependent warmup/hold steps. The `extends` chain of `st28.toml`, merged the same way as `rewards/config.rs`, differs from `st.toml` only in `demo.victim_punishment` (None -> 3.0), and `victim_punishment` is a `DemoParams` field, so serde will not drop it. `indococo-train-rip-9d4b2a6 rates` ran 40k steps (181 episodes) at nice 19 from ST27's `exp_ST27/checkpoints/1794441321` with no panics, and all 5 setter kinds fired. `rates` reads only the setters, so the trainer's first `RewardConfig::from_file` at ST28 start is the first Rust load of `st28.toml`; it panics loudly if anything is wrong.
 
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 

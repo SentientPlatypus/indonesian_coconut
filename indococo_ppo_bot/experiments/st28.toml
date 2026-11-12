@@ -1,0 +1,14 @@
+# ST28 reward config: the ST stack (st.toml) with ONE change, the penalty for
+# getting demoed. demo.victim_punishment 1.0 -> 3.0, i.e. at weight demo = 50
+# a demo on us costs 150 instead of 50 (the attacker still gets +50; the
+# air_dribble_bump zero-sum demo/demoed terms are unchanged).
+# Why: diag_gal ST25 vs Galactus (200 g): 62% of goals conceded (76/123)
+# follow a demo on us within 3.5 s, and we win 12.6% of games in which we get
+# demoed. ST25 drilled the situation (demo_threat 0.15 @ 1800-3000 uu) but
+# the post-demo share did not drop (ST23 59%), so ST28 sharpens the
+# immediate signal for not getting demoed instead of adding more exposure.
+# Everything else (weights, flip_reset 70, zero_sum) is st.toml unchanged.
+extends = "st.toml"
+
+[demo]
+victim_punishment = 3.0
