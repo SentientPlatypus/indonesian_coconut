@@ -564,10 +564,11 @@ ST29 (`experiments/st_ST29.env`, `experiments/train_st29.toml`) is training (sta
 ST28 isolates the league, ST29 vs ST25 the demo penalty.
 
 ST30 is queued after ST29 (`experiments/st_ST30.env`, `experiments/train_st30.toml`,
-`experiments/train_st30p.toml`). It is BEST's recipe with the `demo_threat` drill (0.15) replaced by a
-`replay` setter over 1382 real states recorded 0.75-1.5 s before Galactus demoed ST25/ST28 near
-our goal (`~/ippo_runs/st30_snap/gal_demo.f32`; 86% of them were followed by a goal within
-3.5 s). The env applies the start-point rule and picks the base: ST25 (`st.toml`) unless ST29
+`experiments/train_st30p.toml`). It is BEST's recipe with the `demo_threat` drill (0.15) split into
+0.05 `demo_threat` (same entry) + 0.10 `replay` over 2073 real states recorded 0.75-3.0 s before
+Galactus demoed ST25/ST28 near our goal (`~/ippo_runs/st30_snap/gal_demo_v2.f32`, 792 distinct
+demos, 1/3 from the 2-3 s window; about 85% were followed by a goal within 3.5 s). Revised on
+2026-11-12 after the Discord/research/code cross-exam: mix, don't replace (EXPERIMENTS.md ST30). The env applies the start-point rule and picks the base: ST25 (`st.toml`) unless ST29
 promotes, then ST29 (`st28.toml`). Validated in `/opt/dlami/nvme/st30_validate` (EXPERIMENTS.md
 ST30).
 

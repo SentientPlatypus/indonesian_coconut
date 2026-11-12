@@ -1,8 +1,9 @@
 # ST learner settings (EXPERIMENTS.md ST). Filled in by st_launch.sh from
 # st_<VARIANT>.env. ST30 = ST29's recipe (reward st28.toml, demo victim_punishment
 # 3.0), used only when ST29 promotes,
-# with ONE change: the demo_threat drill (0.15) is replaced by a replay
-# setter over real pre-demo states vs Galactus (st30_snap/gal_demo.f32).
+# with ONE change: the demo_threat drill (0.15) is split into 0.05 synthetic
+# demo_threat + 0.10 replay over real pre-demo states vs Galactus
+# (st30_snap/gal_demo_v2.f32).
 # League, OPPCH 0.70, 1 epoch, flip_reset 70, other setters unchanged.
 reward_config = "@RUN@/cfg/experiments/st28.toml"
 checkpoints = "@RUN@/checkpoints"
@@ -67,14 +68,21 @@ path = "@SNAP@"
 [[state_setters]]
 kind = "aerial_defense"
 weight = 0.15
-# ST30's one change: demo_threat 0.15 -> replay over real pre-demo states vs
-# Galactus (0.75/1.0/1.5 s before a demo on ST25/ST28), same 0.15. The replay
-# setter mirrors half the starts (cars swapped), so either side is the victim.
-# Its metric label is "replay" (shared with the 0.175 normal-play replay).
+# ST30's one change (revised Nov 12 after the Discord/research/code cross-exam:
+# mix, do not replace): demo mass stays 0.15 = 0.05 of ST25's synthetic
+# demo_threat drill (same entry, 1800-3000 uu) + 0.10 replay over real
+# pre-demo states vs Galactus (2.0/2.5/3.0 s before a demo on ST25 (early window) plus 0.75/1.0/1.5 s
+# on ST25/ST28). The replay setter mirrors half the
+# starts (cars swapped), so either side is the victim. Its metric label is
+# "replay" (shared with the 0.175 normal-play replay).
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.05
+distance = [1800.0, 3000.0]
 [[state_setters]]
 kind = "replay"
-weight = 0.15
-path = "/home/ubuntu/ippo_runs/st30_snap/gal_demo.f32"
+weight = 0.10
+path = "/home/ubuntu/ippo_runs/st30_snap/gal_demo_v2.f32"
 
 # ST29 (same as ST25/ST24): Rust Ripple v1.1 (9d4b2a6 binary, LibTorch CUDA; RIPPLE_DEVICE=cuda)
 # at ~5.2% of iterations (0.7*1.286/17.427) because OPPCH is 0.70 and
