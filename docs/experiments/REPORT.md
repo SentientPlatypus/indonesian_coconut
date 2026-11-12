@@ -1450,6 +1450,22 @@ ST27 (FR4 weight 2.0) did not bring FR4 back. ST28 (ST27 league + demo victim_pu
 
 Revised after the Discord/research/code cross-exam: ST30 now keeps 0.05 of the synthetic `demo_threat` drill and gives 0.10 to `replay` over `gal_demo_v2.f32` (2073 states, 792 distinct Galactus demos, 1/3 from 2.0-3.0 s before the demo; validated in `/opt/dlami/nvme/st30v2_validate`). Original plan: ST30 replaces the synthetic `demo_threat` drill, which never puts the target near its goal, with a `replay` setter (same 0.15) over 1382 real states recorded 0.75-1.5 s before Galactus demoed ST25/ST28 within 3000 uu of our goal line (86% followed by a goal within 3.5 s). The base is ST25's recipe, or ST29's if ST29 promotes. Validated in `/opt/dlami/nvme/st30_validate` (render + parse, setter sum 1.0, reward diff, snapshot sanity, `rates` with no panics; the drill gives about 2x the demo events of `demo_threat`).
 
+### 11.8z ST29 not promoted: the demo penalty fails twice; ST30 training (2026-11-12)
+
+| Metric | ST29 | ST28 | ST25 (BEST) |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 48.4% | 51.4% | — |
+| FR4 | 77.0 | 75.4 | 78.4 |
+| pool400 | 93.46 | 93.29 | 93.33 |
+| bp5 | 69.42 | 72.04 | 69.21 |
+| Galactus (500 g) | 39.4 | 40.4 | 40.8 |
+| Megabyte | 84.2 | 83.2 | 84.0 |
+| gen min / mean | 0.394 / 0.8133 | 0.404 / 0.827 | 0.408 / 0.8132 |
+| demos in h2h vs ST25 (against / by us, 200 g) | 56 / 70 | 76 / 64 | — |
+| demos vs FR4 (against / by us, 200 g) | 17 / 104 | 10 / 88 | — |
+
+ST29 is ST25's recipe and league with ST28's demo victim penalty (`demo.victim_punishment` 3.0), started from ST25. It missed the gate on h2h (48.4 < 52) and FR4 (-1.4), so it was not promoted. On diag_gal the post-demo share of Galactus goals fell from 62% to 57% (about 1 SE), but we were demoed as often as before (121 vs 115 per 200 g) and the Galactus final fell 1.4 points. Together with ST28 (share up to 68%), the reward penalty for being demoed has failed on both leagues and is dropped. The weakest gen-panel slots are still Galactus (39.4), Dice (60.75), Kira (68.0) and Ripple (68.75). Against FR4, aerial goals (32%) and out-of-position goals (22%) are the biggest share of goals conceded. ST30 (0.05 synthetic `demo_threat` + 0.10 replay over real Galactus pre-demo states, from ST25, reward `st.toml`) started training at 1:49 PM ET.
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):

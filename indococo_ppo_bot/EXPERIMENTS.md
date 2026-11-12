@@ -1808,6 +1808,29 @@ Deployed atomically into `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` (t
 
 ST29 health check (2026-11-12 8:10 AM ET): ST29 started 7:33:59 AM ET from `exp_ST25/checkpoints/1794413355` (start-point rule logged in `exp_ST29/logs/train.log`) under launcher PID 244933. The 0% GPU readings around 8:07 AM were the first 100M chunk boundary, not a stall. The trainer saved `exp_ST29/checkpoints/1794488837` at 8:07 AM and exited normally, and the launcher was running the CPU mid evals. First mid (20837.9M, 200 g): vs ST25 0.425, FR4 0.735, Galactus 0.355, Megabyte 0.84. Training resumed after the evals.
 
+## ST29 results: ST25 league + demo penalty x3 (from ST25), not promoted (2026-11-12)
+
+Finals done 2026-11-12 1:48 PM ET. ST29 = ST25's recipe with one change, `demo.victim_punishment` 1.0 -> 3.0 (`st28.toml`, the ST28 reward), started from ST25's `exp_ST25/checkpoints/1794413355` (20727.5M -> 21727.7M). Selected checkpoint `exp_ST29/checkpoints/1794493010` at 21038.3M (st_select_final re-eval of the top 3 by h2h_200: h2h 49.0% / Galactus 40.0%, score 0.4540; the 21238.7M chunk scored 0.4528). BESTF was st25_final for the whole run, so `PROMOTE.json` is scored against ST25 directly.
+
+| Metric | ST29 | ST25 (BEST) | ST28 |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 48.4% (242-258) | — | 51.4% |
+| FR4 (500 g) | 77.0 (385-115) | 78.4 | 75.4 |
+| pool400 | 93.46 | 93.33 | 93.29 |
+| bp5 | 69.42 | 69.21 | 72.04 |
+| bp5 Ripple / Kira / Dice / Chronos / Galactus / Seer | 68.75 / 68.0 / 60.75 / 78.25 / 40.75 / 100 | 68.25 / 66.5 / 61.75 / 78.75 / 40.25 / 99.75 | 76.0 / 72.5 / 62.5 / 81.25 / 40.0 / 100 |
+| Galactus (500 g) | 39.4 (197-303) | 40.8 | 40.4 |
+| Megabyte (500 g, report-only) | 84.2 (421-79) | 84.0 | 83.2 |
+| gen min / mean | 0.394 / 0.8133 | 0.408 / 0.8132 | 0.404 / 0.827 |
+
+Pool400 per-bot: 1v1.pt 83.0, 430M 87.5, Nexto 95.25, Necto 98.0, Element 98.75, Immortal 98.25. Demos per 200 kickoff games (cand/opp): vs ST25 56/70, vs FR4 17/104. Mids (10 x 200 g, 20837.9M-21727.7M): vs ST25 0.38-0.52, FR4 0.71-0.81, Galactus 0.355-0.46, Megabyte 0.785-0.88. Gate vs ST25: h2h 48.4 < 52 and FR4 -1.4 (tolerance 1.0) fail; pool +0.13, bp5 +0.21 and Galactus -1.4 (within the agreed 4) pass. Not promoted. BEST stays ST25.
+
+Diagnostics (`~/ippo_runs/diag_gal/{st29_summary.txt, st29_fr4_summary.txt}`, 200 g each, seeds 0-99 both sides, same protocol as ST25/ST28, CPU at nice 19):
+- Galactus: 70-130 (35.0%; ST25 38.5%, ST28 35.0%). Conceded within 3.5 s of a demo on us: 74/130 (57%; ST25 62%, ST28 68%). Demos on us 121 per 200 g (ST25 115, ST28 127), we demo Galactus 9 (16, 20). Win rate in games with a demo on us 14.7% (95 games). Aerial goals conceded 28 (22%; ST25 15, ST28 21), out of position (ball-side) 16 (12%). Kickoffs won 152 / lost 20.
+- FR4: 159-41 (79.5%; ST25 77.0%, ST28 81.5%). Conceded: aerial 13 (32%), out of position 9 (22%), own touch last 6 (15%), post-demo 6 (15%), goal-side near-ball whiff 4, goal-side far 3. Kickoffs lost 72/200 (36%; ST25 44%, ST28 34%).
+
+Verdict: the demo victim penalty failed twice. On ST27's league (ST28) it raised the post-demo share; on ST25's league (ST29) it lowered the share a little (62% -> 57%, about 1 SE at 123-130 goals) without fewer demos on us (121 vs 115), and Galactus moved -1.4 at 500 g. Neither run got through the gate. The penalty is dropped from the recipe. ST30 (real Galactus pre-demo replay states, reward `st.toml`) is the next demo lever.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
