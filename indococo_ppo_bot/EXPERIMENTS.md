@@ -1710,6 +1710,85 @@ Read ST29 against ST25 (BEST) and against ST28. Success = Galactus final at leas
 
 Queued as `ST29 ST29` in `~/ippo_runs/ST_QUEUE` on 2026-11-12 1:20 AM ET (backup `ST_QUEUE.bak_pre_st29_20261112_0120ET`, the queue was empty). Copied atomically into `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` and this tree. Validation in `/opt/dlami/nvme/st29_validate` (render script and checker in `/opt/dlami/nvme/st29_stage/`): the launcher-style render parses (tomllib), has no `@` placeholders, setter weights sum to 1.0, all seven fixed-opponent checkpoints exist (ST20r_final 2.0, FR4_final 0.816), epochs 1, policy_bf16 false, OPPCH 0.70, the merged reward differs from `st.toml` only in `demo.victim_punishment` (None -> 3.0) with flip_reset 70, `st.toml`/`st28.toml` are byte-identical to the copies the running ST28 loaded, and the only non-comment diffs from ST25's rendered `exp_ST25/train_st.toml` are `reward_config` plus run paths and start-dependent iterations/warmup/hold. The Rust load of `st28.toml` is already proven by ST28's start.
 
+## ST28 results: ST27 league + demo penalty x3 (from ST25), not promoted (2026-11-12)
+
+Finals done 2026-11-12 7:32 AM ET. Selected checkpoint `exp_ST28/checkpoints/1794472117` at 21138.5M (st_select_final: re-eval h2h 52.4% / Galactus 40.6%, score 0.4768). BESTF was st25_final for the whole run, so `PROMOTE.json` is scored against ST25 directly.
+
+| Metric | ST28 | ST25 (BEST) | ST27 |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 51.4% (257-243) | — | 48.8% |
+| FR4 (500 g) | 75.4 (377-123) | 78.4 | 73.0 |
+| pool400 | 93.29 | 93.33 | 92.17 |
+| bp5 | 72.04 | 69.21 | 69.37 |
+| bp5 Ripple / Kira / Dice / Chronos / Galactus / Seer | 76.0 / 72.5 / 62.5 / 81.25 / 40.0 / 100 | 68.25 / 66.5 / 61.75 / 78.75 / 40.25 / 99.75 | 69.25 / 71.5 / 63.75 / 74.75 / 37.25 / 99.75 |
+| Galactus (500 g) | 40.4 (202-298) | 40.8 | 38.8 |
+| Megabyte (500 g, report-only) | 83.2 (416-84) | 84.0 | 85.2 |
+| gen min / mean | 0.404 / 0.827 | 0.408 / 0.8132 | 0.388 / 0.809 |
+
+Pool400 per-bot: 1v1.pt 84.5, 430M 88.25, Nexto 92.0, Necto 98.0, Element 99.5, Immortal 97.5. Demos per 200 kickoff games (cand/opp): vs ST25 76/64, vs FR4 10/88. Mids (10 x 200 g): vs ST25 0.415-0.54, FR4 0.74-0.805, Galactus 0.31-0.42, Megabyte 0.825-0.88. Gate vs ST25: h2h 51.4 < 52 and FR4 -3.0 (tolerance 1.0) fail; pool -0.04, bp5 +2.83, Galactus -0.4 pass. The penalty raised bp5 (Ripple +7.75, Kira +6, Chronos +2.5) and the panel mean, and did not move Galactus.
+
+## ST28 / ST25 diagnostics (diag_gal, diag_fr4; 2026-11-12)
+
+`~/ippo_runs/diag_gal/{st28_summary.txt, st28_fr4_summary.txt}` (200 g each, seeds 0-99 both sides, the same protocol and seeds as the ST25 files), CPU at nice 19, about 4 min total.
+
+Galactus, ST28 vs ST25:
+- Record 70-130 (35.0%) vs 77-123 (38.5%).
+- Conceded within 3.5 s of a demo on us: 88/130 (68%) vs 76/123 (62%). Demos on us 127 vs 115 per 200 g, and we demo Galactus 20 vs 16 times. Win rate in games with a demo on us: 11.3% (106 games) vs 12.6% (95). In the other ST28 games it is about 62%.
+- Aerial goals conceded: 21 (16%) vs 15 (12%). Kickoffs are not the issue vs Galactus: won 144 / lost 25 vs 148 / 30.
+- One second before the demo (`demo_ctx.py`, the demos in each game's last 15 s): we are grounded 97% / 95%, goal-side 95% / 95%, a median 569 / 620 uu from our own goal line, with 91 / 93 boost. Galactus is 2516 / 2445 uu away, closing at 2069 / 2048 uu/s. 89% / 92% of these demos turn into a goal within 3.5 s.
+- So the penalty did not teach the keeper to avoid the demo. It got demoed more, and the post-demo share rose.
+
+FR4, ST28 vs ST25:
+- Record 163-37 (81.5%) vs 154-46 (77.0%). The 500 g finals say the opposite (75.4 vs 78.4), so the FR4 gap is within noise at these sizes.
+- Kickoffs lost: 68/200 (34%) vs 88/200 (44%). Win rate after a lost kickoff 0.75 vs 0.705, after a won kickoff 0.862 vs 0.833. Conceded within 15 s of a lost kickoff: 6 vs 12.
+- Aerial goals conceded: 10 (27% of 37) vs 14 (30% of 46). Post-demo goals conceded: 14 vs 10.
+- Upper bound for a perfect FR4 kickoff fix: about 0.44 x (0.833 - 0.705), roughly 5.6 pts vs FR4 alone. ST28 already loses fewer of them.
+
+## ST30 (queued after ST29): real Galactus pre-demo states replace the demo_threat drill (2026-11-12)
+
+ST30 = BEST's recipe with one change: the `demo_threat` setter (0.15 of starts, @ 1800-3000 uu) is replaced by a `replay` setter at the same 0.15 over `/home/ubuntu/ippo_runs/st30_snap/gal_demo.f32`. That file holds 1382 real 1v1 states recorded 0.75 / 1.0 / 1.5 s before Galactus demoed our bot near our goal. Everything else is unchanged: kickoff 0.315, random 0.105+0.105, fr7 replay 0.175, aerial_defense 0.15, the ST25 league (ST20r_final 2.0, FR4_final 0.816, ST13-16/HUNT 0.816, Galactus 6.429, Megabyte 2.0, Ripple 1.286, OPPCH 0.70), 1 PPO epoch, policy bf16 off, flip_reset 70, CHUNK 100M, binary `9d4b2a6`.
+
+Base follows the start point, so ST30 is always one change from the recipe of the checkpoint it starts from:
+- If ST29 does not promote (the default), BESTF is st25_final. ST30 starts from `exp_ST25/checkpoints/1794413355` with `train_st30.toml` = ST25 (`reward_config = st.toml`).
+- If ST29 promotes, BESTF is st29_final. ST30 starts from ST29's selected final with `train_st30p.toml` = ST29 (`reward_config = st28.toml`, victim_punishment 3.0).
+
+`st_ST30.env` holds the ST29 start-point rule and also picks the template. It writes the choice to `exp_ST30/TRAIN_TMPL` on the fresh start and reuses it on resumes. ST28 gave no evidence that the penalty helps Galactus (it raised bp5 and the panel mean, and lowered h2h and FR4), so it stays out of ST30 unless ST29 earns it by promoting.
+
+Why this change:
+- Galactus is the gen-panel minimum (0.408 BEST, 0.404 ST28) and the opponent that matters most. Demos are how it scores: 62-68% of its goals come within 3.5 s of a demo on us. We win about 12% of games in which it demos us and about 62% of the rest.
+- The measured situation is specific. We are a grounded keeper about 600 uu from our own goal line with high boost, and Galactus closes from about 2.5k uu at about 2050 uu/s.
+- `demo_threat` (setters.rs) never reproduces it. It puts the target 1000-4000 uu from midfield (at least 1120 uu from its goal line), puts a static ball anywhere on the field, aims the attacker from the midfield side, and has no parameter for any of that.
+- ST25's retune of that drill did not lower the post-demo share (59% -> 62%), and ST28's reward lever did not either (62% -> 68%). A targeted setter for a measured failure mode is what has worked before (ST19 aerial_defense: aerial goals against 55 -> 24). Replaying the exact states gets the true geometry (ball, both cars, velocities, boost, jump state) with no code change or new binary.
+
+How the states were made (`/opt/dlami/nvme/st30_stage/`):
+- `capture_gal_demos.py` plays the diag.py protocol against the Python Galactus: 400 seeds (1000-1399, 800 games) with st25_final and 200 seeds (2000-2199, 400 games) with st28_final, disjoint from the diag seeds 0-99. Every step it keeps the full state in the binary snapshot layout (`SNAPSHOT_LEN` 57, rotation columns forward/right/up = rlgym `rotation_mtx[:, 0..3]`, blue car first). When Galactus demos us (deduped >400 ticks), it saves the states 90 / 120 / 180 ticks earlier in which neither car is demoed.
+- This yields 1887 records (1248 + 639). For ST25, the post-demo goal rate depends on our distance to our own goal line: under 1500 uu 802 records, 89.9% conceded within 3.5 s; 1500-3000 uu 84 records, 53.6%; 3000-6000 uu 61 records, 3.3%; over 6000 uu 301 records, 1.0%.
+- `build_snap.py` keeps the records under 3000 uu: 886 + 496 = 1382. Of these, 85.7% were followed by a goal within 3.5 s, 90% have us grounded, the median is 596 uu from our goal line, and our median boost is 93. Metadata is in `st30_snap/gal_demo.json`. The f32 file (315 KB) is on the box only.
+- The replay setter mirrors half the starts with the cars swapped and adds 30 uu / 50 uu/s noise, so the learner is the keeper in about half of them and the attacker in the rest.
+
+Limitations: in training, the attacking car is driven by whichever opponent was sampled (Galactus is 25.8% of iterations, self-play 30%), not always by Galactus, so the approach momentum is real but the follow-through varies. The 0.15 replay entry shares the `replay` metric label with the 0.175 normal-play replay. The midfield synthetic demo drill goes away. The evidence says it was not what helped ST25: that gain came with fewer aerial goals, while the demo share stayed flat.
+
+Alternatives considered and not chosen:
+- An FR4 kickoff drill. The only kickoff setter is the generic one, already 31.5% of starts. An FR4-specific kickoff needs code, the upper bound is about 5.6 pts vs FR4 alone, and ST28 already loses fewer FR4 kickoffs (34% vs 44%).
+- More aerial_defense. FR4 aerial goals are 10-14 per 200 g, and the setter exists at 0.15.
+- The demo penalty, tested by ST28 and ST29.
+- A code change to demo_threat to place the target in the net. That needs a new binary, and replay gets the measured geometry without one.
+
+Read ST30 against ST25 (or ST29 if it promoted). Success: Galactus final at least 44.8 (ST25 + 4, about 2 SE at 500 g) with FR4/pool/bp5 inside the gate. On a diag_gal rerun, the post-demo share of Galactus goals should be clearly below 62% and demos on us clearly below 115 per 200 g. Watch FR4 and pool for regressions, and touches/possession for passivity.
+
+Validation (`/opt/dlami/nvme/st30_validate`, scripts in `/opt/dlami/nvme/st30_stage/`):
+- `render.sh` renders both templates the way st_launch.sh does, sourcing `st_ST30.env` under `bash -u` with a fake R_.
+- `check.py`: both renders parse (tomllib), have no `@` placeholders, setter weights sum to 1.0 with no demo_threat and two replay entries (0.175 fr7, 0.15 gal_demo), all seven fixed-opponent checkpoints exist (ST20r 2.0, FR4 0.816), the external weights are as above, epochs 1, policy_bf16 false and OPPCH 0.70.
+- Merged reward vs `st.toml`: no diff for `train_st30.toml`; for `train_st30p.toml`, only `demo.victim_punishment` (None -> 3.0); flip_reset 70 in both. `st.toml`/`st28.toml` are byte-identical to the copies ST25/ST29 loaded.
+- The only non-comment diffs from `exp_ST25/train_st.toml` and `exp_ST29/train_st.toml` are the setter swap, run paths and the start-dependent iterations/warmup/hold.
+- Snapshot file: 1382 x 57 finite floats, rotation matrices orthonormal (error 5e-7, det 1), positions on the field, boost 0-100.
+- `envtest.sh` covers fresh/not-promoted (START_CK -> ST25 checkpoint, START cleared, `train_st30.toml`), resume (unchanged, template kept even if BESTF changes) and fresh/promoted (`train_st30p.toml`, START_CK unchanged).
+- `indococo-train-rip-9d4b2a6 rates` (40k steps, 8 threads, nice 19, from `exp_ST25/checkpoints/1794413355`, self-play) ran with no panics on the full ST30 mix (208 episodes, all setter kinds fired). The drill alone gave 56 demo events (31 demos + 25 demoed) per 40k car steps, vs 29 for `demo_threat` @ 1800-3000 alone.
+
+Deployed atomically into `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` (the launcher's `C`, copied into `exp_ST30/cfg` at start) and this tree. The snapshot was copied atomically to `~/ippo_runs/st30_snap/`. Queued as `ST30 ST30` in `~/ippo_runs/ST_QUEUE` on 2026-11-12 8:23 AM ET (backup `ST_QUEUE.bak_pre_st30_20261112_0823ET`, the queue was empty).
+
+ST29 health check (2026-11-12 8:10 AM ET): ST29 started 7:33:59 AM ET from `exp_ST25/checkpoints/1794413355` (start-point rule logged in `exp_ST29/logs/train.log`) under launcher PID 244933. The 0% GPU readings around 8:07 AM were the first 100M chunk boundary, not a stall. The trainer saved `exp_ST29/checkpoints/1794488837` at 8:07 AM and exited normally, and the launcher was running the CPU mid evals. First mid (20837.9M, 200 g): vs ST25 0.425, FR4 0.735, Galactus 0.355, Megabyte 0.84. Training resumed after the evals.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.

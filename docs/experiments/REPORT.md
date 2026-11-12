@@ -1434,6 +1434,22 @@ ST27 baseline check: the launcher's BESTF is st25_final, `exp_ST27/opp_BEST.toml
 
 ST28 (`st_ST28.env`, `train_st28.toml`, `st28.toml`) = ST27 with one change: `demo.victim_punishment` 1.0 -> 3.0, so a demo on us costs 150 instead of 50 (attacker reward and everything else unchanged). Target: Galactus, where 62% of goals against follow a demo on us and the ST25 demo drill did not move that share. Rejected: Dice (no Rust port, so no league or drill lever), re-adding ST20r (weak, confounded evidence), more Galactus weight or OPPCH (never moved Galactus), TPI 600k (collection-bound, no target), opponent perturbations (needs code), entropy (no evidence). Queued (`ST_QUEUE` = `ST28 ST28`) and validated in `/opt/dlami/nvme/st28_validate` (parse, setter sum 1.0, reward merge diff = victim_punishment only, `rates` 40k steps with no panics).
 
+### 11.8y ST27 and ST28 not promoted; ST29 training; ST30 queued (Galactus pre-demo replay) (2026-11-12)
+
+| Metric | ST28 | ST27 | ST25 (BEST) |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 51.4% | 48.8% | — |
+| FR4 | 75.4 | 73.0 | 78.4 |
+| pool400 | 93.29 | 92.17 | 93.33 |
+| bp5 | 72.04 | 69.37 | 69.21 |
+| Galactus (500 g) | 40.4 | 38.8 | 40.8 |
+| Megabyte | 83.2 | 85.2 | 84.0 |
+| gen min / mean | 0.404 / 0.827 | 0.388 / 0.809 | 0.408 / 0.8132 |
+
+ST27 (FR4 weight 2.0) did not bring FR4 back. ST28 (ST27 league + demo victim_punishment 3.0, started from ST25) raised bp5 and the panel mean, but on diag_gal it was demoed more by Galactus (127 vs 115 per 200 g), and 68% of Galactus goals followed a demo (ST25 62%). Before those demos we are a grounded keeper about 600 uu from our own goal line, and 89-92% of them become goals. ST29 (ST25 league + the same penalty) is training from ST25.
+
+ST30 replaces the synthetic `demo_threat` drill, which never puts the target near its goal, with a `replay` setter (same 0.15) over 1382 real states recorded 0.75-1.5 s before Galactus demoed ST25/ST28 within 3000 uu of our goal line (86% followed by a goal within 3.5 s). The base is ST25's recipe, or ST29's if ST29 promotes. Validated in `/opt/dlami/nvme/st30_validate` (render + parse, setter sum 1.0, reward diff, snapshot sanity, `rates` with no panics; the drill gives about 2x the demo events of `demo_threat`).
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):

@@ -1,0 +1,86 @@
+# ST learner settings (EXPERIMENTS.md ST). Filled in by st_launch.sh from
+# st_<VARIANT>.env. ST30 = ST29's recipe (reward st28.toml, demo victim_punishment
+# 3.0), used only when ST29 promotes,
+# with ONE change: the demo_threat drill (0.15) is replaced by a replay
+# setter over real pre-demo states vs Galactus (st30_snap/gal_demo.f32).
+# League, OPPCH 0.70, 1 epoch, flip_reset 70, other setters unchanged.
+reward_config = "@RUN@/cfg/experiments/st28.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+# League: past bests as fixed opponents (scaled 0.816). ST20r@2.0 is added
+# via EXTRA_OPPS in st_ST29.env, not here (as ST25). FR4_final back to 0.816.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = 0.816
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 0.816
+
+# ST29 = ST25 setter mix: normal play x0.875 (kickoff 0.315, random 0.105+0.105,
+# replay 0.175), aerial_defense 0.15 (unchanged), demo_threat 0.15 with the
+# attacker starting 1800-3000 uu away (diag_gal ST23). Sum 1.0.
+# No air_dribble_wall_challenge.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.315
+[[state_setters]]
+kind = "random"
+weight = 0.105
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.105
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "replay"
+weight = 0.175
+path = "@SNAP@"
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.15
+# ST30's one change: demo_threat 0.15 -> replay over real pre-demo states vs
+# Galactus (0.75/1.0/1.5 s before a demo on ST25/ST28), same 0.15. The replay
+# setter mirrors half the starts (cars swapped), so either side is the victim.
+# Its metric label is "replay" (shared with the 0.175 normal-play replay).
+[[state_setters]]
+kind = "replay"
+weight = 0.15
+path = "/home/ubuntu/ippo_runs/st30_snap/gal_demo.f32"
+
+# ST29 (same as ST25/ST24): Rust Ripple v1.1 (9d4b2a6 binary, LibTorch CUDA; RIPPLE_DEVICE=cuda)
+# at ~5.2% of iterations (0.7*1.286/17.427) because OPPCH is 0.70 and
+# ST20r@2.0 was added to the league.
+[[opponents.external]]
+name = "ripple"
+kind = "ripple"
+path = "/home/ubuntu/eval_bots/ripple/bots/v1.1"
+weight = 1.286

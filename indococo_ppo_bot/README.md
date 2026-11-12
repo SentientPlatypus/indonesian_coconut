@@ -550,18 +550,26 @@ finished 2026-11-12 12:40 AM ET and was not promoted. Selected checkpoint 21749.
 92.17 (93.33), bp5 69.37 (69.21; Dice 63.75), Galactus 38.8 (40.8), Megabyte 85.2 (84.0),
 gen-panel min 0.388 / mean 0.809 (0.408 / 0.8132). A heavier FR4 weight did not recover FR4.
 
-ST28 (`experiments/st_ST28.env`, `experiments/train_st28.toml`, `experiments/st28.toml`) is
-training: ST27's config with one change, `demo.victim_punishment` 1.0 -> 3.0 (a demo on us
-costs 150 instead of 50). Because ST27 did not promote, ST28 was restarted 2026-11-12 1:15 AM
-ET from ST25's `exp_ST25/checkpoints/1794413355` (20727.5M) instead of ST27's final (the
-first attempt is kept as `exp_ST28_fromST27_aborted`). Measured vs st25_final.
+ST28 (`experiments/st_ST28.env`, `experiments/train_st28.toml`, `experiments/st28.toml`; ST27's
+config with `demo.victim_punishment` 1.0 -> 3.0, restarted from ST25's 20727.5M) finished
+2026-11-12 7:32 AM ET and was not promoted. Selected checkpoint 21138.5M
+(`exp_ST28/checkpoints/1794472117`). Finals vs ST25: h2h 51.4%, FR4 75.4 (78.4), pool400 93.29
+(93.33), bp5 72.04 (69.21), Galactus 40.4 (40.8), Megabyte 83.2 (84.0), gen-panel min 0.404 /
+mean 0.827 (0.408 / 0.8132). The penalty raised bp5 and the panel mean but not Galactus: on
+diag_gal the post-demo share of Galactus goals rose from 62% to 68%, and demos on us rose from 115
+to 127 per 200 g (EXPERIMENTS.md ST28 results).
 
-ST29 is queued after ST28 (`experiments/st_ST29.env`, `experiments/train_st29.toml`): ST25's
-recipe exactly (ST20r_final @ 2.0 back, FR4_final back to 0.816) with one change, the ST28
-reward (`reward_config = st28.toml`). ST29 vs ST28 isolates the league, ST29 vs ST25 the demo
-penalty. `st_ST29.env` applies the start-point rule itself: on a fresh start it uses BEST's
-`FINAL_CKPT` (st28_final if ST28 promotes, else st25_final). Validated in
-`/opt/dlami/nvme/st29_validate` (EXPERIMENTS.md ST29).
+ST29 (`experiments/st_ST29.env`, `experiments/train_st29.toml`) is training (started 2026-11-12
+7:34 AM ET from `exp_ST25/checkpoints/1794413355`): ST25's recipe with the ST28 reward. ST29 vs
+ST28 isolates the league, ST29 vs ST25 the demo penalty.
+
+ST30 is queued after ST29 (`experiments/st_ST30.env`, `experiments/train_st30.toml`,
+`experiments/train_st30p.toml`). It is BEST's recipe with the `demo_threat` drill (0.15) replaced by a
+`replay` setter over 1382 real states recorded 0.75-1.5 s before Galactus demoed ST25/ST28 near
+our goal (`~/ippo_runs/st30_snap/gal_demo.f32`; 86% of them were followed by a goal within
+3.5 s). The env applies the start-point rule and picks the base: ST25 (`st.toml`) unless ST29
+promotes, then ST29 (`st28.toml`). Validated in `/opt/dlami/nvme/st30_validate` (EXPERIMENTS.md
+ST30).
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench
