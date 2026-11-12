@@ -1,0 +1,111 @@
+# ST31p = ST30's recipe (ST25 + 0.05 demo_threat / 0.10 gal_demo_v2 replay), used when ST30 promotes,
+# with ONE change: 0.075 of the fr7 normal-play replay -> replay over
+# real pre-concede states (st31_snap/preconcede_v2.f32). Template copied
+# from train_st30.toml; everything else byte-identical.
+# ST learner settings (EXPERIMENTS.md ST). Filled in by st_launch.sh from
+# st_<VARIANT>.env. ST30 = ST25's recipe (reward st.toml), used when ST29 does
+# not promote,
+# with ONE change: the demo_threat drill (0.15) is split into 0.05 synthetic
+# demo_threat + 0.10 replay over real pre-demo states vs Galactus
+# (st30_snap/gal_demo_v2.f32).
+# League, OPPCH 0.70, 1 epoch, flip_reset 70, other setters unchanged.
+reward_config = "@RUN@/cfg/experiments/st.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+# League: past bests as fixed opponents (scaled 0.816). ST20r@2.0 is added
+# via EXTRA_OPPS in st_ST25.env, not here.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = 0.816
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 0.816
+
+# ST25 setter mix: normal play x0.875 (kickoff 0.315, random 0.105+0.105,
+# replay 0.175), aerial_defense 0.15 (unchanged), demo_threat 0.15 with the
+# attacker starting 1800-3000 uu away (diag_gal ST23). Sum 1.0.
+# No air_dribble_wall_challenge.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.315
+[[state_setters]]
+kind = "random"
+weight = 0.105
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.105
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "replay"
+weight = 0.10
+path = "@SNAP@"
+# ST31's one change (reconciled after the Nov 12 cross-exam): 0.075 of the
+# 0.175 normal-play replay (fr7_snap, kept at 0.10) moves to a replay setter
+# over real states 1.5-4.5 s before a NON-demo goal against ST25 by FR4,
+# Galactus, Dice, Kira, Ripple and Chronos (st31_snap/preconcede_v2.f32;
+# kickoff goals and goals within 3.5 s of a demo on us excluded, that is
+# ST30's lever; unsaveable states filtered; opponent mix by concede rate,
+# floor 10%, Galactus 25%). Real-play replay mass stays 0.175. Start weight,
+# not step-weighted. Mirrored half the time (cars swapped), so either side is
+# the defender. Metric label "replay" (shared). Replay has no boost option.
+[[state_setters]]
+kind = "replay"
+weight = 0.075
+path = "/home/ubuntu/ippo_runs/st31_snap/preconcede_v2.f32"
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.15
+# ST30's one change (revised Nov 12 after the Discord/research/code cross-exam:
+# mix, do not replace): demo mass stays 0.15 = 0.05 of ST25's synthetic
+# demo_threat drill (same entry, 1800-3000 uu) + 0.10 replay over real
+# pre-demo states vs Galactus (2.0/2.5/3.0 s before a demo on ST25 (early window) plus 0.75/1.0/1.5 s
+# on ST25/ST28). The replay setter mirrors half the
+# starts (cars swapped), so either side is the victim. Its metric label is
+# "replay" (shared with the 0.175 normal-play replay).
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.05
+distance = [1800.0, 3000.0]
+[[state_setters]]
+kind = "replay"
+weight = 0.10
+path = "/home/ubuntu/ippo_runs/st30_snap/gal_demo_v2.f32"
+
+# ST25 (same as ST24): Rust Ripple v1.1 (9d4b2a6 binary, LibTorch CUDA; RIPPLE_DEVICE=cuda)
+# at ~5.2% of iterations (0.7*1.286/17.427) because OPPCH is 0.70 and
+# ST20r@2.0 was added to the league.
+[[opponents.external]]
+name = "ripple"
+kind = "ripple"
+path = "/home/ubuntu/eval_bots/ripple/bots/v1.1"
+weight = 1.286

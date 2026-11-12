@@ -559,11 +559,12 @@ mean 0.827 (0.408 / 0.8132). The penalty raised bp5 and the panel mean but not G
 diag_gal the post-demo share of Galactus goals rose from 62% to 68%, and demos on us rose from 115
 to 127 per 200 g (EXPERIMENTS.md ST28 results).
 
-ST29 (`experiments/st_ST29.env`, `experiments/train_st29.toml`) is training (started 2026-11-12
-7:34 AM ET from `exp_ST25/checkpoints/1794413355`): ST25's recipe with the ST28 reward. ST29 vs
-ST28 isolates the league, ST29 vs ST25 the demo penalty.
+ST29 (`experiments/st_ST29.env`, `experiments/train_st29.toml`; ST25's recipe with the ST28 reward,
+from ST25) finished 2026-11-12 1:48 PM ET and was not promoted: h2h 48.4% vs ST25, FR4 77.0, pool400
+93.46, bp5 69.42, Galactus 39.4, Megabyte 84.2. The demo penalty failed on both leagues (ST28, ST29)
+and is dropped (EXPERIMENTS.md ST29 results).
 
-ST30 is queued after ST29 (`experiments/st_ST30.env`, `experiments/train_st30.toml`,
+ST30 is training since 2026-11-12 1:49 PM ET from ST25 (`experiments/st_ST30.env`, `experiments/train_st30.toml`,
 `experiments/train_st30p.toml`). It is BEST's recipe with the `demo_threat` drill (0.15) split into
 0.05 `demo_threat` (same entry) + 0.10 `replay` over 2073 real states recorded 0.75-3.0 s before
 Galactus demoed ST25/ST28 near our goal (`~/ippo_runs/st30_snap/gal_demo_v2.f32`, 792 distinct
@@ -571,6 +572,13 @@ demos, 1/3 from the 2-3 s window; about 85% were followed by a goal within 3.5 s
 2026-11-12 after the Discord/research/code cross-exam: mix, don't replace (EXPERIMENTS.md ST30). The env applies the start-point rule and picks the base: ST25 (`st.toml`) unless ST29
 promotes, then ST29 (`st28.toml`). Validated in `/opt/dlami/nvme/st30_validate` (EXPERIMENTS.md
 ST30).
+
+ST31 is queued after ST30 (`experiments/st_ST31.env`, `experiments/train_st31.toml`,
+`experiments/train_st31p.toml`; tools in `tools/st31/`). It is the start point's recipe with 0.075 of the
+0.175 fr7 normal-play replay moved to a `replay` setter over `~/ippo_runs/st31_snap/preconcede_v2.f32`:
+9415 real states 1.5-4.5 s before 2542 non-demo, non-kickoff goals scored against ST25 by FR4, Galactus,
+Dice, Kira, Ripple and Chronos, with unsaveable states removed and the opponent mix set by concede rate
+(floor 10%, Galactus 25%). Base: ST25 unless ST30 promotes, then ST30 (EXPERIMENTS.md ST31).
 
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench

@@ -1831,6 +1831,147 @@ Diagnostics (`~/ippo_runs/diag_gal/{st29_summary.txt, st29_fr4_summary.txt}`, 20
 
 Verdict: the demo victim penalty failed twice. On ST27's league (ST28) it raised the post-demo share; on ST25's league (ST29) it lowered the share a little (62% -> 57%, about 1 SE at 123-130 goals) without fewer demos on us (121 vs 115), and Galactus moved -1.4 at 500 g. Neither run got through the gate. The penalty is dropped from the recipe. ST30 (real Galactus pre-demo replay states, reward `st.toml`) is the next demo lever.
 
+## ST31 (queued after ST30): replay over real pre-concede states from six opponents (2026-11-12)
+
+ST31 is the start point's own recipe with one change. 0.075 of the 0.175 fr7 normal-play `replay` moves to a `replay` setter over `~/ippo_runs/st31_snap/preconcede_v2.f32`, so fr7 keeps 0.10 and the total real-play replay mass stays 0.175. The weight is a start weight, not step-weighted. Everything else is unchanged:
+- kickoff .315, random .105 + .105, aerial_defense .15
+- demo_threat .15 at 1800-3000 uu (ST25 base), or ST30's .05 demo_threat + .10 gal_demo_v2 replay (ST30 base)
+- reward `st.toml` (normal goal/concede rewards, flip_reset 70)
+- league (FR4 0.816, ST13-16/HUNT 0.816, ST20r 2.0 via EXTRA_OPPS, Galactus 6.429, Megabyte 2.0, Ripple 1.286), OPPCH 0.70
+- 1 epoch, policy_bf16 off, TPI 300k, MB 100k, LR 5e-5, ENT 0.016, gamma 0.998, CHUNK 100M, binary `9d4b2a6`
+
+Rendered non-comment diff vs ST25's `exp_ST25/train_st.toml`, besides run paths and start-dependent iterations/warmup/hold:
+```
+ [[state_setters]]
+ kind = "replay"
+-weight = 0.175
++weight = 0.10
+ path = "/home/ubuntu/ippo_runs/fr7_snap/train.f32"
++[[state_setters]]
++kind = "replay"
++weight = 0.075
++path = "/home/ubuntu/ippo_runs/st31_snap/preconcede_v2.f32"
+```
+The ST30-promoted template (`train_st31p.toml`) has the same diff against `exp_ST30/train_st.toml`.
+
+Why:
+- Targeted setters are the only lever that has moved Galactus. League share bumps (ST27), the demo penalty (ST28, ST29) and dropping ST20r (ST26) did not.
+- After demos, ordinary defense is the biggest failure against every style. On diag, aerial and out-of-position goals were 32% / 22% of FR4's goals against ST29, and 22% / 12% of Galactus's.
+- In the capture games, ST25 conceded these goals (non-demo, non-kickoff) at about 0.15-0.30 per game against every opponent:
+
+  | Opponent | Non-demo goals against per game |
+  |---|---|
+  | FR4 | 0.19 |
+  | Galactus | 0.25 |
+  | Dice | 0.30 |
+  | Kira | 0.27 |
+  | Ripple | 0.19 |
+  | Chronos | 0.15 |
+
+- Goals within 3.5 s of a demo on us are excluded (that is ST30's lever), so ST31 does not depend on how ST30 turns out.
+
+Bank v2 (`tools/st31/build_bank_v2.py`, meta `preconcede_v2.json`, sha256 892714d7…1207). Capture: ST25 vs FR4, Galactus, Dice, Kira, Ripple and Chronos, both sides per seed, with the diag protocol (`tools/st31/capture_preconcede*.py`).
+- **v1 windows:** 1.5 / 2.5 / 3.5 s before the goal, seeds 5000-8549.
+- **v2 windows:** 1.5 / 2.25 / 3.0 / 3.75 / 4.5 s, seeds 10000-13549.
+- **Seed separation:** disjoint from diag 0-99, ST30's 1000-3399 and the finals seeds.
+- **Captured:** 9669 records from 2568 goals.
+
+Unsaveable filter (ball-only ballistics, no bounces or walls): a record is dropped if the ball is within 300 uu of our goal line, or if it is projected to cross the line inside the mouth (|x| < 893, z < 643) within 1.0 s while our car is not goal-side or is more than 2300 uu/s × t + 150 uu from the crossing point. This dropped 255 records:
+- 226 with the ball near the line
+- 25 projected in with our car not goal-side
+- 4 projected in with our car out of reach
+
+Dropped per window:
+
+| Window | Dropped |
+|---|---|
+| 1.5 s | 126 / 2522 |
+| 2.25 s | 35 / 1201 |
+| 2.5 s | 23 / 1214 |
+| 3.0 s | 23 / 1178 |
+| 3.5 s | 20 / 1202 |
+| 3.75 s | 12 / 1169 |
+| 4.5 s | 16 / 1183 |
+
+Opponent mix: each opponent's base share is its non-demo goals against per game, which does not depend on how many games we captured against it. Shares have a soft floor of 10%, Galactus is set to 25%, and the rest are rescaled to 75%. The bank is resampled to the 9414 kept records, round-robin over goals; an opponent with too few records is duplicated.
+
+| Opponent | Share | Records (duplicates) | Distinct goals |
+|---|---|---|---|
+| FR4 | 13.1% | 1233 (0) | 606 |
+| Galactus | 25.0% | 2354 (183) | 591 |
+| Dice | 20.3% | 1911 (186) | 463 |
+| Kira | 18.25% | 1718 (90) | 422 |
+| Ripple | 12.8% | 1207 (289) | 276 |
+| Chronos | 10.5% | 992 (295) | 184 |
+
+The final bank has 9415 snapshots (8372 unique) from 2542 distinct goals. Per window:
+
+| Window | Snapshots |
+|---|---|
+| 1.5 s | 2407 |
+| 2.25 s | 1134 |
+| 2.5 s | 1266 |
+| 3.0 s | 1132 |
+| 3.5 s | 1221 |
+| 3.75 s | 1134 |
+| 4.5 s | 1121 |
+
+At record time:
+- 44% of the goals were aerial
+- our car was goal-side 45% and grounded 49%
+- median 4162 uu from our goal line, median boost 29
+
+Validation passed:
+- values finite, rotations orthonormal, ball and cars in the field, boost 0-100
+- every record joins to a lost, non-demo, non-kickoff game in its capture's `games.json`
+
+Not done:
+- Boost randomization: the `Replay` setter only has `path`, `pos_noise` and `vel_noise` (`deny_unknown_fields`), so it would need Rust.
+- Car jitter: needs code.
+- The setter keeps its default ball noise (pos 30, vel 50) and 50% mirror.
+
+Start point: `st_ST31.env` mirrors `st_ST30.env`. On a fresh start it uses BEST's `FINAL_CKPT`:
+- If ST30 promotes (BESTF=st30_final), ST31 starts from ST30's selected checkpoint with `train_st31p.toml`.
+- Otherwise it starts from `exp_ST25/checkpoints/1794413355` (20727.5M) with `train_st31.toml`.
+
+The template choice is written to `exp_ST31/TRAIN_TMPL` and reused on resumes.
+
+Validation (`/opt/dlami/nvme/st31_validate`, scripts in `tools/st31/`):
+- Both branches render. `check.py` passes: setter sums 1.0, the bank exists, seven fixed opponents exist, `st.toml` is byte-identical to ST25's/ST30's, flip_reset is 70, epochs 1, bf16 off, OPPCH 0.70.
+- `envtest.sh` passes all four cases: fresh not promoted gives ck25 + st31; resume keeps everything; resume with a changed BESTF keeps the template; fresh promoted gives ck30 + st31p.
+- `rates` (INDOCOCO_OBS_EXT=1, from ST25, self-play, nice 19) shows no panics.
+
+Measured dose of the new setter: it was relabelled `reset_replay` (identical code, separate label) in a measurement-only copy, 240k steps:
+
+| Branch | Share of episodes (weight 0.075) | Share of training steps |
+|---|---|---|
+| ST25 base | 6.7% | 3.9% |
+| ST30 base | 6.8% | 4.7% |
+
+The bank alone runs 143.6 car-steps per episode (279 episodes / 40k steps).
+
+Success bar (500-game finals vs BEST):
+- Required: pass the gate (h2h ≥ 52; FR4, pool and bp5 within 1; Galactus within 4, checked by hand because `st_promote.py` allows 8), and Galactus does not drop.
+- Plus one of: gen-panel mean ≥ 0.823, FR4 ≥ 80.4, or the bp5 Dice/Kira/Ripple mean +3.
+- A diag rerun should show non-demo goals conceded per 200 g down at least 20%: vs FR4 36 → 29 or fewer, vs Galactus 47 → 38 or fewer.
+
+Queued 2026-11-12 4:10 PM ET as `ST31 ST31` in `~/ippo_runs/ST_QUEUE`. The queue was empty before; backup `ST_QUEUE.bak_pre_st31_20261112_1610ET`.
+
+### Cross-exam (Nov 12)
+- **Code: GO.** No bugs. 0.3% of starts end instantly. The dose is about 3% of steps (measured above at 3.9-4.7% with the v2 weights). Side handling is verified: the mirror swaps cars, so either side defends. One doc nit, now fixed: the env header listed only seeds 5000-6549.
+- **Research: CHANGE.**
+  - Mix, don't replace, and keep general replay at 0.10 or more.
+  - No step-weighting.
+  - Filter hopeless starts, per Florensa et al. (reverse curriculum), PLR (prioritized level replay) and AuxSS (auxiliary start states).
+  - Add earlier windows.
+  - Mildly upsample Galactus; don't balance uniformly.
+- **Discord: GO WITH CHANGES.**
+  - Rolv (May 2023): "not interested in giving bots states where they are guaranteed to concede"; give states from before the shot.
+  - Nexto spent about 4% of starts on goalie drills.
+  - Dilution means setters matter less than expected.
+  - Keep the normal concede rewards.
+- **Applied:** fr7 0.10 + bank 0.075, the unsaveable filter, windows out to 4.5 s, mix by concede rate with a 10% floor and Galactus 25%, rewards unchanged. The v1 draft (fr7 0.075 + v1 bank 0.10) is kept in `/opt/dlami/nvme/st31_stage/v1_draft/`.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.

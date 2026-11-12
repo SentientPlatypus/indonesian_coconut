@@ -1,0 +1,160 @@
+{
+ "snapshots": 9415,
+ "unique_snapshots": 8372,
+ "distinct_goals": 2542,
+ "candidate": "st25_final",
+ "captured_records": 9669,
+ "captured_distinct_goals": 2568,
+ "dropped_unsaveable": 255,
+ "drop_reasons": {
+  "ball_within_300uu_of_goal_line": 226,
+  "projected_in_<=1s_and_not_goal_side": 25,
+  "projected_in_<=1s_and_cannot_reach": 4
+ },
+ "kept_after_filter": 9414,
+ "windows_ticks": {
+  "v1 (cap,cap2; seeds 5000-8549)": [
+   180,
+   300,
+   420
+  ],
+  "v2 (cap3,cap4; seeds 10000-13549)": [
+   180,
+   270,
+   360,
+   450,
+   540
+  ]
+ },
+ "per_window_capture_and_drop": {
+  "180": {
+   "captured": 2522,
+   "dropped": 126
+  },
+  "270": {
+   "captured": 1201,
+   "dropped": 35
+  },
+  "300": {
+   "captured": 1214,
+   "dropped": 23
+  },
+  "360": {
+   "captured": 1178,
+   "dropped": 23
+  },
+  "420": {
+   "captured": 1202,
+   "dropped": 20
+  },
+  "450": {
+   "captured": 1169,
+   "dropped": 12
+  },
+  "540": {
+   "captured": 1183,
+   "dropped": 16
+  }
+ },
+ "per_window_in_bank": {
+  "180": 2407,
+  "270": 1134,
+  "300": 1266,
+  "360": 1132,
+  "420": 1221,
+  "450": 1134,
+  "540": 1121
+ },
+ "per_opponent": {
+  "fr4": {
+   "target_share": 0.131,
+   "base_share_by_concede_rate": 0.1417,
+   "concede_rate_per_game": 0.1916,
+   "games": 3200,
+   "nondemo_goals_against": 613,
+   "available_after_filter": 2275,
+   "selected": 1233,
+   "duplicates": 0,
+   "distinct_goals_selected": 606
+  },
+  "galactus": {
+   "target_share": 0.25,
+   "base_share_by_concede_rate": 0.1884,
+   "concede_rate_per_game": 0.2546,
+   "games": 2400,
+   "nondemo_goals_against": 611,
+   "available_after_filter": 2171,
+   "selected": 2354,
+   "duplicates": 183,
+   "distinct_goals_selected": 591
+  },
+  "dice": {
+   "target_share": 0.203,
+   "base_share_by_concede_rate": 0.2197,
+   "concede_rate_per_game": 0.2969,
+   "games": 1600,
+   "nondemo_goals_against": 475,
+   "available_after_filter": 1725,
+   "selected": 1911,
+   "duplicates": 186,
+   "distinct_goals_selected": 463
+  },
+  "kira": {
+   "target_share": 0.1825,
+   "base_share_by_concede_rate": 0.1975,
+   "concede_rate_per_game": 0.2669,
+   "games": 1600,
+   "nondemo_goals_against": 427,
+   "available_after_filter": 1628,
+   "selected": 1718,
+   "duplicates": 90,
+   "distinct_goals_selected": 422
+  },
+  "ripple": {
+   "target_share": 0.1282,
+   "base_share_by_concede_rate": 0.1387,
+   "concede_rate_per_game": 0.1875,
+   "games": 1600,
+   "nondemo_goals_against": 300,
+   "available_after_filter": 918,
+   "selected": 1207,
+   "duplicates": 289,
+   "distinct_goals_selected": 276
+  },
+  "chronos": {
+   "target_share": 0.1054,
+   "base_share_by_concede_rate": 0.1141,
+   "concede_rate_per_game": 0.1542,
+   "games": 1200,
+   "nondemo_goals_against": 185,
+   "available_after_filter": 697,
+   "selected": 992,
+   "duplicates": 295,
+   "distinct_goals_selected": 184
+  }
+ },
+ "bank_share": {
+  "fr4": 0.131,
+  "galactus": 0.25,
+  "dice": 0.203,
+  "kira": 0.1825,
+  "ripple": 0.1282,
+  "chronos": 0.1054
+ },
+ "aerial_goal_share": 0.444,
+ "goal_side_share": 0.454,
+ "us_ground_share": 0.491,
+ "goal_d_median": 4161.8,
+ "us_boost_median": 29.0,
+ "filter_doc": "Drop unsaveable states (heuristic, ball-only ballistics, no bounces/walls):\n   a) ball within 300 uu of our goal line (any x), or\n   b) ball projected to cross our goal line inside the mouth (|x| < 893, z < 643, gravity 650,\n      z floored at 93) within 1.0 s AND (our car is not goal-side of the ball OR the distance from\n      our car to the crossing point > 2300 uu/s * t + 150 uu).",
+ "mix_doc": "Opponent mix by resampling: base share = non-demo non-kickoff goals against per game (empirical\n   concede rate, independent of how many games we captured per opponent), soft floor 10%,\n   Galactus set to 25%, the others rescaled to 75%. Bank size = number of kept records. Within an\n   opponent, records are drawn round-robin over goal events (max distinct goals); if an opponent has\n   too few, all records are kept and the rest drawn with replacement (duplicates).",
+ "validation": {
+  "finite": true,
+  "rotations_orthonormal": true,
+  "ball_in_field": true,
+  "cars_in_field": true,
+  "boost_0_100": true,
+  "all_records_from_lost_nondemo_nonkickoff_goals": true
+ },
+ "sha256": "892714d77d4a263492e74d2bd69a7fbca45922a1f9358a91d8dc32cfc1941207"
+}
