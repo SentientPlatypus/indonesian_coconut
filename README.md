@@ -13,12 +13,14 @@ These are real RLBot matches (separate from sim eval numbers elsewhere in this R
 
 | Bot | Rank | Checkpoint that beat it | Date beaten | Score | Replay |
 |---|---|---|---|---|---|
-| Megabyte | — | ST25 (`checkpoints_to_test/st25_20728M.bpk`, 20727.5M steps; assumed current BEST) | 2026-11-12 | 14-3 | [ballchasing](https://ballchasing.com/replay/58efe0c3-edc1-46b5-9428-53692f84214e) |
+| Megabyte | SSL | ST25 (`checkpoints_to_test/st25_20728M.bpk`, 20727.5M steps; assumed current BEST) | 2026-11-12 | 14-3 | [ballchasing](https://ballchasing.com/replay/58efe0c3-edc1-46b5-9428-53692f84214e) |
 | Ripple v1.1 | Pro | ST8 (`checkpoints_to_test/st8_8666M.bpk`, 8666.3M steps) | 2026-11-05 | 17-1 | [ballchasing](https://ballchasing.com/replay/2fc5fa80-2a16-4905-84b4-c175f72743dc) |
 | Ripple v1.0 | SSL | ST8 (`checkpoints_to_test/st8_8666M.bpk`, 8666.3M steps) | 2026-11-06 | 16-3 | [ballchasing](https://ballchasing.com/replay/3be4d259-2550-4ea9-8b78-91c496f819dd) |
 | Nexto | Grand Champion | E2G1 (`PPO_POLICY_V4_E2G1.pt`, Python policy) | 2026-09-30 | 42-11 | [ballchasing](https://ballchasing.com/replay/dcdad7bc-640d-4eb7-bfd8-f0634e49cd30) |
 | Necto | Champion | pending | pending | pending | pending |
 | Element | Diamond | V3 checkpoint (Python policy) | 2025-12-28 | 47-3 | [ballchasing](https://ballchasing.com/replay/41b8d475-dc5a-4488-9144-a2c86c9a649b) |
+
+Rank per the RLBot Discord FAQ (Nov 2026) estimated ranks for botpack v5 bots, which list Megabyte as SSL. Megabyte can adjust its skill to the scoreboard.
 
 The Megabyte game was a 1v1 at DFH Stadium (Indonesian Coconut orange, Megabyte blue; 17 shots to 4, 8 demos to 0). The replay does not name the checkpoint, so the row assumes the current BEST, ST25. Sim finals were already lopsided (ST25 84.0%, ST27 85.2% over 500 games); this real match matches that.
 
