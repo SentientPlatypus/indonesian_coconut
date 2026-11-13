@@ -2013,6 +2013,127 @@ install -m 755 target/release/indococo-train /opt/dlami/nvme/ippo_bins/indococo-
 
 Read ST32 against ST25, or against ST31 if that run promotes. Success: the automatic gate (h2h ≥ 52, FR4 / pool / bp5 within tolerance, Galactus within 4 points and at least the 0.27 floor), and on a `diag_gal` rerun the post-demo share of Galactus goals below the 62% (76/123) that ST25 and ST30 both posted. The reaction window is the thing to watch: if the bot never dodges, the ball speed or the cone is still too tight; if it always dodges and Galactus does not move, the drill is too easy and the live demo is still something else.
 
+## ST31 results: pre-concede replay, not promoted (2026-11-13)
+
+ST31 (ST25's recipe; 0.075 of the 0.175 fr7 replay moved to `replay` over `preconcede_v2.f32`, from ST25) finished 2026-11-13 3:29 AM ET. Selected checkpoint 21338.9M (`exp_ST31/checkpoints/1794548118`). It fails the gate on h2h (48.8 < 52), FR4 (-5.0) and Galactus (-1.2), so it was not promoted. ST30 (pre-demo replay) is in the table for reference. It was not promoted on Nov 12 (Galactus -4.6, a hand override of the 0.08 script tolerance).
+
+| Metric | ST31 | ST30 | ST25 (BEST) |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 48.8% | 56.0% | — |
+| FR4 | 73.4 | 77.4 | 78.4 |
+| pool400 | 93.29 | 93.08 | 93.33 |
+| bp5 | 69.37 | 70.25 | 69.21 |
+| bp5 Dice / Kira / Ripple / Chronos | 58.75 / 72.0 / 68.0 / 80.75 | 62.5 / 70.0 / 69.0 / 84.0 | 61.75 / 66.5 / 68.25 / 78.75 |
+| Galactus (500 g) | 39.6 | 36.2 | 40.8 |
+| Megabyte | 86.8 | 82.2 | 84.0 |
+| gen min / mean | 0.396 / 0.8155 | 0.362 / 0.8166 | 0.408 / 0.8132 |
+| demos in h2h vs ST25 (against / by us, 200 g) | 51 / 65 | 52 / 63 | — |
+| demos vs FR4 (against / by us, 200 g) | 16 / 100 | 25 / 110 | 13 / 99 |
+
+`diag_gal` on the selected final (200 g, seeds 0-99 both sides, `~/ippo_runs/diag_gal/st31_*`):
+
+| vs Galactus (200 g) | ST31 | ST30 | ST25 |
+|---|---|---|---|
+| decisive wr | 0.370 | 0.385 | 0.385 |
+| goals conceded | 126 | 123 | 123 |
+| conceded within 3.5 s of a demo on us | 87 (69%) | 76 (62%) | 76 (62%) |
+| non-demo, non-kickoff conceded | 38 | 47 | 47 |
+| aerial (z > 300) conceded | 17 | 20 | 15 |
+| out of position (ball-side) conceded | 16 | 18 | 21 |
+| demos on us / by us | 136 / 13 | 112 / 15 | 115 / 16 |
+| games with a demo on us: count, wr | 104, 0.087 | 93, 0.086 | 95, 0.126 |
+| wr by first-goal time 0-6 / 6-15 / 15-30 / 30-60 s | .86 / .50 / .28 / .31 | 1.0 / .65 / .25 / .19 | 1.0 / .43 / .32 / .38 |
+
+| vs FR4 (200 g, `diag_fr4.py`) | ST31 | ST25 |
+|---|---|---|
+| decisive wr | 0.720 | 0.770 |
+| goals conceded | 56 | 46 |
+| aerial conceded | 25 (45%) | 14 (30%) |
+| out of position conceded | 8 | 14 |
+| post-demo conceded | 11 | 10 |
+
+The "late-game collapse" is the demo problem. Games are first goal wins, so a long game is one where Galactus has had more time to land a demo (`diag_gal/st33_late.py`):
+
+| first-goal time | ST25 wr (no demo on us / demo on us) | ST30 | ST31 |
+|---|---|---|---|
+| 0-15 s | 0.64 / 0.12 | 0.78 / 0.21 | 0.71 / 0.11 |
+| 15-30 s | 0.58 / 0.08 | 0.52 / 0.04 | 0.72 / 0.04 |
+| 30+ s | 0.69 / 0.21 | 0.40 / 0.12 | 0.50 / 0.17 |
+
+Without a demo on us we win 50-72% at every length. With one we win 4-21%. Our boost at Galactus's last touch before a goal is high (ST31 mean 60), so a late-game or low-boost setter has no target.
+
+Reading: the pre-concede bank did what it was aimed at against Galactus: non-demo concedes fell 47 to 38 (-19%, just short of the -20% bar). But it gave the demos back, and more: post-demo concedes rose 76 to 87 and demos on us 115 to 136. Against FR4 it was worse, with aerial concedes up from 14 to 25 and FR4 down 5 points. With ST26-ST31, every Galactus lever that did not change what happens in the demo window has left the post-demo share at 57-69%.
+
+## ST33 (staged, not queued): Galactus-conditioned threat starts (2026-11-13)
+
+ST33 is the start point's recipe with one change: the threat drill is tied to the opponent. While a rollout plays Galactus (league name `galactus`, ~25.8% of iterations at OPPCH 0.70 and weight 6.429 of 17.427), the 0.15 `demo_threat` entry is swapped for the recoverable ST32 drill at 0.30. In that drill the learner is always the keeper and Galactus is the attacker (`learner_keeper`), and the ball is driven at our net (`ball_threat`). That gives 0.30/1.15 = 26% of starts in Galactus iterations, about 6.7% of all starts. Self-play and every other opponent use the base mix byte for byte. The weight is the `opp_weights = { galactus = 0.30 }` value in the template. Lock it after ST32's finals.
+
+Why the coupling needs code: opponents are picked once per rollout in `rlgymppo` (`Learner::pick_self_play`), while setters run per episode inside each env (`SetterMix::apply`), and nothing passes one to the other. Before ST33, a `demo_threat` start in a Galactus iteration also put Galactus in goal half the time (`target_idx` was random).
+
+### Implementation (binary `/opt/dlami/nvme/ippo_bins/indococo-train-st33`, sha256 b54f8499…a0ecd0)
+
+- `vendor/rlgymppo/src/lib.rs`: `set_opponent_pick_hook(fn(Option<&str>, usize))`. `pick_self_play` calls the hook once per rollout with the opponent's name (`"past"`, a fixed opponent's name, or an external name) and the team it drives, or `None` for self-play. The pick happens right before that rollout's collection starts, after the previous collection has joined (both the overlapped and plain paths), so the value is stable for the whole rollout.
+- `src/setters.rs`:
+  - The process-wide `CURRENT_OPPONENT`, written by `set_current_opponent` and read through `with_current_opponent`.
+  - `WeightedSetter.opp_weights` (optional map, name → weight; it overrides `weight` while that opponent plays). Entries with base weight 0 but a positive override are kept.
+  - `SetterMix` builds one cumulative table per named opponent.
+  - `DemoThreat.learner_keeper` (optional): the keeper is the car not on `old_team` when an opponent plays, and random in self-play. It forces the recoverable path.
+  - Old configs parse unchanged.
+- `src/env.rs` adds two metrics: `Setters/opp-conditioned share` and `Setters/@galactus demo_threat share`.
+- `src/bin/train.rs` registers the hook. The `bc_cli.rs` and `tools/ripple_idle_test.rs` literals were updated.
+- Tests: `cargo test --release --features torch,ripple`. Lib 98/98 passed, including the new `st33_opponent_conditioned_mix_and_learner_keeper`, which checks:
+  - the toml parses;
+  - the base mix never draws the conditioned entry, and the Galactus mix never draws the base drill;
+  - FR4 and self-play are not conditioned;
+  - with Galactus on either team, the learner is the keeper in 100/100 starts;
+  - in self-play the keeper is random again.
+  
+  The bin tests also passed (6/6).
+- Smoke (`/opt/dlami/nvme/st33_smoke`, ST25 ckpt, OPPCH 1.0, Galactus only, 4 × 20k steps, nice 19): the hook fired every iteration ("Training against external opponent galactus (team 0/1)"). `Setters/@galactus demo_threat share` was 0.25 / 0.255 / 0.256 / 0.242 (expected 0.261), with no panics. The first rollout's conditioned share is 0.71 because the envs reset once before the first pick.
+- Episodes that straddle rollouts keep the start they were given. The drill ends in 1-3 s and a rollout is ~39 s of game time per env, so about 95% of conditioned starts are played against Galactus.
+
+### Staged files (launcher tree `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` and the repo)
+
+- `st_ST33.env`: ST32's env with `B0=…/indococo-train-st33` and the same start-point rule.
+  - `BESTF=st32_final` gives `train_st33p.toml`.
+  - Otherwise `train_st33.toml`.
+  - The choice is stored in `exp_ST33/TRAIN_TMPL`.
+- `train_st33.toml`: ST25 mix. The legacy `demo_threat` 0.15 gets `opp_weights = { galactus = 0.0 }`, plus a recoverable `learner_keeper` entry at `weight = 0.0` with `opp_weights = { galactus = 0.30 }`.
+- `train_st33p.toml`: ST32 mix with the same pair. The 0.15 recoverable entry (random keeper) is off against Galactus, and the learner-keeper copy is 0.30 there.
+- Both: reward `st.toml` (flip_reset 70), 1 epoch, policy bf16 off, ENT 0.016, gamma 0.998, lambda 0.95, OPPCH 0.70, CHUNK 100M, ST25 league.
+
+### Cross-exam (Nov 13)
+
+- **Code: GO for (A).**
+  - The ST31 diag above shows the demo window is still the lever (69% post-demo, demos on us up 18%), and the late-game drop is the same demo effect.
+  - Candidates reviewed:
+    - **(A)** opponent-conditioned setters. Feasible: about 230 lines across rlgymppo, setters, env and train, plus a new binary. Built and tested.
+    - **(B)** Galactus share or late-game opponent sampling. Config only, but ST17/ST18/ST27 league-share bumps never moved Galactus. There is no in-episode opponent switch, and "late game" is not a state the obs can see.
+    - **(C)** Entropy 0.016 to 0.02+ or a schedule. Config only, but ST7 already moved it, and it is generic, with no failure mode.
+    - **(D)** Aggression bias / shadow reward. There is no `aggression_bias` in the reward. `goal` is a symmetric ±1 × 1200, and a concede discount would weaken defense where we already lose. `face_ball` weight 1.0 and `shadow_space` (`opponent_possession_space`) 18 are both small. The zero-summed terms are goal_dist, energy, face_ball, speed_to_ball, vel_ball_to_goal and touch. Un-zero-summing them is config-only but shifts the critic for every opponent. Keep it for ST34 or later.
+    - **(E)** Late-game / low-boost setters: no target (see the table above).
+  - Gamma 0.998 is a ~23 s half-life at 15 Hz (ln2 / 0.002 = 347 steps), already above Seer's 10-20 s, so the research runner-up (raise gamma) does not apply. Lambda 0.95.
+- **Research: (A).** MAESTRO (joint environment × co-player curricula) beats PLR or PFSP alone. Couple the start distribution to the opponent instead of raising the opponent's share. Keep ST32's recoverable geometry, emit it only against Galactus (and any other clearly demo-heavy pool member), leave everyone else on the normal setters, and change no reward, entropy or gamma.
+- **Discord (read-only):**
+  - Zealan: demo avoidance falls apart once the ball is moving, so threat starts must keep a threatening ball (`ball_threat = true`).
+  - Nashh: big demo penalties did not create avoidance. Train against a demo-spamming opponent instead (matches ST28/ST29).
+  - Rou_Ad: self-play demo skill did not transfer to Galactus (3v3 context), which argues for the real attacker.
+  - Quadblueshadow: dodging demos can pull you out of position, so judge by saves and goals conceded, not survival.
+  - Rangler / THEBIGTHREE: PFSP weighted by current win rate, and keep historical exploiters (unchanged league).
+  - JeffA233: 1v1 looked constrained without a higher entropy coefficient (anecdotal; not taken, see C).
+  - Lower face-ball shaping helped shadow defense (ours is 1.0, zero-summed; noted for later).
+- **Applied:** (A) with the Galactus weight in the toml (0.30), learner as keeper, ball threat on. No league, reward, entropy or gamma change.
+
+Success bar (read against the start point; gate as ST32):
+- `diag_gal` post-demo concedes below 62% (76/123) and demos on us below 115 per 200 g.
+- Goals conceded vs Galactus down, not just the post-demo share (Quadblueshadow).
+- FR4 and the gen-panel within the gate.
+
+Risks:
+- Galactus may not attack a set state the way it does in play. Watch `Events/Demoed per min` and the `@galactus` share.
+- 0.30 cuts normal play in Galactus iterations by 13%.
+- `learner_keeper` would make the learner the keeper against every league opponent if put on an entry without `opp_weights`. Only the conditioned entry has it.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.

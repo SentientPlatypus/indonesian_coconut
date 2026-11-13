@@ -71,6 +71,25 @@ pub fn set_collect_stream_hook(hook: fn()) {
     COLLECT_STREAM_HOOK.store(hook as usize, Ordering::Relaxed);
 }
 
+/// Called once per rollout with the opponent the rollout plays: its name
+/// (`"past"` for an old version, else the fixed/external opponent's name) and
+/// the team it drives, or `None` for pure self-play. Lets the environment
+/// condition its episode starts on the opponent (indococo ST33).
+static OPPONENT_PICK_HOOK: std::sync::RwLock<Option<fn(Option<&str>, usize)>> =
+    std::sync::RwLock::new(None);
+
+/// Register the opponent-pick hook (see [`OPPONENT_PICK_HOOK`]).
+pub fn set_opponent_pick_hook(hook: fn(Option<&str>, usize)) {
+    *OPPONENT_PICK_HOOK.write().unwrap_or_else(|e| e.into_inner()) = Some(hook);
+}
+
+fn notify_opponent_pick(name: Option<&str>, old_team: usize) {
+    let hook = *OPPONENT_PICK_HOOK.read().unwrap_or_else(|e| e.into_inner());
+    if let Some(hook) = hook {
+        hook(name, old_team);
+    }
+}
+
 /// Drop the collection-stream hook. The next collection uses the calling
 /// thread's current stream, which is the historical path.
 pub fn clear_collect_stream_hook() {
@@ -1175,6 +1194,14 @@ where
     /// as it stands now and clones the chosen policy, so a later
     /// `on_iteration` does not change this rollout.
     fn pick_self_play(&mut self) -> Option<(Opponent, usize)> {
+        let play = self.pick_self_play_inner();
+        if play.is_none() {
+            notify_opponent_pick(None, 0);
+        }
+        play
+    }
+
+    fn pick_self_play_inner(&mut self) -> Option<(Opponent, usize)> {
         self.self_play_config
             .pick_opponent(self.version_mgr.versions.len(), &mut self.rng)
             .map(|pick| {
@@ -1182,6 +1209,7 @@ where
                 let (name, model) = match pick {
                     OpponentPick::PastVersion(i) => {
                         let v = &self.version_mgr.versions[i];
+                        notify_opponent_pick(Some("past"), old_team);
                         (
                             format!("old version {}", v.timesteps),
                             Opponent::Model(v.model.clone()),
@@ -1189,6 +1217,7 @@ where
                     }
                     OpponentPick::Fixed(i) => {
                         let o = &self.self_play_config.fixed_opponents[i];
+                        notify_opponent_pick(Some(o.name.as_str()), old_team);
                         (
                             format!("fixed opponent {}", o.name),
                             Opponent::Model(o.model.clone()),
@@ -1196,6 +1225,7 @@ where
                     }
                     OpponentPick::External(i) => {
                         let o = &self.self_play_config.external_opponents[i];
+                        notify_opponent_pick(Some(o.name.as_str()), old_team);
                         (
                             format!("external opponent {}", o.name),
                             Opponent::External(o.policy.clone()),

@@ -101,7 +101,7 @@ struct CurrStats {
 
 impl Slot {
     fn new(level: usize, c: &ResetCurriculum) -> Self {
-        let mix = vec![WeightedSetter {
+        let mix = vec![WeightedSetter { opp_weights: Default::default(),
             weight: 1.0,
             kind: SetterKind::ResetCurriculum(ResetCurriculum {
                 fixed_level: Some(level),

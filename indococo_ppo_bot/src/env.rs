@@ -160,6 +160,14 @@ impl SetterLog for SharedInfo {
                 AvgTracker::from(label == chosen);
         }
     }
+
+    fn record_opponent_mix(&mut self, opp: Option<&str>, chosen: &'static str) {
+        self.metrics["Setters/opp-conditioned share"] += AvgTracker::from(opp.is_some());
+        if let Some(opp) = opp {
+            self.metrics[format!("Setters/@{opp} demo_threat share").as_str()] +=
+                AvgTracker::from(chosen == "demo_threat");
+        }
+    }
 }
 
 /// Shared info that can hand rewards the step's per-tick flip resets.

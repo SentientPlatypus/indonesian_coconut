@@ -27,7 +27,7 @@ fn run_idle_test(rdir: &Path, games: usize) {
     init_from_default(true).expect("load collision meshes");
     
     // Kickoff-only mix
-    let mix = vec![WeightedSetter {
+    let mix = vec![WeightedSetter { opp_weights: Default::default(),
         weight: 1.0,
         kind: SetterKind::Kickoff,
     }];

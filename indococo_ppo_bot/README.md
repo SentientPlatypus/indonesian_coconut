@@ -580,6 +580,17 @@ ST31 is queued after ST30 (`experiments/st_ST31.env`, `experiments/train_st31.to
 Dice, Kira, Ripple and Chronos, with unsaveable states removed and the opponent mix set by concede rate
 (floor 10%, Galactus 25%). Base: ST25 unless ST30 promotes, then ST30 (EXPERIMENTS.md ST31).
 
+ST30 (pre-demo replay) was not promoted on 2026-11-12: h2h 56.0%, but Galactus fell to 36.2 (vs 40.8). ST31 finished
+2026-11-13 3:29 AM ET and was not promoted: h2h 48.8% vs ST25, FR4 73.4, pool400 93.29, bp5 69.37, Galactus 39.6,
+Megabyte 86.8, gen-panel min 0.396 / mean 0.8155. On diag_gal its non-demo concedes vs Galactus fell 47 to 38, but
+post-demo concedes rose to 69% (87/126), and aerial concedes vs FR4 rose 14 to 25 (EXPERIMENTS.md ST31 results).
+ST32 (recoverable `demo_threat`, binary `indococo-train-st32`) has been training from ST25 since 2026-11-13 3:31 AM ET.
+ST33 is staged, not queued (`experiments/st_ST33.env`, `experiments/train_st33.toml`, `experiments/train_st33p.toml`,
+binary `/opt/dlami/nvme/ippo_bins/indococo-train-st33`). It ties the threat drill to the opponent: while a rollout
+plays Galactus, `demo_threat` is the recoverable drill at 0.30 with the learner as keeper, and every other opponent
+and self-play keep the base mix. This uses the new `opp_weights` setter field, `DemoThreat.learner_keeper`, and the
+rlgymppo opponent-pick hook (EXPERIMENTS.md ST33).
+
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench
 0.0118 ms/row at 1024 rows and 0.0237 ms/row at 256, with the forward at about 5 ms per call. The

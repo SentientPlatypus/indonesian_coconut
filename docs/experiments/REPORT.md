@@ -1466,6 +1466,26 @@ Revised after the Discord/research/code cross-exam: ST30 now keeps 0.05 of the s
 
 ST29 is ST25's recipe and league with ST28's demo victim penalty (`demo.victim_punishment` 3.0), started from ST25. It missed the gate on h2h (48.4 < 52) and FR4 (-1.4), so it was not promoted. On diag_gal the post-demo share of Galactus goals fell from 62% to 57% (about 1 SE), but we were demoed as often as before (121 vs 115 per 200 g) and the Galactus final fell 1.4 points. Together with ST28 (share up to 68%), the reward penalty for being demoed has failed on both leagues and is dropped. The weakest gen-panel slots are still Galactus (39.4), Dice (60.75), Kira (68.0) and Ripple (68.75). Against FR4, aerial goals (32%) and out-of-position goals (22%) are the biggest share of goals conceded. ST30 (0.05 synthetic `demo_threat` + 0.10 replay over real Galactus pre-demo states, from ST25, reward `st.toml`) started training at 1:49 PM ET.
 
+### 11.8aa ST30 and ST31 not promoted; ST32 training; ST33 staged (Galactus-conditioned threat starts) (2026-11-13)
+
+| Metric | ST31 | ST30 | ST25 (BEST) |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 48.8% | 56.0% | — |
+| FR4 | 73.4 | 77.4 | 78.4 |
+| pool400 | 93.29 | 93.08 | 93.33 |
+| bp5 | 69.37 | 70.25 | 69.21 |
+| Galactus (500 g) | 39.6 | 36.2 | 40.8 |
+| Megabyte | 86.8 | 82.2 | 84.0 |
+| gen min / mean | 0.396 / 0.8155 | 0.362 / 0.8166 | 0.408 / 0.8132 |
+| diag_gal post-demo concedes | 87/126 (69%) | 76/123 (62%) | 76/123 (62%) |
+| diag_gal demos on us (200 g) | 136 | 112 | 115 |
+
+ST30 (pre-demo replay) lost 4.6 Galactus points. ST31 (pre-concede replay over six opponents) cut non-demo concedes against Galactus from 47 to 38 but gave the demos back, and it lost 5 FR4 points, with aerial concedes against FR4 rising from 14 to 25. Neither was promoted.
+
+The late-game drop is the demo effect. Games end at the first goal, so a long game is one with more time for Galactus to land a demo. Without a demo on us we win 50-72% at every game length; with one we win 4-21%.
+
+ST32 (recoverable `demo_threat`, from ST25) has been training since 3:31 AM ET. ST33 is staged after a three-way cross-exam (code, research on MAESTRO-style joint opponent × start curricula, and Discord read-only). It conditions the setter mix on the rollout's opponent. Against Galactus only, the threat drill runs at 0.30 with the learner as keeper and a ball driven at our net. Everything else is unchanged. It runs on a new binary (`indococo-train-st33`; rlgymppo opponent-pick hook, `opp_weights`, `learner_keeper`), which passed 98/98 lib tests and a smoke run that measured a 25% Galactus drill share.
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):

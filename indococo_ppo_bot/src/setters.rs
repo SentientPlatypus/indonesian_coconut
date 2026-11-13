@@ -47,8 +47,35 @@ const CAR_REST_HEIGHT: f32 = 17.0;
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct WeightedSetter {
     pub weight: f32,
+    /// ST33: per-opponent weight overrides, keyed by the league opponent's
+    /// name (`galactus`, `megabyte`, `FR4_final`, `past`, ...). While a
+    /// rollout plays that opponent, every entry uses its override if it has
+    /// one and its `weight` otherwise, so `opp_weights = { galactus = 0.0 }`
+    /// drops an entry against Galactus and `weight = 0.0` with
+    /// `opp_weights = { galactus = 0.3 }` adds one only there. Self-play and
+    /// unlisted opponents use `weight`. See [`set_current_opponent`].
+    #[serde(default)]
+    pub opp_weights: std::collections::BTreeMap<String, f32>,
     #[serde(flatten)]
     pub kind: SetterKind,
+}
+
+/// Opponent of the rollout being collected (`None` = self-play) and the team
+/// it drives. Set by the trainer once per rollout through
+/// `rlgymppo::set_opponent_pick_hook`, read at every episode start.
+static CURRENT_OPPONENT: std::sync::RwLock<Option<(String, usize)>> =
+    std::sync::RwLock::new(None);
+
+/// Records the opponent of the next rollout (the trainer's pick hook).
+pub fn set_current_opponent(name: Option<&str>, old_team: usize) {
+    let mut cur = CURRENT_OPPONENT.write().unwrap_or_else(|e| e.into_inner());
+    *cur = name.map(|n| (n.to_owned(), old_team));
+}
+
+/// Runs `f` on the current opponent's name and team, without cloning.
+pub fn with_current_opponent<R>(f: impl FnOnce(Option<(&str, usize)>) -> R) -> R {
+    let cur = CURRENT_OPPONENT.read().unwrap_or_else(|e| e.into_inner());
+    f(cur.as_ref().map(|(n, t)| (n.as_str(), *t)))
 }
 
 /// The available setters.
@@ -122,15 +149,15 @@ pub fn default_mix() -> Vec<WeightedSetter> {
         cars_on_ground,
     };
     vec![
-        WeightedSetter {
+        WeightedSetter { opp_weights: Default::default(),
             weight: 0.34,
             kind: SetterKind::Kickoff,
         },
-        WeightedSetter {
+        WeightedSetter { opp_weights: Default::default(),
             weight: 0.33,
             kind: random(true, false),
         },
-        WeightedSetter {
+        WeightedSetter { opp_weights: Default::default(),
             weight: 0.33,
             kind: random(false, true),
         },
@@ -141,6 +168,9 @@ pub fn default_mix() -> Vec<WeightedSetter> {
 pub trait SetterLog {
     /// `chosen` started the episode; `labels` are all labels in the mix.
     fn record_setter(&mut self, chosen: &'static str, labels: &[&'static str]);
+    /// ST33: whether this start used an opponent-conditioned mix (`opp` is
+    /// then the opponent's name). Default: ignored.
+    fn record_opponent_mix(&mut self, _opp: Option<&str>, _chosen: &'static str) {}
 }
 
 /// The weighted setter mix. Entries with weight 0 are dropped.
@@ -150,23 +180,47 @@ pub struct SetterMix<SI> {
     /// Distinct labels, for the metrics.
     distinct: Vec<&'static str>,
     cumulative: Vec<f32>,
+    /// ST33: `(opponent name, cumulative weights)` for every opponent named
+    /// in some entry's `opp_weights`.
+    by_opponent: Vec<(String, Vec<f32>)>,
+}
+
+/// Index for a uniform draw `u` in `[0, total)` over cumulative weights.
+/// Zero-width entries are never chosen.
+fn pick_cumulative(cumulative: &[f32], u: f32) -> usize {
+    cumulative
+        .iter()
+        .position(|&c| u < c)
+        .unwrap_or(cumulative.len() - 1)
 }
 
 impl<SI> SetterMix<SI> {
     /// Index of the setter for a uniform draw `u` in `[0, total weight)`.
     fn pick(&self, u: f32) -> usize {
-        self.cumulative
-            .iter()
-            .position(|&c| u < c)
-            .unwrap_or(self.cumulative.len() - 1)
+        pick_cumulative(&self.cumulative, u)
+    }
+
+    /// Index into `by_opponent` for the current rollout's opponent, if any.
+    fn conditioned(&self) -> Option<usize> {
+        if self.by_opponent.is_empty() {
+            return None;
+        }
+        with_current_opponent(|o| {
+            o.and_then(|(name, _)| self.by_opponent.iter().position(|(k, _)| k == name))
+        })
     }
 }
 
 impl<SI: SharedInfoRng + SetterLog + CurriculumLog> StateSetter<SI> for SetterMix<SI> {
     fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
-        let total = *self.cumulative.last().expect("non-empty mix");
-        let i = self.pick(shared_info.rng().random_range(0.0..total));
+        let cond = self.conditioned();
+        let cumulative = cond.map_or(&self.cumulative, |j| &self.by_opponent[j].1);
+        let total = *cumulative.last().expect("non-empty mix");
+        let i = pick_cumulative(cumulative, shared_info.rng().random_range(0.0..total));
         shared_info.record_setter(self.labels[i], &self.distinct);
+        if !self.by_opponent.is_empty() {
+            shared_info.record_opponent_mix(cond.map(|j| self.by_opponent[j].0.as_str()), self.labels[i]);
+        }
         self.setters[i].apply(arena, shared_info);
     }
 }
@@ -179,11 +233,39 @@ impl<SI: SharedInfoRng + SetterLog + CurriculumLog> StateSetter<SI> for SetterMi
 pub fn build_mix<SI: SharedInfoRng + SetterLog + CurriculumLog + 'static>(
     mix: &[WeightedSetter],
 ) -> SetterMix<SI> {
-    let used: Vec<&WeightedSetter> = mix.iter().filter(|s| s.weight > 0.0).collect();
+    let used: Vec<&WeightedSetter> = mix
+        .iter()
+        .filter(|s| s.weight > 0.0 || s.opp_weights.values().any(|&w| w > 0.0))
+        .collect();
     assert!(
-        !used.is_empty(),
+        used.iter().any(|s| s.weight > 0.0),
         "state_setters: no entry with a positive weight"
     );
+    let cum_of = |w: &dyn Fn(&WeightedSetter) -> f32| -> Vec<f32> {
+        used.iter()
+            .scan(0.0, |acc, s| {
+                *acc += w(s).max(0.0);
+                Some(*acc)
+            })
+            .collect()
+    };
+    let mut names: Vec<String> = used
+        .iter()
+        .flat_map(|s| s.opp_weights.keys().cloned())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    let by_opponent: Vec<(String, Vec<f32>)> = names
+        .into_iter()
+        .map(|n| {
+            let c = cum_of(&|s: &WeightedSetter| s.opp_weights.get(&n).copied().unwrap_or(s.weight));
+            assert!(
+                c.last().copied().unwrap_or(0.0) > 0.0,
+                "state_setters: no entry with a positive weight against {n}"
+            );
+            (n, c)
+        })
+        .collect();
     let labels: Vec<&'static str> = used.iter().map(|s| s.kind.label()).collect();
     let mut distinct = labels.clone();
     distinct.sort_unstable();
@@ -200,6 +282,7 @@ pub fn build_mix<SI: SharedInfoRng + SetterLog + CurriculumLog + 'static>(
         labels,
         distinct,
         cumulative,
+        by_opponent,
     }
 }
 
@@ -732,6 +815,12 @@ pub struct DemoThreat {
     /// `None` and `false` keep the static ball. Default `false`.
     #[serde(default)]
     pub ball_threat: Option<bool>,
+    /// ST33: when `true` and the rollout plays a league opponent (1v1), the
+    /// learner's car is the keeper and the opponent is the attacker. In
+    /// self-play the keeper is random as before. Recoverable geometry only
+    /// (ignored by the legacy drill). Default `false`.
+    #[serde(default)]
+    pub learner_keeper: Option<bool>,
 }
 
 impl Default for DemoThreat {
@@ -744,6 +833,7 @@ impl Default for DemoThreat {
             target_goal_dist: None,
             attacker_speed_range: None,
             ball_threat: None,
+            learner_keeper: None,
         }
     }
 }
@@ -754,6 +844,7 @@ impl DemoThreat {
         self.target_goal_dist.is_none()
             && self.attacker_speed_range.is_none()
             && !self.ball_threat.unwrap_or(false)
+            && !self.learner_keeper.unwrap_or(false)
             && self.attacker_speed[1] > 2200.0
     }
 
@@ -913,9 +1004,16 @@ impl DemoThreat {
     /// so a config can turn on one of them.
     fn apply_recoverable<SI: SharedInfoRng>(&self, arena: &mut Arena, shared_info: &mut SI) {
         arena.reset_to_random_kickoff(None);
+        // Cars are Blue, Orange (env.rs); the opponent drives `old_team`, so
+        // the learner's car index is the other one.
+        let learner_idx = if self.learner_keeper.unwrap_or(false) && arena.num_cars() == 2 {
+            with_current_opponent(|o| o.map(|(_, old_team)| 1 - old_team.min(1)))
+        } else {
+            None
+        };
         let rng = shared_info.rng();
 
-        let target_idx = rng.random_range(0..arena.num_cars());
+        let target_idx = learner_idx.unwrap_or_else(|| rng.random_range(0..arena.num_cars()));
         let attacker_idx = 1 - target_idx;
         // Blue (car 0) defends y = -5120. Orange defends y = +5120.
         let goal_y: f32 = if target_idx == 0 { -BACK_WALL_Y } else { BACK_WALL_Y };
@@ -1378,15 +1476,15 @@ mod tests {
     #[test]
     fn mix_samples_by_weight() {
         let mix = build_mix::<crate::env::SharedInfo>(&[
-            WeightedSetter {
+            WeightedSetter { opp_weights: Default::default(),
                 weight: 0.25,
                 kind: SetterKind::Kickoff,
             },
-            WeightedSetter {
+            WeightedSetter { opp_weights: Default::default(),
                 weight: 0.0,
                 kind: SetterKind::AirNearBall(AirNearBall::default()),
             },
-            WeightedSetter {
+            WeightedSetter { opp_weights: Default::default(),
                 weight: 0.75,
                 kind: SetterKind::AirReset(AirReset::default()),
             },
@@ -1670,6 +1768,80 @@ mod tests {
         fn rng(&mut self) -> &mut SmallRng {
             &mut self.rng
         }
+    }
+
+    /// ST33: opponent-conditioned weights and the learner keeper. One test,
+    /// because the current opponent is process-wide.
+    #[test]
+    fn st33_opponent_conditioned_mix_and_learner_keeper() {
+        let mix_toml = r#"
+            [[state_setters]]
+            kind = "kickoff"
+            weight = 0.85
+            [[state_setters]]
+            kind = "demo_threat"
+            weight = 0.15
+            opp_weights = { galactus = 0.0 }
+            [[state_setters]]
+            kind = "demo_threat"
+            weight = 0.0
+            opp_weights = { galactus = 0.35 }
+            dist_range = [1800.0, 3200.0]
+            target_goal_dist = [250.0, 900.0]
+            attacker_speed_range = [1950.0, 2150.0]
+            ball_threat = true
+            learner_keeper = true
+        "#;
+        #[derive(Deserialize)]
+        struct Cfg {
+            state_setters: Vec<WeightedSetter>,
+        }
+        let cfg: Cfg = toml::from_str(mix_toml).unwrap();
+        assert_eq!(cfg.state_setters[2].opp_weights.get("galactus"), Some(&0.35));
+        let mix = build_mix::<crate::env::SharedInfo>(&cfg.state_setters);
+        assert_eq!(mix.labels.len(), 3, "zero-base entry with an override is kept");
+        assert_eq!(mix.by_opponent.len(), 1);
+        let gal = &mix.by_opponent[0].1;
+        assert!((gal[2] - 1.20).abs() < 1e-5, "galactus total {gal:?}");
+        // Base mix never picks the conditioned entry; galactus never picks the base drill.
+        for k in 0..1000 {
+            let u = k as f32 / 1000.0;
+            assert_ne!(mix.pick(u), 2);
+            assert_ne!(pick_cumulative(gal, u * 1.2), 1);
+        }
+        set_current_opponent(None, 0);
+        assert_eq!(mix.conditioned(), None);
+        set_current_opponent(Some("FR4_final"), 1);
+        assert_eq!(mix.conditioned(), None);
+        set_current_opponent(Some("galactus"), 1);
+        assert_eq!(mix.conditioned(), Some(0));
+
+        // Learner keeper: opponent on team `old_team`, learner keeps.
+        let SetterKind::DemoThreat(mut demo) = cfg.state_setters[2].kind.clone() else {
+            panic!("kind");
+        };
+        for old_team in [0usize, 1] {
+            set_current_opponent(Some("galactus"), old_team);
+            for seed in 0..50 {
+                let (mut arena, mut si) = demo_arena(1000 + seed);
+                demo.apply(&mut arena, &mut si);
+                let learner = 1 - old_team;
+                let keeper = arena.get_car_state(learner);
+                let goal_y = if learner == 0 { -BACK_WALL_Y } else { BACK_WALL_Y };
+                assert!((keeper.phys.pos.y - goal_y).abs() <= 901.0, "learner not keeping");
+            }
+        }
+        // Self-play: random keeper again.
+        set_current_opponent(None, 0);
+        let mut zeros = 0;
+        for seed in 0..400 {
+            let (mut arena, mut si) = demo_arena(5000 + seed);
+            demo.apply(&mut arena, &mut si);
+            if (arena.get_car_state(0).phys.pos.y + BACK_WALL_Y).abs() <= 901.0 {
+                zeros += 1;
+            }
+        }
+        assert!((120..=280).contains(&zeros), "self-play keeper not random: {zeros}/400");
     }
 
     fn st32_demo() -> DemoThreat {

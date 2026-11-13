@@ -448,6 +448,8 @@ fn train_cfg(cfg: TrainConfig) {
     } else {
         rlgymppo::clear_collect_stream_hook();
     }
+    // ST33: setters may condition on the rollout's opponent (opp_weights).
+    rlgymppo::set_opponent_pick_hook(indococo_bot::setters::set_current_opponent);
     let rewards = read_rewards(&cfg.reward_config);
     init_from_default(true).expect("load collision meshes");
     let dev = device(&cfg.backend);
@@ -1242,7 +1244,7 @@ fn main() {
 /// for `tools/galactus/parity.py`.
 fn galactus_h2h(ckpt: &Path, gdir: &Path, games: usize, threads: usize, dump: Option<&Path>) {
     init_from_default(true).expect("load collision meshes");
-    let mix = vec![WeightedSetter {
+    let mix = vec![WeightedSetter { opp_weights: Default::default(),
         weight: 1.0,
         kind: indococo_bot::setters::SetterKind::Kickoff,
     }];
@@ -1406,7 +1408,7 @@ fn megabyte_obs(mdir: &Path, _states_path: &Path) {
     let mb = mx::MegabytePolicy::load(mdir, dev).expect("megabyte weights");
     
     // Generate varied states: kickoffs and mid-game states with some pads consumed
-    let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let mut env = create_env(&RewardConfig::default(), &mix);
     
     eprintln!("Generating observations from simulated states (including depleted pads)...");
@@ -1498,7 +1500,7 @@ fn megabyte_h2h(ckpt: &Path, mdir: &Path, games: usize, threads: usize) {
     unsafe { std::env::set_var("INDOCOCO_OBS_EXT", "1"); }
     
     init_from_default(true).expect("load collision meshes");
-    let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let per = games.div_ceil(threads);
     let t0 = std::time::Instant::now();
     let res: Vec<[u64; 4]> = std::thread::scope(|s| {
@@ -1870,7 +1872,7 @@ fn snapshots(setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize, out
 /// Prints one JSON line: wins, losses, draws, win_rate_decisive, resets, demos_against.
 fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
     init_from_default(true).expect("load collision meshes");
-    let mix = vec![WeightedSetter {
+    let mix = vec![WeightedSetter { opp_weights: Default::default(),
         weight: 1.0,
         kind: indococo_bot::setters::SetterKind::Kickoff,
     }];
@@ -1991,7 +1993,7 @@ fn ripple_h2h(ckpt: &Path, rdir: &Path, games: usize, threads: usize, idle_oppon
     use indococo_bot::ripple as rx;
     init_from_default(true).expect("load collision meshes");
     println!("Starting ripple_h2h: games={}, threads={}, idle={}", games, threads, idle_opponent);
-    let mix = vec![WeightedSetter { weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let per = games.div_ceil(threads);
     let t0 = std::time::Instant::now();
     let res: Vec<[u64; 4]> = std::thread::scope(|s| {
