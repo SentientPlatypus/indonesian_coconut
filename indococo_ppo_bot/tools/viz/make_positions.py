@@ -7,7 +7,8 @@
 
 Everything is rotated so OUR goal is at -y (we attack +y). Demoed frames are dropped.
 Writes positions_3d.html (plotly.js from CDN, data inline), PNGs and positions_stats.json.
-No plotly Python package needed; numpy 1.26.4 + matplotlib only.
+The classic figures need only numpy 1.26.4 + matplotlib. The arena-model views (arena_heatmap.html, arena_broadcast/
+goal/topdown.png, see arena.py) need plotly and kaleido==0.2.1; skip them with --no-arena.
 """
 import argparse, json, math, os
 import numpy as np
@@ -269,10 +270,46 @@ def fig_height(out, data, st, label, made):
                  fontsize=11, fontweight="bold")
     fig.tight_layout(); p = os.path.join(out, "positions_height.png"); fig.savefig(p, dpi=90); plt.close(fig); made.append(p)
 
+# ------------------------------------------------------------------ arena view (tools/viz/arena.py)
+def write_arena(out, data, threats, label, made, png=True):
+    """Heatmap inside the real Soccar arena: arena_heatmap.html + broadcast / behind-goal / top-down PNGs."""
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import arena
+    ms = list(data); layers = []
+    hues_us, hues_opp = ["blue", "cyan"], ["orange", "red"]
+    idx = {}
+    for j, m in enumerate(ms):
+        on = OPPNAME.get(m, m); d = data[m]
+        idx[(m, "u")] = len(layers); layers.append(arena.Layer(f"us vs {on}", d["u"], hues_us[j % 2], visible=(j == 0)))
+        idx[(m, "o")] = len(layers); layers.append(arena.Layer(f"{on} (opponent)", d["o"], hues_opp[j % 2]))
+        idx[(m, "b")] = len(layers); layers.append(arena.Layer(f"ball vs {on}", d["b"], "yellow"))
+        idx[(m, "t")] = len(layers); layers.append(arena.Layer(f"us while {on} attacks", d["u"][threats[m]], "violet" if j == 0 else "green", min_z=0.0))
+    m0 = ms[0]; on0 = OPPNAME.get(m0, m0)
+    sub = " · ".join(f"vs {OPPNAME.get(m, m)}: {data[m]['games']} games, {len(data[m]['u']):,} frames" for m in ms)
+    fig = arena.figure(layers, title=f"{label}: where we play, inside the arena", subtitle=sub, floor_layer=idx[(m0, "u")])
+    p = os.path.join(out, "arena_heatmap.html"); arena.write_html(fig, p); made.append(p)
+    if not png: return
+    views = [("arena_broadcast.png", [idx[(m0, "u")], idx[(m0, "o")]], idx[(m0, "u")], "Broadcast",
+              f"{label} vs {on0}: us (blue) and {on0} (orange) · floor + walls = our density"),
+             ("arena_goal.png", [idx[(m0, "t")]], idx[(m0, "t")], "Behind our goal",
+              f"{label} vs {on0}: where we are while {on0} attacks · floor + walls + dots = us under attack"),
+             ("arena_topdown.png", [idx[(m0, "u")]], idx[(m0, "u")], "Top-down",
+              f"{label} vs {on0}: our positioning, top-down")]
+    for fn, on, fl, cam, t in views:
+        arena.set_view(fig, on, fl, cam, title=f"<b>{t}</b>")
+        p = os.path.join(out, fn)
+        try:
+            arena.write_png(fig, p); made.append(p)
+        except Exception as e:
+            log("arena png failed (pip install kaleido==0.2.1):", e); return
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--in", dest="inputs", action="append", required=True, help="name=path.jsonl (name: galactus, fr4, ...)")
     ap.add_argument("--label", default="ST25")
+    ap.add_argument("--no-arena", action="store_true", help="skip the arena-model views (need plotly + kaleido)")
+    ap.add_argument("--arena-only", action="store_true", help="only write the arena-model views")
     ap.add_argument("--skip-kickoff", type=float, default=3.0, help="drop the first N seconds of each game (kickoff paths)"); ap.add_argument("--out", default="docs/figures/positions")
     a = ap.parse_args(); os.makedirs(a.out, exist_ok=True)
     try: os.nice(19)
@@ -282,8 +319,12 @@ def main():
         k, p = s.split("=", 1); d = load(os.path.expanduser(p), int(a.skip_kickoff * 120)); data[k] = d
         st[k], threats[k] = stats(d); log(k, json.dumps(st[k]))
     made = []
-    write_html(os.path.join(a.out, "positions_3d.html"), data, a.label, st); made.append(os.path.join(a.out, "positions_3d.html"))
-    fig_3d(a.out, data, a.label, made); fig_topdown(a.out, data, threats, st, a.label, made); fig_height(a.out, data, st, a.label, made)
+    if not a.arena_only:
+        write_html(os.path.join(a.out, "positions_3d.html"), data, a.label, st); made.append(os.path.join(a.out, "positions_3d.html"))
+        fig_3d(a.out, data, a.label, made); fig_topdown(a.out, data, threats, st, a.label, made); fig_height(a.out, data, st, a.label, made)
+    if not a.no_arena:
+        try: write_arena(a.out, data, threats, a.label, made)
+        except ImportError as e: log("arena views skipped (pip install plotly kaleido==0.2.1):", e)
     json.dump({"label": a.label, "inputs": a.inputs, "skip_kickoff_s": a.skip_kickoff, "stats": st}, open(os.path.join(a.out, "positions_stats.json"), "w"), indent=1)
     for p in made: log("wrote", p, "%.0f KB" % (os.path.getsize(p) / 1024))
 

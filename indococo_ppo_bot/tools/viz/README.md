@@ -62,3 +62,17 @@ Everything is rotated so our goal is at −y. Demoed frames are dropped, and so 
 - `positions_topdown.png`: log-density for us, the opponent, and us while the opponent attacks. "Attacks" means the ball is in our half, moving at our goal (vy < −300), and the opponent is closer to it.
 - `positions_height.png`: side-view y×z density plus height bands.
 - `positions_stats.json`: % of time goal-side, airborne, z>300, in our own half, and closer to the ball. During attacks: % goal-side, % in our box, and mean distance to our goal.
+
+### Arena view (`arena.py`)
+
+`make_positions.py` also renders the same traces inside a model of the standard Soccar arena, built in `arena.py` from RocketSim/RLBot constants. The floor is x ±4096, y ±5120 and the ceiling is at 2044. The 45° corner walls sit on |x|+|y| = 8064 (a 1152 uu cut), the vertical corners are rounded, and the floor–wall and wall–ceiling transitions curve with a 256 uu radius. Goals are 1786 × 642.775 × 880. It also draws the centre line, centre circle, boxes, and all 6 big and 28 small boost pads. It needs plotly, plus kaleido 0.2.1 for the PNGs (both are in coco-venv: `pip install "plotly<6" kaleido==0.2.1`). Use `--arena-only` to skip the matplotlib figures, or `--no-arena` to skip this view.
+
+- `arena_heatmap.html` (~3.7 MB, plotly.js from the CDN): the walls are translucent glass with glowing team-coloured seams (blue = our goal at −y, orange = theirs).
+  - **Legend:** toggles the 3D point-density clouds: us, the opponent, the ball, and us while the opponent attacks, for each matchup. The clouds show airborne, wall and ceiling time (z > 110). Ground time is the floor texture. The "while attacks" layers show every frame.
+  - **Dropdown:** chooses which layer tints the turf (a smoothed xy projection over mowed stripes) and the arena skin (frames within 230 uu of a wall or the ceiling, z > 140).
+  - **Buttons:** camera presets (broadcast, behind our goal, behind their goal, top-down orthographic, corner).
+- `arena_broadcast.png`: us vs the first matchup (blue) and the opponent (orange), with the floor and walls showing our density.
+- `arena_goal.png`: behind our goal, showing where we are while the opponent attacks.
+- `arena_topdown.png`: our positioning, viewed from above.
+
+Library use: `arena.figure([arena.Layer(name, xyz, hue), ...])`, then `arena.write_html` / `arena.set_view` + `arena.write_png`.
