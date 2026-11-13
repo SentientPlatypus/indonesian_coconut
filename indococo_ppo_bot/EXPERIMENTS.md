@@ -2064,7 +2064,30 @@ Without a demo on us we win 50-72% at every length. With one we win 4-21%. Our b
 
 Reading: the pre-concede bank did what it was aimed at against Galactus: non-demo concedes fell 47 to 38 (-19%, just short of the -20% bar). But it gave the demos back, and more: post-demo concedes rose 76 to 87 and demos on us 115 to 136. Against FR4 it was worse, with aerial concedes up from 14 to 25 and FR4 down 5 points. With ST26-ST31, every Galactus lever that did not change what happens in the demo window has left the post-demo share at 57-69%.
 
-## ST33 (staged, not queued): Galactus-conditioned threat starts (2026-11-13)
+## ST32 results: recoverable `demo_threat`, not promoted (user declined) (2026-11-13)
+
+ST32 (ST25 recipe with the recoverable `demo_threat` drill: `target_goal_dist`, `attacker_speed_range`, `ball_threat`; binary `indococo-train-st32`, from ST25) finished 2026-11-13 9:47 AM ET. Selected (keep-best) checkpoint 21238.7M (`exp_ST32/checkpoints/1794568806`). It passed the automatic gate (h2h 52.6 >= 52; FR4, pool and bp5 within tolerance; Galactus 39.0 within 4 of 40.8), but **the user declined promotion at 10:12 AM ET, so BEST stays ST25** (`st25_final`, `exp_ST25/checkpoints/1794413355`). As with ST30, `st32_final/PROMOTE.json` was set to `promote=false` with `auto_promote: true` and an `override` note; the script's output is kept as `st32_final/PROMOTE.auto.json`. That keeps the launcher's newest-`promote=true` fallback on st25_final.
+
+| Metric | ST32 | ST31 | ST25 (BEST) |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 52.6% | 48.8% | — |
+| FR4 | 78.8 | 73.4 | 78.4 |
+| pool400 | 93.54 | 93.29 | 93.33 |
+| bp5 | 70.29 | 69.37 | 69.21 |
+| bp5 Dice / Kira / Ripple / Chronos | 66.25 / 74.5 / 66.0 / 74.5 | 58.75 / 72.0 / 68.0 / 80.75 | 61.75 / 66.5 / 68.25 / 78.75 |
+| Galactus (500 g) | 39.0 | 39.6 | 40.8 |
+| Megabyte (report-only) | 82.8 | 86.8 | 84.0 |
+| gen min / mean | 0.390 / 0.8179 | 0.396 / 0.8155 | 0.408 / 0.8132 |
+| demos in h2h vs ST25 (against / by us, 200 g) | 50 / 62 | 51 / 65 | — |
+| demos vs FR4 (against / by us, 200 g) | 8 / 123 | 16 / 100 | 13 / 99 |
+
+Mid evals (200 g) were noisy: h2h vs ST25 0.44-0.52 and Galactus 0.34-0.45, with no trend across the 1000M. Galactus is still the weakest gen-panel slot. `diag_gal` has not been run on ST32.
+
+Because ST32 auto-promoted, the launcher started ST33 at 9:49 AM ET from ST32's checkpoint with `train_st33p.toml` and BEST=st32_final. After the user declined, that run (about 24 minutes, one checkpoint) was stopped by PID and kept as `~/ippo_runs/exp_ST33_fromST32_aborted`. ST33 was restarted from ST25 (below).
+
+## ST33 (training from ST25 since 2026-11-13 10:13 AM ET): Galactus-conditioned threat starts (2026-11-13)
+
+**Status 2026-11-13 10:13 AM ET:** ST32 was not promoted (user declined), so ST33 runs on the ST25 branch: start `exp_ST25/checkpoints/1794413355` (20727.5M -> 21727.5M), `train_st33.toml` (`exp_ST33/TRAIN_TMPL`), binary `indococo-train-st33` (sha256 b54f8499...), BEST=st25_final, CHUNK 100M. The first Galactus iteration logged `Setters/@galactus demo_threat share` 0.24 (expected 0.26) and opp-conditioned share 0.996. Finals run against st25_final; afterwards the chain pops `~/ippo_runs/ST_QUEUE` (empty now, so it would repeat as `ST33r`).
 
 ST33 is the start point's recipe with one change: the threat drill is tied to the opponent. While a rollout plays Galactus (league name `galactus`, ~25.8% of iterations at OPPCH 0.70 and weight 6.429 of 17.427), the 0.15 `demo_threat` entry is swapped for the recoverable ST32 drill at 0.30. In that drill the learner is always the keeper and Galactus is the attacker (`learner_keeper`), and the ball is driven at our net (`ball_threat`). That gives 0.30/1.15 = 26% of starts in Galactus iterations, about 6.7% of all starts. Self-play and every other opponent use the base mix byte for byte. The weight is the `opp_weights = { galactus = 0.30 }` value in the template. Lock it after ST32's finals.
 

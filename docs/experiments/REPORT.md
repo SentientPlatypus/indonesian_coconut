@@ -1486,6 +1486,20 @@ The late-game drop is the demo effect. Games end at the first goal, so a long ga
 
 ST32 (recoverable `demo_threat`, from ST25) has been training since 3:31 AM ET. ST33 is staged after a three-way cross-exam (code, research on MAESTRO-style joint opponent × start curricula, and Discord read-only). It conditions the setter mix on the rollout's opponent. Against Galactus only, the threat drill runs at 0.30 with the learner as keeper and a ball driven at our net. Everything else is unchanged. It runs on a new binary (`indococo-train-st33`; rlgymppo opponent-pick hook, `opp_weights`, `learner_keeper`), which passed 98/98 lib tests and a smoke run that measured a 25% Galactus drill share.
 
+### 11.8ab ST32 not promoted (user declined); ST33 restarted from ST25 (2026-11-13)
+
+| Metric | ST32 | ST25 (BEST) |
+|---|---|---|
+| h2h vs ST25 (500 g) | 52.6% | — |
+| FR4 | 78.8 | 78.4 |
+| pool400 | 93.54 | 93.33 |
+| bp5 | 70.29 | 69.21 |
+| Galactus (500 g) | 39.0 | 40.8 |
+| Megabyte | 82.8 | 84.0 |
+| gen min / mean | 0.390 / 0.8179 | 0.408 / 0.8132 |
+
+ST32 (recoverable `demo_threat`, from ST25; keep-best checkpoint 21238.7M, `exp_ST32/checkpoints/1794568806`) passed the automatic gate, including the 4-point Galactus rule, but the user declined to promote it. BEST stays ST25. `st32_final/PROMOTE.json` was overridden to `promote=false` (original kept as `PROMOTE.auto.json`). The ST33 run the launcher had auto-started from ST32 was stopped and kept as `exp_ST33_fromST32_aborted`. ST33 restarted at 10:13 AM ET from ST25 (`exp_ST25/checkpoints/1794413355`) with `train_st33.toml` and the `indococo-train-st33` binary, measured against st25_final.
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):

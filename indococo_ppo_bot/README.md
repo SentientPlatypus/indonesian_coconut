@@ -584,8 +584,13 @@ ST30 (pre-demo replay) was not promoted on 2026-11-12: h2h 56.0%, but Galactus f
 2026-11-13 3:29 AM ET and was not promoted: h2h 48.8% vs ST25, FR4 73.4, pool400 93.29, bp5 69.37, Galactus 39.6,
 Megabyte 86.8, gen-panel min 0.396 / mean 0.8155. On diag_gal its non-demo concedes vs Galactus fell 47 to 38, but
 post-demo concedes rose to 69% (87/126), and aerial concedes vs FR4 rose 14 to 25 (EXPERIMENTS.md ST31 results).
-ST32 (recoverable `demo_threat`, binary `indococo-train-st32`) has been training from ST25 since 2026-11-13 3:31 AM ET.
-ST33 is staged, not queued (`experiments/st_ST33.env`, `experiments/train_st33.toml`, `experiments/train_st33p.toml`,
+ST32 (recoverable `demo_threat`, binary `indococo-train-st32`, from ST25) finished 2026-11-13 and passed the automatic
+gate, but the user declined promotion, so BEST stays ST25: h2h 52.6% vs ST25, FR4 78.8, pool400 93.54, bp5 70.29,
+Galactus 39.0, Megabyte 82.8, gen-panel min 0.390 / mean 0.8179; keep-best checkpoint 21238.7M
+(`exp_ST32/checkpoints/1794568806`). `st32_final/PROMOTE.json` is `promote=false` (script output in `PROMOTE.auto.json`)
+(EXPERIMENTS.md ST32 results).
+ST33 is training from ST25 since 2026-11-13 10:13 AM ET with `train_st33.toml` (the auto-started run from ST32 was stopped
+and kept as `exp_ST33_fromST32_aborted`) (`experiments/st_ST33.env`, `experiments/train_st33.toml`, `experiments/train_st33p.toml`,
 binary `/opt/dlami/nvme/ippo_bins/indococo-train-st33`). It ties the threat drill to the opponent: while a rollout
 plays Galactus, `demo_threat` is the recoverable drill at 0.30 with the learner as keeper, and every other opponent
 and self-play keep the base mix. This uses the new `opp_weights` setter field, `DemoThreat.learner_keeper`, and the
