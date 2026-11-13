@@ -1500,6 +1500,19 @@ ST32 (recoverable `demo_threat`, from ST25) has been training since 3:31 AM ET. 
 
 ST32 (recoverable `demo_threat`, from ST25; keep-best checkpoint 21238.7M, `exp_ST32/checkpoints/1794568806`) passed the automatic gate, including the 4-point Galactus rule, but the user declined to promote it. BEST stays ST25. `st32_final/PROMOTE.json` was overridden to `promote=false` (original kept as `PROMOTE.auto.json`). The ST33 run the launcher had auto-started from ST32 was stopped and kept as `exp_ST33_fromST32_aborted`. ST33 restarted at 10:13 AM ET from ST25 (`exp_ST25/checkpoints/1794413355`) with `train_st33.toml` and the `indococo-train-st33` binary, measured against st25_final.
 
+### 11.8ac ST34 queued: `face_ball` 1.0 -> 0.1 and off the zero-sum path (2026-11-13)
+
+A `diag_gal` run on ST32's keep-best checkpoint (200 g) showed the recoverable drill did not reduce goals conceded after a demo: 74 (ST25 76, ST31 87). The post-demo share fell to 59% only because aerial concedes rose to 25 (ST25 15). Demos on us were 125 (ST25 115). In all three runs, 95-97% of these demos hit us parked on the ground about 0.5-0.6k uu off our goal line, facing a supersonic Galactus carrying the ball.
+
+| `diag_gal` vs Galactus (200 g) | ST25 | ST31 | ST32 |
+|---|---|---|---|
+| decisive win rate | 38.5% | 37.0% | 37.0% |
+| conceded after a demo on us | 76 (62%) | 87 (69%) | 74 (59%) |
+| demos on us / by us | 115 / 16 | 136 / 13 | 125 / 9 |
+| aerial goals against | 15 | 17 | 25 |
+
+ST34 is queued after a three-way cross-exam (code, research, Discord read-only). All three reviews picked the same single change: `face_ball` 1.0 -> 0.1 and removed from the zero-sum list (`experiments/st34.toml`, config only). `face_ball` was 9% of all |reward| (11% of the non-goal reward) against `shadow_space` at about 1/250 of that. Public bots either keep it tiny or not zero-summed (Zealan's guide, Necto, Kaiyo, Seer). ST34 runs from ST25 (`train_st34.toml`, binary 9d4b2a6), or from ST33 if it promotes (`train_st34p.toml`, `indococo-train-st33`). Watch items: FR4 and aerial goals against, kickoff and pursuit wobble, and energy/boost behaviour (rocking).
+
 ## Appendix A: data and figures
 
 **Data files** (`data/`, about 0.8 MB):

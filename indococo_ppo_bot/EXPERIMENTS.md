@@ -2157,6 +2157,50 @@ Risks:
 - 0.30 cuts normal play in Galactus iterations by 13%.
 - `learner_keeper` would make the learner the keeper against every league opponent if put on an entry without `opp_weights`. Only the conditioned entry has it.
 
+## ST34 (queued after ST33): `face_ball` 1.0 -> 0.1 and off the zero-sum path (2026-11-13)
+
+**Status 2026-11-13 10:34 AM ET:** queued (`~/ippo_runs/ST_QUEUE` = `ST34 ST34`, previous queue kept as `ST_QUEUE.bak_pre_st34_20261113_153402`). It starts after ST33's finals (~5-6 PM ET). BEST is ST25.
+
+ST34 is the start point's recipe with ONE change, the reward: `experiments/st34.toml` = `st.toml` with `[weights] face_ball = 0.1` (was 1.0) and `[zero_sum] face_ball = 0.0` (was 1.0). Everything else is `st.toml` unchanged (flip_reset 70, goal ±1×1200, demo victim 1.0, shadow_space 18, and goal_dist, energy, speed_to_ball, vel_ball_to_goal and touch stay zero-summed). League, setters, PPO (1 epoch, policy bf16 off, ENT 0.016, gamma 0.998, lambda 0.95), OPPCH 0.70 and CHUNK 100M are unchanged.
+
+Config only, no new binary: `RewardConfig::build` wraps a term in `ZeroSum` only when its `[zero_sum]` value is > 0, and the child table merges key by key over the `extends` chain. Commit 9d4b2a6 (ST25's binary) has the same logic and the same `face_ball.rs`. `speed_to_ball` is already floored at 0 in `speed_toward_ball.rs`, so it needs no change.
+
+### Staged files (launcher tree `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` and the repo, commit 98f199d)
+
+- `st34.toml`: the reward change above. A merge of the `extends` chain shows only `weights.face_ball` and `zero_sum.face_ball` differ from `st.toml`.
+- `train_st34.toml`: `train_st25.toml` with `reward_config` -> `st34.toml`. Used when ST33 does not promote, on ST25's own binary `indococo-train-rip-9d4b2a6` (sha256 440391…), from `exp_ST25/checkpoints/1794413355`.
+- `train_st34p.toml`: `train_st33.toml` (the template ST33 runs) with `reward_config` -> `st34.toml`. Used when ST33 promotes (`BESTF=st33_final`), on `indococo-train-st33` (`opp_weights`, `learner_keeper`).
+- `st_ST34.env`: ST33's env and start-point rule. The template is chosen once on the fresh start and stored in `exp_ST34/TRAIN_TMPL`, and `B0` follows the template. A dry run in /tmp gave st25_final -> 1794413355 / `train_st34.toml` / 9d4b2a6, a fake st33_final -> `train_st34p.toml` / st33 binary, and a resume kept the stored template.
+
+### Cross-exam (Nov 13)
+
+- **Code: GO for (a).**
+  - Reward magnitudes, last 200 ST32 iterations: `face_ball` pays |1.09|/step, 9.0% of all |reward| and 11.3% of the non-goal |reward|, nonzero on 100% of steps. `shadow_space` (`opponent_possession_space`, the only goal-side shadow term) pays 0.0044/step, about 250× less, nonzero on 7.7% of steps. After the change `face_ball` should be at most ~0.1/step (<1% of the non-goal |reward|; an estimate, raw unzero-summed values were not measured).
+  - `diag_gal` on ST32 (keep-best 1794568806, 200 g): the recoverable drill did not cut post-demo goals. Post-demo concedes 74 (ST25 76, ST31 87); the share fell to 59% (ST25 62%, ST31 69%) only because aerial concedes rose to 25 (ST25 15, ST31 17). Demos on us 125 (ST25 115, ST31 136), we demoed Galactus 9 (16, 13). Win rate 37.0% (38.5%, 37.0%), and 9.7% in games with a demo on us (12.6%, 8.7%). vs FR4 (200 g): 78.5% (ST25 77.0%, ST31 72.0%).
+  - Demo context (`demo_ctx.py`), the same for ST25, ST31 and ST32: 95-97% of the demos hit us on the ground and goal-side, ~0.5-0.6k uu off our own goal line with 93 boost, while Galactus comes from 2.4-2.6k uu at ~2050 uu/s with the ball near it; 92-96% lead to a goal within 3.5 s. That is the parked-facing-the-ball posture a per-step nose-to-ball reward pays for.
+  - (b) A demo-spamming opponent: `HUNT_final` (demo-hunter fine-tune, demo 250) is already in the league at 0.816 (~3.3% of iterations), and Galactus (25.8%) demos us ~0.6 times per game. ST29 already rejected a higher HUNT weight. A scripted heatseeker/bumper needs new Rust and a new binary. Low marginal value.
+  - (c) PFSP: past versions are one group (0.816, ~3.3% of iterations) drawn uniformly from the run's own sliding window, so PFSP inside it does almost nothing. League-wide PFSP needs per-opponent outcome tracking in rlgymppo (`pick_opponent`) and a new binary, and would push more weight onto Galactus, which league-share bumps have not moved since ST18.
+  - (d) Raising `shadow_space` overlaps (a) and only fires while the opponent is within 380 uu of a low ball; a Galactus carry-at-net setter would muddle ST33. Kept as follow-ups.
+- **Research: (a).** Zealan's guide: FaceBall at 1.0 only early in training, then 0.1, and don't zero-sum movement priors. Necto has no face_ball. Kaiyo keeps it on self rewards (not zero-summed). Seer's is 0.000625 (vs goal ~1.25). Leave the opponent mix and setters alone, add no new alignment term, and don't change gamma or aggression. Ranking: face_ball > later defensive alignment > PFSP > exploiter.
+- **Discord (read-only):**
+  - kyhoni (Clanker, Jun 2025): removed face_ball and speed and got rocking, which turned out to be the boost weights, fixed by lowering them. Watch energy/boost interactions.
+  - SoldierDoge (Galactus author, Jun 2026): half-zero-sums to preserve shadow defense.
+  - JPK314 / Kaiyotech (Opti, Aug 2024): found the shadow reward too strong and rolled it back, so don't add a big shadow term.
+  - Carrot (RLBot, 2021): face_ball is good early but bad at a high level.
+  - Duri / Jumper775 (Vora, Nov 2026): train against demo bots; positioning matters.
+  - PigMasta / tedzards509: PFSP on 20% of envs.
+- **Reconciled:** all three reviews support (a). It is one config-only change, independent of ST33's outcome (ST34p carries it on ST33's template). No league, setter, entropy, gamma or shadow change.
+
+Success bar (read against the start point; gate as ST32/ST33):
+- `diag_gal` demos on us and post-demo concedes below the start point's (ST25: 115 and 76 per 200 g), and goals conceded vs Galactus down, not just the share.
+- Galactus within 4, FR4 within 1, pool and bp5 within 1.0, h2h ≥ 52%.
+
+Watch items:
+- FR4 and aerial goals against (ball tracking and aerial aim lose a dense prior).
+- Kickoff and pursuit wobble (`Events/Has Flip Ratio`, kickoff outcome in `diag_gal`).
+- Energy/boost behaviour, especially rocking (kyhoni): `RewardAbs/energy`, `boost_keep`, `boost_change`, `Player/Speed`.
+- Un-zero-summed `face_ball` adds a small positive per-step bias (~0.07 vs a 1200 goal); the critic warm-up covers the re-fit.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.

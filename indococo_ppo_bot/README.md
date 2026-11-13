@@ -596,6 +596,13 @@ plays Galactus, `demo_threat` is the recoverable drill at 0.30 with the learner 
 and self-play keep the base mix. This uses the new `opp_weights` setter field, `DemoThreat.learner_keeper`, and the
 rlgymppo opponent-pick hook (EXPERIMENTS.md ST33).
 
+ST34 is queued after ST33 (`ST_QUEUE` = `ST34 ST34`): the start point's recipe with one reward change,
+`face_ball` 1.0 -> 0.1 and off the zero-sum path (`experiments/st34.toml`; config only). `train_st34.toml`
+(ST25 + st34.toml, binary 9d4b2a6) runs if ST33 does not promote, `train_st34p.toml` (ST33 + st34.toml, binary
+`indococo-train-st33`) if it does (`experiments/st_ST34.env`). `face_ball` was 9% of the |reward| vs `shadow_space`
+~250x smaller; ST32's diag_gal showed the recoverable drill did not cut post-demo goals (74 vs ST25 76 per 200 g)
+(EXPERIMENTS.md ST34).
+
 rip33 verification of `e429d1a`: clean build and link; 87/87 lib tests on CPU and with Ripple on CUDA;
 GPU vs ONNX action agreement 100%; replay 197/197 blue and 195/197 orange; idle 100/100; bench
 0.0118 ms/row at 1024 rows and 0.0237 ms/row at 256, with the forward at about 5 ms per call. The
