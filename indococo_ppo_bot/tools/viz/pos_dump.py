@@ -11,7 +11,7 @@ from multiprocessing import get_context
 
 POOL = os.environ.get("POOL_EVAL", "/home/ubuntu/ippo_runs/code_fr9/indococo_ppo_bot/tools/pool_eval")
 OPPS = {"galactus": ("galactus", "~/eval_bots/galactus"),
-        "fr4": ("indococo", "/home/ubuntu/ippo_runs/exp_FR4/logs/final_policy.safetensors")}
+        "ripple": ("ripple", "~/eval_bots/ripple")}  # Ripple v1.1 (ONNX, kl mode), as in pool_botpack5.toml
 A = None
 
 def r3(v): return [round(float(x), 1) for x in v]

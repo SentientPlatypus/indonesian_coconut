@@ -1558,6 +1558,78 @@
     "h2h_FR4_200": 0.805,
     "galactus_200": 0.42,
     "megabyte_200": 0.84
+   },
+   {
+    "steps": 20938100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794586809",
+    "h2h_BEST_200": 0.545,
+    "h2h_FR4_200": 0.81,
+    "galactus_200": 0.41,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 21038300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794588893",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.775,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.815
+   },
+   {
+    "steps": 21138500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794590858",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.8,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 21238700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794592863",
+    "h2h_BEST_200": 0.54,
+    "h2h_FR4_200": 0.77,
+    "galactus_200": 0.405,
+    "megabyte_200": 0.815
+   },
+   {
+    "steps": 21338900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794594897",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.825,
+    "galactus_200": 0.455,
+    "megabyte_200": 0.845
+   },
+   {
+    "steps": 21439100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794596988",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.77,
+    "galactus_200": 0.47,
+    "megabyte_200": 0.845
+   },
+   {
+    "steps": 21539300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794599070",
+    "h2h_BEST_200": 0.465,
+    "h2h_FR4_200": 0.805,
+    "galactus_200": 0.3518,
+    "megabyte_200": 0.78
+   },
+   {
+    "steps": 21639500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794601021",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.805,
+    "galactus_200": 0.36,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 21727700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794602937",
+    "h2h_BEST_200": 0.525,
+    "h2h_FR4_200": 0.72,
+    "galactus_200": 0.455,
+    "megabyte_200": 0.87
    }
   ]
  },
@@ -1565,7 +1637,7 @@
   {
    "run": "ST19r",
    "h2h": 0.504,
-   "fr4": 0.716,
+   "rip": 0.65,
    "pool": 92.62,
    "bp5": 67.38,
    "gal": 0.342,
@@ -1574,14 +1646,13 @@
    "promote": true,
    "declined": false,
    "gate_fail": [
-    "fr4",
     "h2h"
    ]
   },
   {
    "run": "ST20r",
    "h2h": 0.584,
-   "fr4": 0.758,
+   "rip": 0.725,
    "pool": 92.42,
    "bp5": 69.74,
    "gal": 0.342,
@@ -1594,7 +1665,7 @@
   {
    "run": "ST21",
    "h2h": 0.528,
-   "fr4": 0.754,
+   "rip": 0.7175,
    "pool": 92.75,
    "bp5": 68.17,
    "gal": 0.356,
@@ -1609,7 +1680,7 @@
   {
    "run": "ST22",
    "h2h": 0.506,
-   "fr4": 0.76,
+   "rip": 0.69,
    "pool": 92.58,
    "bp5": 68.75,
    "gal": 0.358,
@@ -1624,7 +1695,7 @@
   {
    "run": "ST23",
    "h2h": 0.56,
-   "fr4": 0.796,
+   "rip": 0.6725,
    "pool": 93.21,
    "bp5": 68.67,
    "gal": 0.354,
@@ -1637,7 +1708,7 @@
   {
    "run": "ST24",
    "h2h": 0.536,
-   "fr4": 0.77,
+   "rip": 0.645,
    "pool": 93.0,
    "bp5": 67.0,
    "gal": 0.37,
@@ -1646,14 +1717,13 @@
    "promote": false,
    "declined": false,
    "gate_fail": [
-    "bp5",
-    "fr4"
+    "bp5"
    ]
   },
   {
    "run": "ST25",
    "h2h": 0.562,
-   "fr4": 0.784,
+   "rip": 0.6825,
    "pool": 93.33,
    "bp5": 69.21,
    "gal": 0.408,
@@ -1661,14 +1731,12 @@
    "gen": 0.8132,
    "promote": true,
    "declined": false,
-   "gate_fail": [
-    "fr4"
-   ]
+   "gate_fail": []
   },
   {
    "run": "ST26",
    "h2h": 0.49,
-   "fr4": 0.722,
+   "rip": 0.665,
    "pool": 93.21,
    "bp5": 68.33,
    "gal": 0.346,
@@ -1677,14 +1745,13 @@
    "promote": false,
    "declined": false,
    "gate_fail": [
-    "fr4",
     "h2h"
    ]
   },
   {
    "run": "ST27",
    "h2h": 0.488,
-   "fr4": 0.73,
+   "rip": 0.6925,
    "pool": 92.17,
    "bp5": 69.37,
    "gal": 0.388,
@@ -1693,7 +1760,6 @@
    "promote": false,
    "declined": false,
    "gate_fail": [
-    "fr4",
     "h2h",
     "pool"
    ]
@@ -1701,7 +1767,7 @@
   {
    "run": "ST28",
    "h2h": 0.514,
-   "fr4": 0.754,
+   "rip": 0.76,
    "pool": 93.29,
    "bp5": 72.04,
    "gal": 0.404,
@@ -1710,14 +1776,13 @@
    "promote": false,
    "declined": false,
    "gate_fail": [
-    "fr4",
     "h2h"
    ]
   },
   {
    "run": "ST29",
    "h2h": 0.484,
-   "fr4": 0.77,
+   "rip": 0.6875,
    "pool": 93.46,
    "bp5": 69.42,
    "gal": 0.394,
@@ -1726,14 +1791,13 @@
    "promote": false,
    "declined": false,
    "gate_fail": [
-    "fr4",
     "h2h"
    ]
   },
   {
    "run": "ST30",
    "h2h": 0.56,
-   "fr4": 0.774,
+   "rip": 0.69,
    "pool": 93.08,
    "bp5": 70.25,
    "gal": 0.362,
@@ -1748,7 +1812,7 @@
   {
    "run": "ST31",
    "h2h": 0.488,
-   "fr4": 0.734,
+   "rip": 0.68,
    "pool": 93.29,
    "bp5": 69.37,
    "gal": 0.396,
@@ -1757,14 +1821,13 @@
    "promote": false,
    "declined": false,
    "gate_fail": [
-    "fr4",
     "h2h"
    ]
   },
   {
    "run": "ST32",
    "h2h": 0.526,
-   "fr4": 0.788,
+   "rip": 0.66,
    "pool": 93.54,
    "bp5": 70.29,
    "gal": 0.39,
@@ -1772,6 +1835,19 @@
    "gen": 0.8179,
    "promote": false,
    "declined": true,
+   "gate_fail": []
+  },
+  {
+   "run": "ST33",
+   "h2h": 0.532,
+   "rip": 0.66,
+   "pool": 93.79,
+   "bp5": 69.67,
+   "gal": 0.388,
+   "mega": 0.844,
+   "gen": 0.8167,
+   "promote": false,
+   "declined": false,
    "gate_fail": []
   }
  ],
@@ -1971,6 +2047,20 @@
    "chronos": 0.745,
    "galactus": 0.405,
    "seer": 1.0
+  },
+  "ST33": {
+   "1v1.pt": 0.85,
+   "ppo_430M": 0.885,
+   "nexto": 0.935,
+   "necto": 0.99,
+   "element": 0.9875,
+   "immortal": 0.98,
+   "ripple": 0.66,
+   "kira": 0.725,
+   "dice": 0.6325,
+   "chronos": 0.7725,
+   "galactus": 0.395,
+   "seer": 0.995
   }
  },
  "diag": {
@@ -2374,6 +2464,63 @@
     "won": 156,
     "neutral": 20,
     "lost": 24
+   }
+  },
+  "ST33": {
+   "buckets": [
+    [
+     "0-6s",
+     10,
+     1.0
+    ],
+    [
+     "6-15s",
+     63,
+     0.48
+    ],
+    [
+     "15-30s",
+     82,
+     0.27
+    ],
+    [
+     "30-60s",
+     42,
+     0.4
+    ],
+    [
+     "60-400s",
+     3,
+     0.0
+    ]
+   ],
+   "games": 200,
+   "wr": 0.395,
+   "conceded": {
+    "victim demoed in last 3.5s": 77,
+    "aerial/air shot (z>300)": 24,
+    "ground: victim out of position (ball-side)": 9,
+    "ground: victim goal-side but far (beaten by shot)": 8,
+    "own touch last (deflection/own goal)": 3
+   },
+   "scored": {
+    "aerial/air shot (z>300)": 24,
+    "ground: victim out of position (ball-side)": 23,
+    "kickoff(<=6s)": 10,
+    "own touch last (deflection/own goal)": 9,
+    "victim demoed in last 3.5s": 8,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 5
+   },
+   "n_conceded": 121,
+   "n_scored": 79,
+   "demoed_us": 117,
+   "demoed_them": 16,
+   "games_demoed": 98,
+   "wr_demoed": 0.163,
+   "kickoff": {
+    "won": 155,
+    "lost": 21,
+    "neutral": 24
    }
   }
  },

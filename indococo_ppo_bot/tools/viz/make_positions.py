@@ -3,7 +3,7 @@
 
   python tools/viz/make_positions.py --label ST25 \
       --in galactus=~/ippo_runs/viz/positions/st25_vs_galactus.jsonl \
-      --in fr4=~/ippo_runs/viz/positions/st25_vs_fr4.jsonl --out docs/figures/positions
+      --in ripple=~/ippo_runs/viz/positions/st25_vs_ripple.jsonl --out docs/figures/positions
 
 Everything is rotated so OUR goal is at -y (we attack +y). Demoed frames are dropped.
 Writes positions_3d.html (plotly.js from CDN, data inline), PNGs and positions_stats.json.
@@ -29,7 +29,7 @@ def dark_cmap(c): return LinearSegmentedColormap.from_list("d" + c, ["#1c2633", 
 CM = {"Blues": dark_cmap("#3b8eea"), "Reds": dark_cmap("#e5534b"), "Purples": dark_cmap("#a371f7")}
 EX = (-W, W); EY = (-L, L); EZ = (0, H)
 ENT = {"u": "us", "o": "opponent", "b": "ball"}
-OPPNAME = {"galactus": "Galactus", "fr4": "FR4"}
+OPPNAME = {"galactus": "Galactus", "ripple": "Ripple v1.1"}
 
 def log(*a): print("[pos]", *a, flush=True)
 
@@ -158,7 +158,7 @@ def write_html(path, data, label, st):
 table{{border-collapse:collapse;margin:8px 16px;font-size:13px}}td,th{{border:1px solid #30363d;padding:4px 8px;text-align:right}}
 th{{color:#8b949e}}p{{margin:4px 16px;color:#8b949e;font-size:12px}}</style></head><body>
 <div id="p"></div>
-<p>Rotated so our goal is at −y. First 3 s of each game (kickoff) excluded. Voxels 512×512×256 uu; colour/opacity = % of non-demoed frames in that voxel. Use the dropdown to switch us / opponent / ball and vs Galactus / vs FR4. Games: poolkit kickoff, first goal wins, both sides per seed.</p>
+<p>Rotated so our goal is at −y. First 3 s of each game (kickoff) excluded. Voxels 512×512×256 uu; colour/opacity = % of non-demoed frames in that voxel. Use the dropdown to switch us / opponent / ball and vs Galactus / vs Ripple v1.1. Games: poolkit kickoff, first goal wins, both sides per seed.</p>
 <table><tr><th>vs</th><th>games</th><th>win %</th><th>we're goal-side %</th><th>we're airborne %</th><th>we're z&gt;300 %</th><th>opp airborne %</th><th>goal-side while they attack %</th><th>in our box while they attack %</th></tr>{rows}</table>
 <script>Plotly.newPlot("p",{json.dumps(traces, separators=(",", ":"))},{json.dumps(layout, separators=(",", ":"))},{{responsive:true}});</script>
 </body></html>"""
@@ -306,7 +306,7 @@ def write_arena(out, data, threats, label, made, png=True):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--in", dest="inputs", action="append", required=True, help="name=path.jsonl (name: galactus, fr4, ...)")
+    ap.add_argument("--in", dest="inputs", action="append", required=True, help="name=path.jsonl (name: galactus, ripple, ...)")
     ap.add_argument("--label", default="ST25")
     ap.add_argument("--no-arena", action="store_true", help="skip the arena-model views (need plotly + kaleido)")
     ap.add_argument("--arena-only", action="store_true", help="only write the arena-model views")

@@ -5,7 +5,7 @@
 | Source | Written by | Used for |
 |---|---|---|
 | `exp_<RUN>/logs/metrics.jsonl` (167 keys per PPO iteration) | trainer (`INDOCOCO_METRICS`) | training curves, reward breakdown, behaviour, setter mix, cross-run compare |
-| `exp_<RUN>/logs/mid.jsonl` | `st_launch.sh` after each 100M chunk | mid-eval trajectories (200 g vs BEST/FR4/Galactus/Megabyte, 95% Wilson CI) |
+| `exp_<RUN>/logs/mid.jsonl` | `st_launch.sh` after each 100M chunk | mid-eval trajectories (200 g vs BEST/Galactus/Megabyte, 95% Wilson CI; FR4 evals dropped Nov 13) |
 | `st<run>_final/{h2h_*,pool400,bp5,galactus_final,megabyte_final}.jsonl`, `PROMOTE.json` | finals + `st_promote.py` | leaderboard heatmap, gate marks, gen-panel radar, bp5 bars |
 | `diag_gal/st<run>_summary.txt` | `diag_gal/analyze.py` | post-demo concede share, aerial goals against, demo exchange, win rate by goal time |
 | `diag_gal/st<run>_gal200.jsonl` | `diag_gal/diag.py` | where Galactus demos us (car position from the ~6 s traj window kept before each goal) |
@@ -46,18 +46,18 @@ The launcher hook in `experiments/st_launch.sh` runs this after each run's final
 
 ```bash
 cd /opt/dlami/nvme/ic_ppo/indococo_ppo_bot
-for o in galactus fr4; do
+for o in galactus ripple; do   # ripple = Ripple v1.1 (ONNX, kl), as in pool_botpack5.toml
   CUDA_VISIBLE_DEVICES= nice -n 19 /home/ubuntu/coco-venv/bin/python tools/viz/pos_dump.py \
     --cand ~/ippo_runs/st25_final/final_policy.safetensors --opp $o --seeds 100 --procs 8 \
     --out ~/ippo_runs/viz/positions/st25_vs_$o.jsonl        # 200 games, ~1 min each
 done
 nice -n 19 /home/ubuntu/coco-venv/bin/python tools/viz/make_positions.py --label ST25 \
   --in galactus=~/ippo_runs/viz/positions/st25_vs_galactus.jsonl \
-  --in fr4=~/ippo_runs/viz/positions/st25_vs_fr4.jsonl --out docs/figures/positions
+  --in ripple=~/ippo_runs/viz/positions/st25_vs_ripple.jsonl --out docs/figures/positions
 ```
 
 Everything is rotated so our goal is at −y. Demoed frames are dropped, and so is the first 3 s of each game (`--skip-kickoff`), because the kickoff paths would otherwise dominate the density. Outputs:
-- `positions_3d.html`: interactive plotly volume over a field wireframe with walls, goals and the 2044 ceiling. The dropdown switches between us, the opponent and the ball, vs Galactus or vs FR4. plotly.js loads from the CDN and the data is inline (about 420 KB).
+- `positions_3d.html`: interactive plotly volume over a field wireframe with walls, goals and the 2044 ceiling. The dropdown switches between us, the opponent and the ball, vs Galactus or vs Ripple v1.1. plotly.js loads from the CDN and the data is inline (about 420 KB).
 - `positions_3d.png`: matplotlib 3D voxels from three angles, for each matchup.
 - `positions_topdown.png`: log-density for us, the opponent, and us while the opponent attacks. "Attacks" means the ball is in our half, moving at our goal (vy < −300), and the opponent is closer to it.
 - `positions_height.png`: side-view y×z density plus height bands.
