@@ -37,6 +37,11 @@ pub struct SharedInfo {
     setter: &'static str,
     /// Curriculum episode still being decided.
     attempt: Option<Attempt>,
+    /// ST35 PFSP: the rollout opponent (name, team) this episode started
+    /// against (`None` = self-play or PFSP off), and whether its goal was
+    /// already counted.
+    pfsp_opp: Option<(String, usize)>,
+    pfsp_decided: bool,
 }
 
 impl Default for SharedInfo {
@@ -54,6 +59,8 @@ impl From<u64> for SharedInfo {
             resets: TickResetTracker::default(),
             setter: "",
             attempt: None,
+            pfsp_opp: None,
+            pfsp_decided: false,
         }
     }
 }
@@ -62,6 +69,12 @@ impl SharedInfoProvider for SharedInfo {
     fn reset(&mut self, state: &GameState) {
         self.resets.reset(state);
         self.events.reset(StateView::from_game_state(state));
+        self.pfsp_decided = false;
+        self.pfsp_opp = if crate::pfsp::enabled() {
+            crate::setters::with_current_opponent(|o| o.map(|(n, t)| (n.to_owned(), t)))
+        } else {
+            None
+        };
     }
 
     fn on_tick(&mut self, arena: &Arena, _tick_events: &[ArenaEvent]) {
@@ -71,6 +84,15 @@ impl SharedInfoProvider for SharedInfo {
     /// Runs before the rewards of the step (rlgym_rs `post_step` order).
     fn update(&mut self, gs: &GameState) {
         self.resets.finish_step();
+        // ST35 PFSP: a goal decides the episode for the opponent's win rate.
+        if !self.pfsp_decided && self.pfsp_opp.is_some() {
+            let y = f64::from(gs.ball.pos.y);
+            if y.abs() > crate::consts::GOAL_THRESHOLD {
+                self.pfsp_decided = true;
+                let team = if y > 0.0 { crate::consts::BLUE_TEAM } else { crate::consts::ORANGE_TEAM };
+                crate::pfsp::record_goal(self.pfsp_opp.as_ref(), team);
+            }
+        }
         if let Some(mut a) = self.attempt {
             let reset = self
                 .resets

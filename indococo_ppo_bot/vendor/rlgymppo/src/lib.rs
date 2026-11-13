@@ -26,7 +26,7 @@ pub use agent::config::{
 pub use agent::external::{ExternalOpponent, ExternalPolicy, Opponent, OpponentRef};
 pub use agent::model::{Actic, Net, linear_weight_param_ids};
 use agent::self_play::VersionManager;
-pub use agent::self_play::{FixedOpponent, OpponentPick, SelfPlayConfig};
+pub use agent::self_play::{FixedOpponent, OpponentMix, OpponentPick, SelfPlayConfig};
 pub use agent::skill_tracker::SkillTrackerConfig;
 use agent::skill_tracker::{AsyncSkillTracker, SkillTrackerUpdate, report_skill_ratings};
 pub use agent::transfer_learn::{TeacherConfig, TransferLearnConfig};
@@ -88,6 +88,23 @@ fn notify_opponent_pick(name: Option<&str>, old_team: usize) {
     if let Some(hook) = hook {
         hook(name, old_team);
     }
+}
+
+/// Called once per rollout before the opponent pick with the fixed-then-
+/// external opponent names and the number of saved past versions. `Some`
+/// replaces the configured weights for this pick (indococo ST35 PFSP).
+type OpponentMixHook = fn(&[&str], usize) -> Option<agent::self_play::OpponentMix>;
+static OPPONENT_MIX_HOOK: std::sync::RwLock<Option<OpponentMixHook>> =
+    std::sync::RwLock::new(None);
+
+/// Register the opponent-mix hook (see [`OPPONENT_MIX_HOOK`]).
+pub fn set_opponent_mix_hook(hook: OpponentMixHook) {
+    *OPPONENT_MIX_HOOK.write().unwrap_or_else(|e| e.into_inner()) = Some(hook);
+}
+
+fn opponent_mix(names: &[&str], num_versions: usize) -> Option<agent::self_play::OpponentMix> {
+    let hook = *OPPONENT_MIX_HOOK.read().unwrap_or_else(|e| e.into_inner());
+    hook.and_then(|h| h(names, num_versions))
 }
 
 /// Drop the collection-stream hook. The next collection uses the calling
@@ -1202,9 +1219,16 @@ where
     }
 
     fn pick_self_play_inner(&mut self) -> Option<(Opponent, usize)> {
-        self.self_play_config
-            .pick_opponent(self.version_mgr.versions.len(), &mut self.rng)
-            .map(|pick| {
+        let nv = self.version_mgr.versions.len();
+        let mix = {
+            let names = self.self_play_config.opponent_names();
+            opponent_mix(&names, self.self_play_config.usable_versions(nv))
+        };
+        let pick = match mix {
+            Some(m) => self.self_play_config.pick_opponent_mix(&m, nv, &mut self.rng),
+            None => self.self_play_config.pick_opponent(nv, &mut self.rng),
+        };
+        pick.map(|pick| {
                 let old_team = if self.rng.next_u32().is_multiple_of(2) { 0 } else { 1 };
                 let (name, model) = match pick {
                     OpponentPick::PastVersion(i) => {

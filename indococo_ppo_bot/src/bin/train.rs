@@ -96,6 +96,11 @@ struct TrainConfig {
     /// `cpu` forces both onto the CPU.
     #[serde(default)]
     league_bots_device: LeagueBotsDevice,
+    /// ST35: prioritized fictitious self-play over the league (replaces the
+    /// static `[opponents]` weights for every rollout pick). See
+    /// `indococo_bot::pfsp`.
+    #[serde(default)]
+    pfsp: Option<indococo_bot::pfsp::PfspConfig>,
 }
 
 /// Device for the Galactus and Megabyte forwards.
@@ -436,6 +441,38 @@ fn learner_config(
     }
 }
 
+/// ST35: validates `[pfsp]` against the loaded league and registers the
+/// per-rollout opponent-mix hook. Without `[pfsp]` (or `enabled = false`)
+/// PFSP stays off and the static weights apply, as before.
+fn install_pfsp(cfg: &TrainConfig, fixed: &[FixedOpponent], external: &[ExternalOpponent]) {
+    let Some(p) = cfg.pfsp.clone() else { return };
+    if p.enabled {
+        let names: Vec<&str> = fixed
+            .iter()
+            .map(|o| o.name.as_str())
+            .chain(external.iter().map(|o| o.name.as_str()))
+            .collect();
+        p.validate(&names).unwrap_or_else(|e| panic!("[pfsp]: {e}"));
+        if !cfg.self_play_old_versions && p.past_share > 0.0 {
+            println!("PFSP: self_play_old_versions is off, past_share goes to self-play");
+        }
+        println!(
+            "PFSP on: self {:.2}, past {:.2}, league {:.2} over {names:?}; floor {:.3} of league, clamp {:?} of all, pinned {:?}, ema {} games, smooth {}",
+            p.self_share, p.past_share, p.league_share(), p.floor, p.clamp, p.pinned, p.ema_games, p.smooth
+        );
+    }
+    indococo_bot::pfsp::install(p);
+    rlgymppo::set_opponent_mix_hook(pfsp_mix_hook);
+}
+
+fn pfsp_mix_hook(names: &[&str], num_versions: usize) -> Option<rlgymppo::OpponentMix> {
+    indococo_bot::pfsp::pick_mix(names, num_versions).map(|m| rlgymppo::OpponentMix {
+        chance: m.chance as f32,
+        past_weight: m.past as f32,
+        weights: m.league.iter().map(|&w| w as f32).collect(),
+    })
+}
+
 fn train(config: &Path) {
     let text = std::fs::read_to_string(config).expect("read train config");
     let cfg: TrainConfig = toml::from_str(&text).expect("parse train config");
@@ -455,6 +492,7 @@ fn train_cfg(cfg: TrainConfig) {
     let dev = device(&cfg.backend);
     let fixed = load_fixed_opponents(&cfg.opponents, &dev);
     let external = load_external_opponents(&cfg.opponents, &dev, cfg.league_bots_device);
+    install_pfsp(&cfg, &fixed, &external);
     for phase in plan_phases(&cfg, checkpoint_steps(&cfg.checkpoints)) {
         println!(
             "PHASE policy_lr={} iterations={:?}",
@@ -1662,6 +1700,55 @@ mod tests {
         c.critic_warmup_steps = warmup;
         c.iterations = iterations;
         c
+    }
+
+    #[test]
+    fn st35_pfsp_section_parses_and_is_off_by_default() {
+        assert!(cfg(0, 0).pfsp.is_none());
+        let text = format!(
+            "{}\n[pfsp]\nself_share = 0.30\npast_share = 0.20\nfloor = 0.03\npinned = [\"HUNT_final\", \"FR4_final\"]\nlog = \"/tmp/pfsp.jsonl\"\n[pfsp.clamp]\ngalactus = [0.20, 0.26]\n",
+            include_str!("../../config/train.toml")
+        );
+        let c: TrainConfig = toml::from_str(&text).expect("train.toml + [pfsp]");
+        let p = c.pfsp.expect("pfsp");
+        assert!(p.enabled && (p.league_share() - 0.5).abs() < 1e-12);
+        assert_eq!(p.clamp["galactus"], [0.20, 0.26]);
+        assert_eq!(p.pinned, vec!["HUNT_final".to_string(), "FR4_final".to_string()]);
+    }
+
+    /// The PFSP hook's mix reaches rlgymppo's pick: self 0.30, past 0.20,
+    /// league 0.50 with Galactus at its 20% clamp floor (prior win rates).
+    #[test]
+    fn st35_pfsp_hook_drives_the_rlgymppo_pick() {
+        use rand::SeedableRng;
+        let mut p = indococo_bot::pfsp::PfspConfig::default();
+        p.clamp.insert("galactus".into(), [0.20, 0.26]);
+        p.pinned = vec!["HUNT_final".into(), "FR4_final".into()];
+        let names = ["FR4_final", "ST25_final", "HUNT_final", "ripple", "galactus", "megabyte"];
+        p.validate(&names).unwrap();
+        indococo_bot::pfsp::install(p);
+        let m = pfsp_mix_hook(&names, 3).expect("pfsp on");
+        assert!((m.chance - 0.70).abs() < 1e-6 && (m.past_weight - 0.20).abs() < 1e-6);
+        assert!((m.weights.iter().sum::<f32>() - 0.50).abs() < 1e-5);
+        assert!((m.weights[4] - 0.20).abs() < 1e-5, "galactus {:?}", m.weights);
+        assert!((m.weights[0] - 0.015).abs() < 1e-5 && (m.weights[2] - 0.015).abs() < 1e-5);
+        // No past versions yet: past goes to self-play, league stays 0.50.
+        let m0 = pfsp_mix_hook(&names, 0).unwrap();
+        assert!((m0.chance - 0.50).abs() < 1e-6 && m0.past_weight == 0.0);
+        // Through SelfPlayConfig::pick_opponent_mix (no opponents loaded, so
+        // only self vs past): 30% self-play, 70% past with a 0.7/0.2 mix.
+        let cfg = SelfPlayConfig { train_against_old_versions: true, past_versions_weight: 0.0, ..Default::default() };
+        let mix = rlgymppo::OpponentMix { chance: 0.7, past_weight: 0.2, weights: vec![] };
+        let mut rng = SmallRng::seed_from_u64(5);
+        let old = (0..100_000)
+            .filter(|_| matches!(cfg.pick_opponent_mix(&mix, 2, &mut rng), Some(rlgymppo::OpponentPick::PastVersion(_))))
+            .count();
+        assert!((old as f64 / 1e5 - 0.70).abs() < 0.01, "old {old}");
+        // Old versions off: never a past pick, all self-play.
+        let off = SelfPlayConfig { train_against_old_versions: false, ..Default::default() };
+        assert!((0..1000).all(|_| off.pick_opponent_mix(&mix, 2, &mut rng).is_none()));
+        indococo_bot::pfsp::install(indococo_bot::pfsp::PfspConfig { enabled: false, ..Default::default() });
+        assert!(pfsp_mix_hook(&names, 3).is_none());
     }
 
     #[test]

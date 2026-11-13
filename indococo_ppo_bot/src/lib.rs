@@ -24,6 +24,7 @@ pub mod megabyte;
 pub mod ripple;
 pub mod math;
 pub mod obs;
+pub mod pfsp;
 pub mod resets;
 pub mod rewards;
 pub mod setters;

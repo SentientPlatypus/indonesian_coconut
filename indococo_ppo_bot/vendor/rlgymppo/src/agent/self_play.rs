@@ -101,6 +101,53 @@ impl SelfPlayConfig {
     }
 }
 
+/// An externally computed opponent mix for one rollout (indococo ST35 PFSP):
+/// probability `chance` of not playing pure self-play, then past versions vs
+/// each fixed-then-external opponent in proportion to `past_weight` and
+/// `weights` (same order as [`SelfPlayConfig::opponent_names`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpponentMix {
+    pub chance: f32,
+    pub past_weight: f32,
+    pub weights: Vec<f32>,
+}
+
+impl SelfPlayConfig {
+    /// Fixed then external opponent names (the order of [`OpponentMix::weights`]).
+    pub fn opponent_names(&self) -> Vec<&str> {
+        self.fixed_opponents
+            .iter()
+            .map(|o| o.name.as_str())
+            .chain(self.external_opponents.iter().map(|o| o.name.as_str()))
+            .collect()
+    }
+
+    /// Past versions usable for a pick (0 when old versions are off).
+    pub fn usable_versions(&self, num_versions: usize) -> usize {
+        if self.train_against_old_versions { num_versions } else { 0 }
+    }
+
+    /// Like [`Self::pick_opponent`] with the weights of `mix`. A mix with the
+    /// wrong number of weights falls back to the configured weights.
+    pub fn pick_opponent_mix(
+        &self,
+        mix: &OpponentMix,
+        num_versions: usize,
+        rng: &mut SmallRng,
+    ) -> Option<OpponentPick> {
+        let n_fixed = self.fixed_opponents.len();
+        if mix.weights.len() != n_fixed + self.external_opponents.len() {
+            return self.pick_opponent(num_versions, rng);
+        }
+        let nv = self.usable_versions(num_versions);
+        let past = if nv > 0 { mix.past_weight } else { 0.0 };
+        pick_weighted(mix.chance, past, &mix.weights, nv, rng).map(|pick| match pick {
+            OpponentPick::Fixed(i) if i >= n_fixed => OpponentPick::External(i - n_fixed),
+            other => other,
+        })
+    }
+}
+
 /// [`SelfPlayConfig::pick_opponent`] on plain weights (negative weights count as 0).
 fn pick_weighted(
     chance: f32,
