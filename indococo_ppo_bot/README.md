@@ -743,6 +743,11 @@ After each run's finals, `st_launch.sh` runs the same tool detached into `~/ippo
 ![training curves](docs/figures/train_curves_ST32.png)
 ![reward breakdown](docs/figures/reward_breakdown_ST32.png)
 
+3D positioning: `tools/viz/pos_dump.py` records full-game traces and `tools/viz/make_positions.py` draws them (interactive `docs/figures/positions/positions_3d.html`). See tools/viz/README.md.
+
+![positions top-down](docs/figures/positions/positions_topdown.png)
+![positions 3d](docs/figures/positions/positions_3d.png)
+
 ## Deploy (RLBot v5)
 
 `../rlbot_indococo_ppo/` holds `bot.toml`, `loadout.toml`, the binaries

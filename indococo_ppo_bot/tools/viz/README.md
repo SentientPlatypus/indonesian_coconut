@@ -39,3 +39,26 @@ Figures:
 - `demo_heatmap.png`: where Galactus demos us, oriented with our goal at the bottom. White dots mark demos followed by a goal against within 3.5 s.
 
 The launcher hook in `experiments/st_launch.sh` runs this after each run's finals. It runs detached, at nice 19, with a 15-minute timeout, and writes to `~/ippo_runs/viz/<RUN>/`. A failure there can't block the chain.
+
+## 3D positioning (`pos_dump.py` + `make_positions.py`)
+
+`diag_gal` only keeps the last ~6 s before each goal, so `pos_dump.py` replays games using the same protocol (poolkit kickoff, first goal wins, both sides per seed). It records the ball and both cars over the whole game: position, boost, on-ground and demoed. A frame is written each time the sim steps forward, which is every 8 ticks (15 Hz) because that's the agents' action repeat. It runs on CPU only and needs no new binary.
+
+```bash
+cd /opt/dlami/nvme/ic_ppo/indococo_ppo_bot
+for o in galactus fr4; do
+  CUDA_VISIBLE_DEVICES= nice -n 19 /home/ubuntu/coco-venv/bin/python tools/viz/pos_dump.py \
+    --cand ~/ippo_runs/st25_final/final_policy.safetensors --opp $o --seeds 100 --procs 8 \
+    --out ~/ippo_runs/viz/positions/st25_vs_$o.jsonl        # 200 games, ~1 min each
+done
+nice -n 19 /home/ubuntu/coco-venv/bin/python tools/viz/make_positions.py --label ST25 \
+  --in galactus=~/ippo_runs/viz/positions/st25_vs_galactus.jsonl \
+  --in fr4=~/ippo_runs/viz/positions/st25_vs_fr4.jsonl --out docs/figures/positions
+```
+
+Everything is rotated so our goal is at −y. Demoed frames are dropped, and so is the first 3 s of each game (`--skip-kickoff`), because the kickoff paths would otherwise dominate the density. Outputs:
+- `positions_3d.html`: interactive plotly volume over a field wireframe with walls, goals and the 2044 ceiling. The dropdown switches between us, the opponent and the ball, vs Galactus or vs FR4. plotly.js loads from the CDN and the data is inline (about 420 KB).
+- `positions_3d.png`: matplotlib 3D voxels from three angles, for each matchup.
+- `positions_topdown.png`: log-density for us, the opponent, and us while the opponent attacks. "Attacks" means the ball is in our half, moving at our goal (vy < −300), and the opponent is closer to it.
+- `positions_height.png`: side-view y×z density plus height bands.
+- `positions_stats.json`: % of time goal-side, airborne, z>300, in our own half, and closer to the ball. During attacks: % goal-side, % in our box, and mean distance to our goal.
