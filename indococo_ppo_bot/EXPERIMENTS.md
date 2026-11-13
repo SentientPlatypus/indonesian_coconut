@@ -2256,6 +2256,83 @@ When it takes effect: `st_promote.py` and `st_select_final.py` are read fresh at
 
 Under the new gate ST33's finals (h2h 53.2, pool 93.79 vs 93.33, bp5 69.67 vs 69.21, Galactus 38.8 vs 40.8) would pass; the old gate failed it on FR4 only (73.0 vs 78.4). `st33_final/PROMOTE.json` was not rewritten and nothing was promoted.
 
+## ST35 (queued after ST34): PFSP opponent sampling with a Galactus clamp (2026-11-13)
+
+**Status 2026-11-13 5:47 PM ET:** queued (`~/ippo_runs/ST_QUEUE` = `ST35 ST35`, previous queue was empty, backed up as `ST_QUEUE.bak_pre_st35_20261113_174751`). It starts after ST34's finals (~2-3 AM ET Nov 14). BEST is ST25.
+
+ST35 is the start point's recipe with ONE change, the opponent pick. ST25's static league (30% self-play, past versions 3.3%, Galactus 25.8%, Megabyte 8.0%, ST20r 8.0%, Ripple 5.2%, FR4/HUNT/ST13-ST16 3.3% each) becomes prioritized fictitious self-play (PFSP):
+
+- 30% pure self-play, 20% past versions (uniform), 50% adaptive league. Until the first past version exists (the first 250M boundary, ~23M steps in from 20727.5M), the 20% goes to self-play.
+- League: `galactus`, `megabyte`, `ripple` (existing loaders), `ST25_final` (fixed, `exp_ST25/checkpoints/1794413355`, new), with `HUNT_final` and `FR4_final` pinned at the 3% league floor (1.5% of all rollouts each). ST13-ST16 and ST20r_final are dropped. FR4 stays as a training opponent because the user dropped only its evals ("stop evaling against FR4"), not training.
+- Each member's training win rate `x` comes from finished training episodes (the first goal), credited to the rollout's opponent. Episodes run across rollouts (~590 steps per game per 300k-step rollout vs ~290-step episodes), so a goal counts if the episode began in this rollout or the opponent drove it for at least 75 steps (5 s). `x` is a Beta(1,1) posterior over exponentially decayed counts (~40-game window), shared by every env.
+- League mass is proportional to `f_hard(x) = 1 - x`, or `4·x(1 - x)` when `x < 0.25`. The variance form is scaled by 4 so `f` is continuous at 0.25; unscaled it would jump 4x there. Each member gets at least 3% of league mass. **Galactus is clamped to [20%, 26%] of ALL rollouts.** Shares are the exact projection `clip(λ·f, lo, hi)` with sum 1, moved 25% of the way toward the target at every pick. That is a convex blend, so the floors and the clamp keep holding.
+- Logged at every pick: a `PFSP pick=N self=… past=… | <opp> x=… share=… g+N(wr)` line in train.log and one JSON line in `exp_ST35/logs/pfsp.jsonl` (per opponent: x, share of all rollouts, league share, cumulative games/wins, new games/wins since the last pick).
+
+Everything else matches ST25: reward `st.toml` (flip_reset 70), setters (ST25 mix: no `opp_weights`, no `learner_keeper`), PPO 1 epoch, policy bf16 off, ENT 0.016, gamma 0.998, lambda 0.95, LR 5e-5 cosine, TPI 300k, CHUNK 100M, OPPCH 0.70 (= 1 - self_share).
+
+### Implementation (binary `/opt/dlami/nvme/ippo_bins/indococo-train-st35-pfsp-eb14965`, sha256 8e4aae9c…6368c262e)
+
+Commits 21ebefb (sampler) and eb14965 (rollout attribution fix after the first smoke run). Built from the ST33 lineage with `--features torch,ripple`.
+- `src/pfsp.rs` (new) contains `PfspConfig` (`[pfsp]`: self_share, past_share, ema_games, floor, smooth, low_x, clamp, pinned, log), `f_hard`, `target_shares` (bisection on λ), `WinStats`, `EpisodeTracker`, and `pick_mix` (recompute, smooth, log).
+- `vendor/rlgymppo`:
+  - `OpponentMix` and `set_opponent_mix_hook`: called once per rollout before the pick with the fixed-then-external names and the usable past-version count. `Some` replaces the static weights for that pick.
+  - `SelfPlayConfig::{opponent_names, usable_versions, pick_opponent_mix}`.
+  - Without a hook, or with `[pfsp]` absent or `enabled = false`, the old `pick_opponent` path runs unchanged.
+- `src/setters.rs`: `rollout_seq()`, a counter bumped by the existing ST33 pick hook.
+- `src/env.rs`: a per-env `EpisodeTracker` that reports the counted first goal to `pfsp::record_goal`.
+- `src/bin/train.rs`: `[pfsp]` in `TrainConfig`. It is validated against the loaded league at startup (unknown names and infeasible bounds panic), then the hook is registered.
+- Tests (`cargo test --release --features torch,ripple`): lib 108/108 (98 old + 10 PFSP) and trainer 8/8 (6 old + 2 PFSP). The PFSP tests cover:
+  - `f_hard`: continuity at 0.25 and its ordering;
+  - the Beta prior and the ~40-game EMA window;
+  - floors, pins and the Galactus clamp over an 8×8×8 grid of win rates;
+  - the clamp binding at both 20% and 26%;
+  - proportionality to `1 - x`;
+  - the prior start mix;
+  - smoothing that keeps the constraints and converges;
+  - validation of infeasible or unknown entries;
+  - toml parsing;
+  - the episode tracker (fresh, short and long inherited episodes, a second switch);
+  - the hook through `pick_opponent_mix`: 30/20/50, no-versions, old versions off, and PFSP disabled.
+
+### Smoke runs (`/opt/dlami/nvme/st35_smoke{.run1,}`, nice 19, 4 threads / 32 games / 20k-step rollouts, league bots and Ripple on CPU, ~1.5 GB GPU)
+
+- Both runs loaded `exp_ST25/checkpoints/1794413355` (cumulative 20727.5M) and printed `PFSP on: self 0.30, past 0.20, league 0.50 over [FR4_final, ST25_final, HUNT_final, ripple, galactus, megabyte] …`. Both ended with rc 0 and saved a checkpoint.
+- Run 1 (16 rollouts, binary 21ebefb) showed the attribution bug. The first Galactus rollout logged 0 goals, and an episode begun under Galactus, continued under self-play and finished under Galactus again could be credited. Fixed in eb14965.
+- Run 2 (30 rollouts, eb14965):
+  - 14 of 30 rollouts were against the league (47%, expected 50% with no past versions yet).
+  - Every league rollout's goals were credited at the next pick: Megabyte 78/59, Galactus 38/51/28/36, Ripple 34/38/44/41.
+  - x moved (Galactus 0.50 → 0.57 → 0.53 → 0.52 → 0.43), and the shares stayed within the floors and the clamp. Galactus stayed at its 20% floor because its training-start win rate was close to the others'.
+
+### Staged files (launcher tree `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` and the repo)
+
+- `train_st35.toml`: `train_st25.toml` with the league above and `[pfsp]`. The static weights equal the PFSP prior mix at OPPCH 0.70: past 0.20, Galactus 0.20, Megabyte/Ripple/ST25_final 0.09, FR4/HUNT 0.015. They apply only if `[pfsp]` is disabled. Used when ST34 does not promote, from `exp_ST25/checkpoints/1794413355`.
+- `train_st35p.toml`: the same with `reward_config` -> `st34.toml` (ST34's recipe). Used ONLY if ST34 promotes, from ST34's final.
+- `st_ST35.env`: ST34's start-point rule. The template is `train_st35p.toml` iff BESTF=st34_final, else `train_st35.toml`, chosen once and stored in `exp_ST35/TRAIN_TMPL`. Both templates use the PFSP binary. The env sets GAL_WEIGHT 0.20 and MEGA_WEIGHT 0.09 (so Megabyte mids stay on), plus EXTRA_OPPS ST25_final 0.09 and HUNT_final 0.015. A dry run in /tmp gave st25_final -> 1794413355 / `train_st35.toml`, and a fake st34_final -> `train_st35p.toml` keeping ST34's checkpoint.
+
+### Cross-exam (Nov 13)
+
+- **Discord (read-only):** supports PFSP, i.e. sampling the opponents you lose to more often. Two warnings: shadow-defense rewards get too strong quickly, and demo penalties do not teach demo avoidance (as ST28/ST29 found). One Galactus note: Bonk reportedly beat it by winning kickoffs and controlling midfield.
+- **Research:** the top pick is capped PFSP: more rollouts against the opponents we lose to, with a cap so Galactus cannot take over the mix (it suggested 15%). No reward change alongside it.
+- **Code:**
+  - PFSP needs code. rlgymppo picks one opponent per rollout from static weights, and nothing fed results back. It is feasible on the ST33 hook (`notify_opponent_pick`), which already tells the env the rollout's opponent and team.
+  - Kickoffs are already a strength vs Galactus, so Bonk's kickoff route is not our lever. `diag_gal` (200 g): ST25 kickoffs won 148 / lost 30 / neutral 22, with 7 kickoff goals scored and 0 conceded. ST33 had 155 / 21 / 24, with 10 scored (wr 1.00 in 0-6 s goals) and 0 conceded.
+  - Where Galactus beats us is still the demo window. ST25 conceded 123 goals, and 76 of them (62%) came within 3.5 s of a demo on us. Galactus demoed us 115 times and we demoed it 16 times. We won 12.6% of the 95 games with a demo on us. The 15-30 s first-goal bucket was worst (wr .32).
+  - ST33's numbers are similar: 121 conceded, 77 (64%) after a demo, 117 / 16 demos.
+- **Reconciled:**
+  - PFSP, as Discord and research both favour, with one change. A 15% Galactus cap would CUT Galactus from ST25's 25.8%, and Galactus is the user's most important opponent. So instead of a cap, Galactus is clamped to [20%, 26%] of all rollouts. PFSP then mainly re-weights the rest of the league and makes room for past selves (3.3% -> 20%).
+  - No reward, setter, entropy or gamma change. Shadow and demo terms stay as in `st.toml`, per the Discord warnings.
+
+Success bar (read against ST25, gate as ST34):
+- h2h vs ST25 ≥ 52%, pool400 and bp5 within 1.0 of ST25's (93.33 / 69.21).
+- Galactus within 0.04 of 40.8, and ideally above it.
+- Watch `diag_gal` post-demo concedes (ST25 76/123, 62%) and demos on us (ST25 115 per 200 g).
+
+Risks and watch items:
+- **Galactus will likely sit at its 20% floor**, not ~26%. In training starts its win rate is close to the others' (the smoke run read 0.43-0.57 vs Megabyte 0.49-0.57 and Ripple 0.47-0.62), so `1 - x` gives it no more than the others and the clamp floor binds. That is about 22% fewer Galactus rollouts than ST25's 25.8%. If that is not wanted, raise the floor (`clamp = { galactus = [0.25, 0.26] }` in `train_st35*.toml`) before ST35 starts.
+- Training-episode win rates are taken from setter starts (kickoff, random, replay, aerial_defense, demo_threat), not full games, so they are a relative difficulty signal, not the eval win rate.
+- The new 20% past-version share is a big jump from 3.3%. Watch h2h vs ST25 for self-play collapse or forgetting.
+- Sampling noise: one rollout gives the ~40-game window, so x moves fast. The 25% per-pick smoothing and the floors bound the swings. Watch the PFSP lines.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
