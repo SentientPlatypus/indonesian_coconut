@@ -2265,7 +2265,7 @@ ST35 is the start point's recipe with ONE change, the opponent pick. ST25's stat
 - 30% pure self-play, 20% past versions (uniform), 50% adaptive league. Until the first past version exists (the first 250M boundary, ~23M steps in from 20727.5M), the 20% goes to self-play.
 - League: `galactus`, `megabyte`, `ripple` (existing loaders), `ST25_final` (fixed, `exp_ST25/checkpoints/1794413355`, new), with `HUNT_final` and `FR4_final` pinned at the 3% league floor (1.5% of all rollouts each). ST13-ST16 and ST20r_final are dropped. FR4 stays as a training opponent because the user dropped only its evals ("stop evaling against FR4"), not training.
 - Each member's training win rate `x` comes from finished training episodes (the first goal), credited to the rollout's opponent. Episodes run across rollouts (~590 steps per game per 300k-step rollout vs ~290-step episodes), so a goal counts if the episode began in this rollout or the opponent drove it for at least 75 steps (5 s). `x` is a Beta(1,1) posterior over exponentially decayed counts (~40-game window), shared by every env.
-- League mass is proportional to `f_hard(x) = 1 - x`, or `4·x(1 - x)` when `x < 0.25`. The variance form is scaled by 4 so `f` is continuous at 0.25; unscaled it would jump 4x there. Each member gets at least 3% of league mass. **Galactus is clamped to [20%, 26%] of ALL rollouts.** Shares are the exact projection `clip(λ·f, lo, hi)` with sum 1, moved 25% of the way toward the target at every pick. That is a convex blend, so the floors and the clamp keep holding.
+- League mass is proportional to `f_hard(x) = 1 - x`, or `4·x(1 - x)` when `x < 0.25`. The variance form is scaled by 4 so `f` is continuous at 0.25; unscaled it would jump 4x there. Each member gets at least 3% of league mass. **Galactus is pinned at [25%, 26%] of ALL rollouts** (near ST25's 25.8%; user decision, Nov 13 5:49 PM ET), so PFSP adapts only the rest of the league. Shares are the exact projection `clip(λ·f, lo, hi)` with sum 1, moved 25% of the way toward the target at every pick. That is a convex blend, so the floors and the clamp keep holding.
 - Logged at every pick: a `PFSP pick=N self=… past=… | <opp> x=… share=… g+N(wr)` line in train.log and one JSON line in `exp_ST35/logs/pfsp.jsonl` (per opponent: x, share of all rollouts, league share, cumulative games/wins, new games/wins since the last pick).
 
 Everything else matches ST25: reward `st.toml` (flip_reset 70), setters (ST25 mix: no `opp_weights`, no `learner_keeper`), PPO 1 epoch, policy bf16 off, ENT 0.016, gamma 0.998, lambda 0.95, LR 5e-5 cosine, TPI 300k, CHUNK 100M, OPPCH 0.70 (= 1 - self_share).
@@ -2301,7 +2301,7 @@ Commits 21ebefb (sampler) and eb14965 (rollout attribution fix after the first s
 - Run 2 (30 rollouts, eb14965):
   - 14 of 30 rollouts were against the league (47%, expected 50% with no past versions yet).
   - Every league rollout's goals were credited at the next pick: Megabyte 78/59, Galactus 38/51/28/36, Ripple 34/38/44/41.
-  - x moved (Galactus 0.50 → 0.57 → 0.53 → 0.52 → 0.43), and the shares stayed within the floors and the clamp. Galactus stayed at its 20% floor because its training-start win rate was close to the others'.
+  - x moved (Galactus 0.50 → 0.57 → 0.53 → 0.52 → 0.43), and the shares stayed within the floors and the clamp. Galactus stayed at its then-20% floor because its training-start win rate was close to the others'. That run used the first clamp, [20%, 26%]; see the clamp change below.
 
 ### Staged files (launcher tree `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` and the repo)
 
@@ -2319,7 +2319,7 @@ Commits 21ebefb (sampler) and eb14965 (rollout attribution fix after the first s
   - Where Galactus beats us is still the demo window. ST25 conceded 123 goals, and 76 of them (62%) came within 3.5 s of a demo on us. Galactus demoed us 115 times and we demoed it 16 times. We won 12.6% of the 95 games with a demo on us. The 15-30 s first-goal bucket was worst (wr .32).
   - ST33's numbers are similar: 121 conceded, 77 (64%) after a demo, 117 / 16 demos.
 - **Reconciled:**
-  - PFSP, as Discord and research both favour, with one change. A 15% Galactus cap would CUT Galactus from ST25's 25.8%, and Galactus is the user's most important opponent. So instead of a cap, Galactus is clamped to [20%, 26%] of all rollouts. PFSP then mainly re-weights the rest of the league and makes room for past selves (3.3% -> 20%).
+  - PFSP, as Discord and research both favour, with one change. A 15% Galactus cap would CUT Galactus from ST25's 25.8%, and Galactus is the user's most important opponent. So instead of a cap, Galactus is clamped to all rollouts: first [20%, 26%], then raised to [25%, 26%] before the start (user: hold it near ST25), which in effect pins it at ST25's share. PFSP then mainly re-weights the rest of the league and makes room for past selves (3.3% -> 20%).
   - No reward, setter, entropy or gamma change. Shadow and demo terms stay as in `st.toml`, per the Discord warnings.
 
 Success bar (read against ST25, gate as ST34):
@@ -2328,7 +2328,7 @@ Success bar (read against ST25, gate as ST34):
 - Watch `diag_gal` post-demo concedes (ST25 76/123, 62%) and demos on us (ST25 115 per 200 g).
 
 Risks and watch items:
-- **Galactus will likely sit at its 20% floor**, not ~26%. In training starts its win rate is close to the others' (the smoke run read 0.43-0.57 vs Megabyte 0.49-0.57 and Ripple 0.47-0.62), so `1 - x` gives it no more than the others and the clamp floor binds. That is about 22% fewer Galactus rollouts than ST25's 25.8%. If that is not wanted, raise the floor (`clamp = { galactus = [0.25, 0.26] }` in `train_st35*.toml`) before ST35 starts.
+- **Galactus clamp raised to [25%, 26%] before ST35 started** (user, Nov 13 5:49 PM ET: hold it near ST25's share). With the first clamp, [20%, 26%], Galactus would likely have sat at the 20% floor, because its training-start win rate is close to the others' (smoke: 0.43-0.57 vs Megabyte 0.49-0.57 and Ripple 0.47-0.62). That would have been about 22% fewer Galactus rollouts than ST25. Now Galactus is effectively fixed at 25-26%, and PFSP re-weights Megabyte, Ripple and ST25_final within the remaining ~21-22% of rollouts (FR4/HUNT stay at 1.5% each). The static fallback weights (GAL_WEIGHT 0.20 etc.) are unchanged and apply only if `[pfsp]` is disabled.
 - Training-episode win rates are taken from setter starts (kickoff, random, replay, aerial_defense, demo_threat), not full games, so they are a relative difficulty signal, not the eval win rate.
 - The new 20% past-version share is a big jump from 3.3%. Watch h2h vs ST25 for self-play collapse or forgetting.
 - Sampling noise: one rollout gives the ~40-game window, so x moves fast. The 25% per-pick smoothing and the floors bound the swings. Watch the PFSP lines.

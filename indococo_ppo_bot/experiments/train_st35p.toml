@@ -7,7 +7,8 @@
 #    with HUNT_final and FR4_final pinned at the 3% league floor.
 #  - League mass ~ f_hard(x) of each member's training win rate x (Beta(1,1)
 #    + ~40-game EMA from finished episodes), every member >= 3% of league,
-#    Galactus clamped to [20%, 26%] of ALL rollouts (ST25 had 25.8%).
+#    Galactus pinned at [25%, 26%] of ALL rollouts (ST25 had 25.8%; user,
+#    Nov 13: hold it near ST25), so PFSP adapts the rest of the league.
 #  - ST13-ST16 and ST20r_final are out of the league. FR4_final stays as a
 #    training opponent (only its evals were dropped, Nov 13).
 # The static weights below (and GAL/MEGA/EXTRA_OPPS in st_ST35.env) are the
@@ -62,7 +63,7 @@ ema_games = 40
 floor = 0.03
 smooth = 0.25
 low_x = 0.25
-clamp = { galactus = [0.20, 0.26] }
+clamp = { galactus = [0.25, 0.26] }
 pinned = ["HUNT_final", "FR4_final"]
 log = "@RUN@/logs/pfsp.jsonl"
 
