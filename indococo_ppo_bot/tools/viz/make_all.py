@@ -3,7 +3,7 @@
 
 Reads only what the trainer / launcher / diag scripts already write:
   exp_<RUN>/logs/metrics.jsonl   one JSON object per PPO iteration (INDOCOCO_METRICS)
-  exp_<RUN>/logs/mid.jsonl       per-100M-chunk evals (200 g vs BEST/FR4/Galactus/Megabyte)
+  exp_<RUN>/logs/mid.jsonl       per-100M-chunk evals (200 g vs BEST/Galactus/Megabyte; FR4 dropped Nov 13)
   st<run>_final/*.jsonl, PROMOTE.json   500/400 g finals + promotion gate inputs
   diag_gal/st<run>_summary.txt, st<run>_gal200.jsonl   Galactus goal/demo diagnostics
 Never invents numbers: a panel with no data is skipped and logged.
@@ -101,7 +101,7 @@ def load_final(R, run):
     try: d["promote"] = json.load(open(os.path.join(F, "PROMOTE.json")))
     except Exception: d["promote"] = None
     one = lambda n: (read_jsonl(os.path.join(F, n)) or [None])[-1]
-    d["h2h_best"], d["h2h_fr4"] = one("h2h_BEST.jsonl"), one("h2h_FR4.jsonl")
+    d["h2h_best"] = one("h2h_BEST.jsonl")
     d["galactus"], d["megabyte"] = one("galactus_final.jsonl"), one("megabyte_final.jsonl")
     d["pool400"], d["bp5"] = read_jsonl(os.path.join(F, "pool400.jsonl")), read_jsonl(os.path.join(F, "bp5.jsonl"))
     return d
@@ -226,20 +226,19 @@ def fig_behavior(R, run, rows, out, made):
     fig.suptitle(f"{run} behaviour during training (60-iter rolling mean)", fontsize=12, fontweight="bold"); fig.tight_layout()
     save(fig, out, f"behavior_{run}.png", made)
 
-MID_KEYS = [("h2h_BEST_200", "vs BEST (h2h)"), ("h2h_FR4_200", "vs FR4"),
+MID_KEYS = [("h2h_BEST_200", "vs BEST (h2h)"),
             ("galactus_200", "vs Galactus"), ("megabyte_200", "vs Megabyte (report-only)")]
 
 def best_refs(bestfin):
     """Reference lines from the BEST run's own finals."""
     if not bestfin: return {}
     return {"h2h_BEST_200": (0.52, "promote gate 52%"),
-            "h2h_FR4_200": (wr(bestfin["h2h_fr4"]), "BEST finals"),
             "galactus_200": (wr(bestfin["galactus"]), "BEST finals"),
             "megabyte_200": (wr(bestfin["megabyte"]), "BEST finals")}
 
 def fig_mid_current(R, run, mid, out, made, refs, best_name):
     if not mid: log("no mid.jsonl for", run); return
-    fig, axs = plt.subplots(1, 4, figsize=(16, 4.2), sharey=False)
+    fig, axs = plt.subplots(1, len(MID_KEYS), figsize=(4 * len(MID_KEYS), 4.2), sharey=False)
     s = np.array([m["steps"] for m in mid]) / 1e9
     for ax, (k, t) in zip(axs, MID_KEYS):
         y = np.array([np.nan if m.get(k) is None else m[k] for m in mid], float)
@@ -261,7 +260,7 @@ def fig_mid_overlay(R, runs, mids, out, made, refs, best_name):
     if best_name in mids and mids[best_name] and best_name not in have: have = sort_runs(have + [best_name])
     if not have: return
     C = run_color(have)
-    fig, axs = plt.subplots(1, 4, figsize=(17, 4.6))
+    fig, axs = plt.subplots(1, len(MID_KEYS), figsize=(4.25 * len(MID_KEYS), 4.6))
     for ax, (k, t) in zip(axs, MID_KEYS):
         for r in have:
             m = mids[r]; s0 = m[0]["steps"]
@@ -282,25 +281,24 @@ def fig_mid_overlay(R, runs, mids, out, made, refs, best_name):
     fig.suptitle("Mid-run eval trajectories across runs (200 g per point; h2h opponent = BEST at the time)", fontsize=12, fontweight="bold")
     fig.tight_layout(); save(fig, out, "mid_eval_overlay.png", made)
 
-LB_COLS = [("vs BEST", "h2h"), ("vs FR4", "fr4"), ("pool400", "pool"), ("bp5", "bp5"),
+LB_COLS = [("vs BEST", "h2h"), ("pool400", "pool"), ("bp5", "bp5"), ("Ripple v1.1", "rip"),
            ("Galactus", "gal"), ("Megabyte*", "mega"), ("panel mean", "gen")]
 
 def lb_values(fin):
     p = fin["promote"] or {}
     g = (p.get("gen_panel") or {}).get("mean")
     return {"h2h": wr(fin["h2h_best"]) if fin["h2h_best"] else p.get("vs_best"),
-            "fr4": wr(fin["h2h_fr4"]) if fin["h2h_fr4"] else p.get("vs_fr4"),
+            "rip": next((d.get("win_rate_decisive") for d in reversed(fin["bp5"] or []) if d.get("opponent") == "ripple"), None),
             "pool": p.get("pool"), "bp5": p.get("bp5"),
             "gal": wr(fin["galactus"]) if fin["galactus"] else p.get("galactus"),
             "mega": wr(fin["megabyte"]), "gen": g}
 
 def gate_fail(p):
-    """Current gate (st_promote.py @0a5f834) evaluated on the run's own PROMOTE.json inputs."""
+    """Current gate (st_promote.py, FR4 dropped Nov 13) evaluated on the run's own PROMOTE.json inputs."""
     f = set()
     if not p: return f
     try:
         if p["vs_best"] < 0.52: f.add("h2h")
-        if p["vs_fr4"] < p["best_vs_fr4"] - 0.01: f.add("fr4")
         if p["pool"] < p["best_pool"] - 1.0: f.add("pool")
         if p.get("bp5") is not None and p.get("best_bp5") is not None and p["bp5"] < p["best_bp5"] - 1.0: f.add("bp5")
         if p.get("galactus") is not None and p.get("best_galactus") is not None and p["galactus"] < p["best_galactus"] - 0.04: f.add("gal")
@@ -342,8 +340,8 @@ def fig_leaderboard(R, runs, fins, out, made, best_name):
     ax.set_title(f"Experiment leaderboard: finals panel (win %, pool/bp5 = pool score)\n"
                  f"colour = Δ vs {best_name} finals (vs-BEST column: Δ vs 52% gate); red box = fails current promote gate; ★ = promoted",
                  fontsize=9.5, pad=28)
-    fig.text(0.01, 0.005, "* Megabyte is report-only. vs BEST = 500 g vs whichever run was BEST at the time. "
-             "Gate: h2h≥52, FR4≥BEST−1, pool≥BEST−1.0, bp5≥BEST−1.0, Galactus≥BEST−4.", fontsize=7, color=MUTED)
+    fig.text(0.01, 0.005, "* Megabyte is report-only; Ripple v1.1 is one of the five bp5 bots, shown on its own. vs BEST = 500 g vs whichever run was BEST at the time. "
+             "Gate: h2h≥52, pool≥BEST−1.0, bp5≥BEST−1.0, Galactus≥BEST−4.", fontsize=7, color=MUTED)
     fig.tight_layout(); save(fig, out, "leaderboard_heatmap.png", made)
     return rows_out
 

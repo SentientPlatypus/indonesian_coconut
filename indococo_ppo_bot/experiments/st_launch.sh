@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ST strength chain (EXPERIMENTS.md ST): 1v1 strength only, no flip reset terms,
 # no BC/KL refresh. RUN=ST1 VARIANT=ST1 bash st_launch.sh (resumes). Chunks of
-# 100M (CHUNK); after each chunk: 200 g vs BEST (FR8-final) + 200 g vs FR4 -> mid.jsonl.
-# Guard: 2 chunks in a row < 45% vs FR4 -> roll back to the best chunk.
+# 100M (CHUNK); after each chunk: 200 g vs BEST -> mid.jsonl (FR4 evals dropped Nov 13, user).
+# Guard: 2 chunks in a row < 40% vs BEST -> roll back to the best chunk.
 # Also 200 g vs Galactus per chunk (field galactus_200) and 500 g in finals
-# (galactus_final.jsonl). Finals (<run>_final): 500 g vs BEST + FR4 (seed 424242), pool400, botpack5, Galactus 500 g, and
-# PROMOTE (>= 52% vs BEST, pool/FR4/bp5 not worse than BEST's). Then pops the
+# (galactus_final.jsonl). Finals (<run>_final): 500 g vs BEST (seed 424242), pool400, botpack5, Galactus 500 g, and
+# PROMOTE (>= 52% vs BEST, pool/bp5 not worse than BEST's, Galactus within 0.04). Then pops the
 # next line "RUN VARIANT" of ~/ippo_runs/ST_QUEUE, starting from this run's best
-# chunk (vs BEST, with >= 48% vs FR4). Empty queue -> repeats this variant as
+# chunk (st_select_final.py). Empty queue -> repeats this variant as
 # <RUN>r so the GPU never idles. Stop chain: touch ~/ippo_runs/ST_NO_FOLLOWUP.
 set -u
 # HUNT pseudo-run (ST_QUEUE line "HUNT HUNT"): train the demo hunter with
@@ -65,7 +65,6 @@ B=$X/indococo-train
 cd /home/ubuntu/indonesian_coconut
 latest() { ls $X/checkpoints | grep -E '^[0-9]+$' | sort -n | tail -1; }
 steps_of() { steps_in $X/checkpoints/$1; }
-printf '[[opponent]]\nname = "FR4_final"\nkind = "indococo"\npath = "%s"\n' $R/exp_FR4/logs/final_policy.safetensors > $X/opp_FR4.toml
 printf '[[opponent]]\nname = "BEST"\nkind = "indococo"\npath = "%s"\n' $BESTF/final_policy.safetensors > $X/opp_BEST.toml
 read START0 < <(awk '{print $2}' $X/START)
 while :; do
@@ -97,7 +96,7 @@ while :; do
   prev=$now; ck=$X/checkpoints/$(latest); now=$(steps_of $(latest))
   (( now > prev )) || die "steps did not advance ($prev -> $now)"
   W=$X/mid/$now; mkdir -p $W; export_to $ck $W/actor.safetensors
-  for o in BEST FR4; do
+  for o in BEST; do
     nice -n 19 $PYT $T/pool_eval.py --candidate $W/actor.safetensors --pool $X/opp_$o.toml --games $H2H_GAMES --procs $PROCS --seed 424242 --out $W/h2h_$o.jsonl --label ${RUN}_${now}_vs_$o > $W/h2h_$o.log 2>&1
   done
   OMP_NUM_THREADS=1 nice -n 19 $PYT $T/pool_eval.py --candidate $W/actor.safetensors --pool $GALP --games $GAL_GAMES --procs $PROCS --seed 424242 --out $W/galactus.jsonl --label ${RUN}_${now}_vs_galactus > $W/galactus.log 2>&1
@@ -111,38 +110,38 @@ while :; do
     RIPPLEP=$C/experiments/pool_ripple.toml
     OMP_NUM_THREADS=1 nice -n 19 $PYT $T/pool_eval.py --candidate $W/actor.safetensors --pool $RIPPLEP --games $GAL_GAMES --procs $PROCS --seed 424242 --out $W/ripple.jsonl --label ${RUN}_${now}_vs_ripple > $W/ripple.log 2>&1
   fi
-  wb=$(wr_of $W/h2h_BEST.jsonl); wb=${wb:-null}; wf=$(wr_of $W/h2h_FR4.jsonl); wf=${wf:-null}; wg=$(wr_of $W/galactus.jsonl); wg=${wg:-null}; wm=$(wr_of $W/megabyte.jsonl); wm=${wm:-null}; wr=$(wr_of $W/ripple.jsonl); wr=${wr:-null}
-  echo "{\"steps\":$now,\"ckpt\":\"$ck\",\"h2h_BEST_200\":$wb,\"h2h_FR4_200\":$wf,\"galactus_$GAL_GAMES\":$wg,\"megabyte_$GAL_GAMES\":$wm,\"ripple_$GAL_GAMES\":$wr}" >> $X/logs/mid.jsonl
-  log "$RUN chunk done at $now: vs BEST $wb, vs FR4 $wf, vs Galactus $wg, vs Megabyte $wm, vs Ripple $wr"
-  if [[ "$wf" != null ]] && $PYT -c "import sys;sys.exit(0 if $wf < 0.45 else 1)"; then LOW=$((LOW + 1)); else LOW=0; fi
+  wb=$(wr_of $W/h2h_BEST.jsonl); wb=${wb:-null}; wg=$(wr_of $W/galactus.jsonl); wg=${wg:-null}; wm=$(wr_of $W/megabyte.jsonl); wm=${wm:-null}; wr=$(wr_of $W/ripple.jsonl); wr=${wr:-null}
+  echo "{\"steps\":$now,\"ckpt\":\"$ck\",\"h2h_BEST_200\":$wb,\"galactus_$GAL_GAMES\":$wg,\"megabyte_$GAL_GAMES\":$wm,\"ripple_$GAL_GAMES\":$wr}" >> $X/logs/mid.jsonl
+  log "$RUN chunk done at $now: vs BEST $wb, vs Galactus $wg, vs Megabyte $wm, vs Ripple $wr"
+  if [[ "$wb" != null ]] && $PYT -c "import sys;sys.exit(0 if $wb < 0.40 else 1)"; then LOW=$((LOW + 1)); else LOW=0; fi
   if (( LOW >= 2 )); then
     src=$($PYT - $X/logs/mid.jsonl <<'PY'
 import json,sys
 b=None
 for l in open(sys.argv[1]):
     d=json.loads(l)
-    if (d.get("h2h_FR4_200") or 0)>=0.48 and (b is None or (d.get("h2h_BEST_200") or 0)>b[0]): b=(d.get("h2h_BEST_200") or 0,d["ckpt"])
+    if b is None or (d.get("h2h_BEST_200") or 0)>b[0]: b=(d.get("h2h_BEST_200") or 0,d["ckpt"])
 print(b[1] if b else "")
 PY
 )
     [[ -n "$src" && -d "$src" ]] || src=$(awk '{print $1}' $X/START)
     nd=$X/checkpoints/$(date +%s); mkdir -p $nd; cp $src/actor.bpk $src/critic.bpk $nd/
     sed -E "s/^cumulative_timesteps = .*/cumulative_timesteps = $now/" $src/stats.toml > $nd/stats.toml
-    LOW=0; log "GUARD: 2 chunks < 45% vs FR4; rolled back to $src as $nd"
+    LOW=0; log "GUARD: 2 chunks < 40% vs BEST; rolled back to $src as $nd"
   fi
   echo LOW=$LOW > $X/guard.env
 done
 touch $X/TRAIN_DONE
 # Final candidate = multi-candidate selection (st_select_final.py, 79614e5): top-N chunks by
-# h2h_BEST_200 (FR4 >= 48%) re-evaluated at 500 g vs BEST + 500 g vs Galactus, picked by
+# h2h_BEST_200 re-evaluated at 500 g vs BEST + 500 g vs Galactus, picked by
 # 0.6*h2h + 0.4*Galactus. Falls back to the old rule (best h2h_BEST_200) on any failure.
 # BIN/R passed so its export step uses this run's binary. Configure via ST_REEVAL_*.
 bestck=$(BIN=$B R=$R OMP_NUM_THREADS=1 nice -n 19 $PYT $C/experiments/st_select_final.py $X/logs/mid.jsonl "$PYT" "$T" "$X" "$GALP" "$PROCS" 2>>$X/logs/select_final.log)
 [[ -n "$bestck" && -d "$bestck" ]] || bestck=$X/checkpoints/$(latest)
 F=$R/${RUN,,}_final; mkdir -p $F; echo $bestck > $F/FINAL_CKPT; echo "$(steps_in $bestck)" > $F/STEPS
 CAND=$F/final_policy.safetensors; export_to $bestck $CAND; sha256sum $CAND > $F/sha.txt
-cp $X/opp_FR4.toml $X/opp_BEST.toml $F/
-for o in BEST FR4; do
+cp $X/opp_BEST.toml $F/
+for o in BEST; do
   echo "$(date) h2h $o" >> $F/run.log
   nice -n 19 $PYT $T/pool_eval.py --candidate $CAND --pool $F/opp_$o.toml --games $FIN_H2H --procs $PROCS --seed 424242 --out $F/h2h_$o.jsonl --label ${RUN}final_vs_$o > $F/h2h_$o.log 2>&1
 done
@@ -170,14 +169,14 @@ fi
 $PYT $C/experiments/st_promote.py $F $BESTF > $F/PROMOTE.json 2>$F/promote.err
 echo "$(date) DONE $(cat $F/PROMOTE.json)" >> $F/run.log; touch $F/DONE
 log "$RUN finals: $(cat $F/PROMOTE.json)"
-# Report-only demos-against (c4c56a0 h2h fields) vs BEST and FR4, 200 kickoff games each,
+# Report-only demos-against (c4c56a0 h2h fields) vs BEST, 200 kickoff games,
 # with indococo-train-hunt (has the new fields). Never blocks the chain.
 HB=$R/code_fr9/bin/indococo-train-hunt
 if [[ -x $HB ]]; then
-  for o in BEST:$(cat $BESTF/FINAL_CKPT 2>/dev/null) FR4:$R/exp_FR4/checkpoints/1793481832; do
+  for o in BEST:$(cat $BESTF/FINAL_CKPT 2>/dev/null); do
     [[ -d "${o#*:}" ]] && timeout 3600 nice -n 19 $HB h2h $bestck ${o#*:} 200 8 > $F/demos_h2h_${o%%:*}.json 2> $F/demos_h2h_${o%%:*}.err || true
   done
-  log "$RUN demos_against (cand/opp per 200 g): BEST $(grep -o "\"demos_against_a\":[0-9]*,\"demos_against_b\":[0-9]*" $F/demos_h2h_BEST.json 2>/dev/null) FR4 $(grep -o "\"demos_against_a\":[0-9]*,\"demos_against_b\":[0-9]*" $F/demos_h2h_FR4.json 2>/dev/null)"
+  log "$RUN demos_against (cand/opp per 200 g): BEST $(grep -o "\"demos_against_a\":[0-9]*,\"demos_against_b\":[0-9]*" $F/demos_h2h_BEST.json 2>/dev/null)"
 fi
 # Report-only figures (tools/viz/make_all.py -> $R/viz/$RUN): detached, nice 19, 15 min cap.
 # Never blocks or breaks the chain (backgrounded; any failure only lands in viz.log).

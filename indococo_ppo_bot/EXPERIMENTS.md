@@ -2201,6 +2201,19 @@ Watch items:
 - Energy/boost behaviour, especially rocking (kyhoni): `RewardAbs/energy`, `boost_keep`, `boost_change`, `Player/Speed`.
 - Un-zero-summed `face_ball` adds a small positive per-step bias (~0.07 vs a 1200 goal); the critic warm-up covers the re-fit.
 
+## Eval change: FR4 dropped from evals and the promote gate (2026-11-13)
+
+User, Nov 13: "stop evaling against FR4 i dont care about that." FR4_final stays a **training** opponent (fixed league entry, weight 0.816, in every `train_st*.toml` and copied by `st_launch.sh`); only the evals changed.
+
+- `experiments/st_launch.sh`: mid evals are 200 g vs BEST + Galactus (+ Megabyte when `MEGA_WEIGHT` is set); no `h2h_FR4_200` in `mid.jsonl`. Finals drop the 500 g FR4 h2h and the FR4 demos-against run. The rollback guard now keys on BEST: 2 chunks in a row < 40% vs BEST roll back to the best-h2h chunk (it used to be < 45% vs FR4).
+- `experiments/st_promote.py`: gate = h2h ≥ 52%, pool400 ≥ BEST − 1.0, bp5 ≥ BEST − 1.0, Galactus ≥ BEST − 0.04 (and the 0.27 floor). `vs_fr4` is still printed when an `h2h_FR4.jsonl` exists, report-only.
+- `experiments/st_select_final.py`: no FR4 ≥ 48% filter on candidate chunks.
+- `tools/viz`: no FR4 column/panel; the leaderboard shows Ripple v1.1 (its bp5 matchup) instead. Position traces are ST25 vs Galactus and vs Ripple v1.1.
+
+When it takes effect: `st_promote.py` and `st_select_final.py` are read fresh at finals time, so the new gate and selection apply from **ST34's finals**. The launcher was replaced atomically (new inode); the bash already running ST34 keeps reading the old file, so ST34's own mids, guard and finals still run the (now ignored) FR4 evals. ST35 onward runs no FR4 evals.
+
+Under the new gate ST33's finals (h2h 53.2, pool 93.79 vs 93.33, bp5 69.67 vs 69.21, Galactus 38.8 vs 40.8) would pass; the old gate failed it on FR4 only (73.0 vs 78.4). `st33_final/PROMOTE.json` was not rewritten and nothing was promoted.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.

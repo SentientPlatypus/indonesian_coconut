@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Enhanced ST final checkpoint selection: top-N re-evaluation with combined scoring.
 
-OLD RULE (fallback): best chunk by h2h_BEST_200 (200 g), with FR4 >= 48%.
+OLD RULE (fallback): best chunk by h2h_BEST_200 (200 g). (FR4 >= 48% filter dropped Nov 13.)
 
-NEW RULE: Take the top N chunks by h2h_BEST_200 (with FR4 >= 48%), re-evaluate each
+NEW RULE: Take the top N chunks by h2h_BEST_200, re-evaluate each
 on REEVAL_H2H games vs BEST and REEVAL_GAL games vs Galactus, then pick by a combined
 score that weights both h2h and Galactus performance:
 
@@ -41,15 +41,14 @@ def warn(msg: str):
     print(f"st_select_final: {msg}", file=sys.stderr)
 
 def old_rule(mid_jsonl: str) -> str:
-    """Original single-pass selection: best h2h_BEST_200 with FR4 >= 48%."""
+    """Original single-pass selection: best h2h_BEST_200."""
     best = None
     try:
         with open(mid_jsonl) as f:
             for line in f:
                 d = json.loads(line)
-                fr4 = d.get("h2h_FR4_200") or 0
                 h2h = d.get("h2h_BEST_200") or 0
-                if fr4 >= 0.48 and (best is None or h2h > best[0]):
+                if (best is None or h2h > best[0]):
                     best = (h2h, d["ckpt"])
     except Exception as e:
         warn(f"old_rule failed: {e}")
@@ -57,15 +56,14 @@ def old_rule(mid_jsonl: str) -> str:
     return best[1] if best else ""
 
 def get_top_candidates(mid_jsonl: str, n: int) -> list:
-    """Return top N checkpoints by h2h_BEST_200 (FR4 >= 48%), as (h2h, ckpt) tuples."""
+    """Return top N checkpoints by h2h_BEST_200, as (h2h, ckpt) tuples."""
     candidates = []
     try:
         with open(mid_jsonl) as f:
             for line in f:
                 d = json.loads(line)
-                fr4 = d.get("h2h_FR4_200") or 0
                 h2h = d.get("h2h_BEST_200") or 0
-                if fr4 >= 0.48:
+                if True:  # FR4 filter dropped Nov 13
                     candidates.append((h2h, d["ckpt"], d.get("steps")))
     except Exception as e:
         warn(f"get_top_candidates failed: {e}")
@@ -109,7 +107,7 @@ def enhanced_select(mid_jsonl: str, pyt: str, tool_dir: str, run_dir: str,
     # Get top candidates
     top = get_top_candidates(mid_jsonl, TOP_N)
     if len(top) == 0:
-        warn("No candidates with FR4 >= 48%, falling back to old rule")
+        warn("No candidates, falling back to old rule")
         return old_rule(mid_jsonl)
     
     if len(top) == 1:

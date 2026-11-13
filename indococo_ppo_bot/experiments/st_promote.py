@@ -1,7 +1,8 @@
 """ST promotion rule: candidate dir F vs best dir BF. Prints JSON.
 promote = >= 52% decisive vs BEST over the finals h2h (500 g since ST6, seed 424242) AND pool400 mean
->= BEST's pool400 - 1.0 AND vs FR4 >= BEST's vs FR4 - 0.01 AND bp5 mean >= BEST's - 1.0
-(tolerances = noise allowance; bp5 skipped if either side is missing).
+>= BEST's pool400 - 1.0 AND bp5 mean >= BEST's - 1.0
+(tolerances = noise allowance; bp5 skipped if either side is missing). FR4 is no longer a
+gate (dropped Nov 13, user); vs_fr4 is still reported when an h2h_FR4.jsonl exists.
 Galactus (galactus_final.jsonl 500 g, or legacy galactus1000.jsonl; seed 424242) blocks on:
   1. Absolute floor: must be >= GALACTUS_FLOOR (default 0.27, env var ST_GALACTUS_FLOOR or --galactus-floor)
   2. Relative guard: must be >= BEST's - 0.04 to prevent catastrophic regressions
@@ -36,7 +37,6 @@ vb = wr(f"{F}/h2h_BEST.jsonl"); f4 = wr(f"{F}/h2h_FR4.jsonl"); bf4 = wr(f"{BF}/h
 pc, pb = poolscore(f"{F}/pool400.jsonl"), poolscore(f"{BF}/pool400.jsonl")
 bc, bb = poolscore(f"{F}/bp5.jsonl"), poolscore(f"{BF}/bp5.jsonl")
 ok = vb is not None and vb >= 0.52
-ok = ok and (f4 is not None and (bf4 is None or f4 >= bf4 - 0.01))
 ok = ok and (pc is None or pb is None or pc >= pb - 1.0)
 ok = ok and (bc is None or bb is None or bc >= bb - 1.0)
 gc, gb = wr(galf(F)), wr(galf(BF))
