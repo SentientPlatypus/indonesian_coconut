@@ -2157,6 +2157,48 @@ Risks:
 - 0.30 cuts normal play in Galactus iterations by 13%.
 - `learner_keeper` would make the learner the keeper against every league opponent if put on an entry without `opp_weights`. Only the conditioned entry has it.
 
+## ST33 results: Galactus-conditioned threat starts, not promoted (user declined) (2026-11-13)
+
+ST33 (ST25 recipe with the threat drill tied to Galactus: while a rollout plays Galactus, the 0.15 `demo_threat` entry is swapped for the recoverable ST32 drill at 0.30 with `learner_keeper` and `ball_threat`; binary `indococo-train-st33`, from ST25) finished 2026-11-13 4:32 PM ET. Selected (keep-best of the top 3) checkpoint 21727.7M (`exp_ST33/checkpoints/1794602937`); the selector's 500-game re-eval was h2h 0.538 / Galactus 0.386. The automatic gate marked `promote=false` because FR4 fell from 78.4 to 73.0 (the other gates all passed: h2h 53.2 >= 52, pool and bp5 within 1.0, Galactus 38.8 within 4 of 40.8). FR4 is being dropped from the evals and the gate. Without it, ST33 would have passed automatically. **The user declined promotion at 5:10 PM ET, so BEST stays ST25** (`st25_final`, `exp_ST25/checkpoints/1794413355`). `st33_final/PROMOTE.json` is already `promote=false`, so the launcher's newest-`promote=true` fallback stays on st25_final.
+
+| Metric | ST33 | ST32 | ST25 (BEST) |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 53.2% | 52.6% | — |
+| FR4 (dropped from the gate) | 73.0 | 78.8 | 78.4 |
+| pool400 | 93.79 | 93.54 | 93.33 |
+| bp5 | 69.67 | 70.29 | 69.21 |
+| bp5 Dice / Kira / Ripple / Chronos | 63.2 / 72.5 / 66.0 / 77.2 | 66.25 / 74.5 / 66.0 / 74.5 | 61.75 / 66.5 / 68.25 / 78.75 |
+| Galactus (500 g) | 38.8 | 39.0 | 40.8 |
+| Megabyte (report-only) | 84.4 | 82.8 | 84.0 |
+| gen min / mean | 0.388 / 0.8167 | 0.390 / 0.8179 | 0.408 / 0.8132 |
+| demos in h2h vs ST25 (against / by us, 200 g) | 59 / 55 | 50 / 62 | — |
+| demos vs FR4 (against / by us, 200 g) | 14 / 91 | 8 / 123 | 13 / 99 |
+
+Mid evals (200 g) were noisy: h2h vs ST25 0.455-0.545 and Galactus 0.35-0.47, with no trend across the 1000M. A transient Galactus spike to 45.5% at 21338.9M and 47% at 21439.1M did not hold (the next two mids were 35.2% and 36%). The last mid, on the selected 21727.7M checkpoint, also read 45.5% vs Galactus (200 g) and 52.5% h2h; the selector's 500-game re-eval of that same checkpoint was 38.6%, and finals were 38.8%. The 200-game mid Galactus readings were sampling noise, not a real jump, and keep-best did not have the 21.34-21.44B spike in its top 3 (those chunks were mid-pack on h2h). Galactus is still the weakest gen-panel slot (gen min 0.388 vs ST25 0.408) even though the gen-panel mean rose slightly (0.8167 vs 0.8132).
+
+`diag_gal` on the selected final (200 g, seeds 0-99 both sides, `~/ippo_runs/diag_gal/st33_*`; no FR4 diag, which is being dropped):
+
+| vs Galactus (200 g) | ST33 | ST32 | ST25 |
+|---|---|---|---|
+| decisive wr | 0.395 | 0.370 | 0.385 |
+| goals conceded | 121 | 126 | 123 |
+| conceded within 3.5 s of a demo on us | 77 (64%) | 74 (59%) | 76 (62%) |
+| aerial (z > 300) conceded | 24 | 25 | 15 |
+| out of position (ball-side) conceded | 9 | 16 | 21 |
+| demos on us / by us | 117 / 16 | 125 / 9 | 115 / 16 |
+| games with a demo on us: count, wr | 98, 0.163 | 93, 0.097 | 95, 0.126 |
+| wr by first-goal time 0-6 / 6-15 / 15-30 / 30-60 s | 1.00 / .48 / .27 / .40 | 1.00 / .53 / .25 / .23 | 1.00 / .43 / .32 / .38 |
+
+The success bar was post-demo concedes below 76/123 (62%) and demos on us below 115 per 200 g, plus fewer goals conceded vs Galactus. ST33 missed all three: 77/121 (64%) post-demo, 117 demos on us, 121 goals conceded (ST25 123). Aerial goals against rose 15 -> 24, the same slip ST32 showed (25). Win rate in games with a demo on us did improve (16.3% vs ST25 12.6% and ST32 9.7%), and ball-side out-of-position concedes fell 21 -> 9. That did not cut the demo-goal count.
+
+Demo context (`demo_ctx.py`, 1 s before each demo on us): ST33 is the same parked-facing-the-ball posture, and if anything closer to the goal line. 81 events; Galactus median 2729 uu away (ST25 2445, ST32 2618) at 2053 uu/s; we are on the ground 99% of the time, goal-side 98%, median 386 uu off our goal line (ST25 620, ST32 572) with median 94 boost; 95% lead to a goal within 3.5 s. The Galactus-conditioned keeper drill did not move the failure mode and appears to have sat us even closer to the net.
+
+Kickoffs vs Galactus are already a strength, not the hole. ST33 won 155/200 kickoffs (77.5%; lost 21, neutral 24), vs ST25 148/200 (74.0%; lost 30, neutral 22) and ST32 156/200 (78.0%; lost 24, neutral 20). Kickoff-window goals (first goal <=6 s) were 10 scored (13% of our 79) and 0 of 121 conceded (0-6 s wr 1.00, n=10). ST25: 7 scored (9%), 0 conceded (n=7, wr 1.00); ST32: 6 scored (8%), 0 conceded (n=6, wr 1.00). The post-demo share (64%) is the failure mode, not kickoffs.
+
+Lesson: coupling the recoverable drill to Galactus and forcing `learner_keeper` did not cut post-demo goals (the share went 62% -> 64%). It slightly raised h2h, pool and bp5, and slightly lowered Galactus (40.8 -> 38.8) and the gen-panel minimum. Mid 200-game Galactus spikes should not be read as real jumps; the same 21727.7M checkpoint was 45.5% in a 200-game mid and 38.8% over 500 finals games. With ST25-ST33, every Galactus lever that only changes starts (retuned `demo_threat`, recoverable geometry, pre-demo / pre-concede replay, and now a Galactus-conditioned keeper drill) has left the post-demo share at 59-69% and the bot parked on the ground near our goal with ~93 boost as Galactus closes from ~2.5k uu. A per-step incentive change (ST34's `face_ball` cut, already running) is the first lever that targets that posture directly.
+
+ST34 started 2026-11-13 4:33 PM ET from `exp_ST25/checkpoints/1794413355` at 20727.5M with `train_st34.toml`, binary `indococo-train-rip-9d4b2a6` (sha256 440391…), BEST=`st25_final`, and `opp_BEST` -> `st25_final/final_policy.safetensors`, because ST33 did not auto-promote. After the user declined at 5:10 PM ET, ST34 was left running from ST25 as launched. First mid at 20837.9M: vs BEST 0.445, vs FR4 0.76, vs Galactus 0.405, vs Megabyte 0.83 (200 g, one chunk, not a result).
+
 ## ST34 (queued after ST33): `face_ball` 1.0 -> 0.1 and off the zero-sum path (2026-11-13)
 
 **Status 2026-11-13 10:34 AM ET:** queued (`~/ippo_runs/ST_QUEUE` = `ST34 ST34`, previous queue kept as `ST_QUEUE.bak_pre_st34_20261113_153402`). It starts after ST33's finals (~5-6 PM ET). BEST is ST25.
