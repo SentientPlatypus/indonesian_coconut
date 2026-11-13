@@ -1,0 +1,3 @@
+# Generated figures and interactive plotly HTML: keep them out of GitHub language stats.
+indococo_ppo_bot/docs/figures/** linguist-generated
+*.html linguist-generated
