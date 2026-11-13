@@ -1407,14 +1407,14 @@ Changes vs ST17: base league in train_st.toml pruned to FR4_final@1.0 (dropped F
 
 **NEW RULE:** Two conditions, both must hold:
 1. **Absolute floor:** candidate must achieve `>= GALACTUS_FLOOR` (default 0.27, configurable)
-2. **Relative guard:** candidate must be `>= BEST's - 0.08` (prevents catastrophic regressions)
+2. **Relative guard:** candidate must be `>= BEST's - 0.04` (prevents catastrophic regressions). ST32 put this back to the agreed 4-point rule; the code had been `0.08` since this note was written.
 
 **Configuration:**
 - CLI: `st_promote.py F BF --galactus-floor 0.27`
 - Env: `ST_GALACTUS_FLOOR=0.27`
 - Default: 0.27 (measured on 500-game finals)
 
-The floor doesn't ratchet down: even if BEST drops to 0.24, candidates still need 0.27. The relative guard (-0.08) allows minor noise/variance but blocks severe drops.
+The floor doesn't ratchet down: even if BEST drops to 0.24, candidates still need 0.27. The relative guard (-0.04) allows minor noise/variance but blocks severe drops.
 
 **Output:** promotion JSON now includes `"galactus_floor": 0.27` field.
 
@@ -1481,6 +1481,8 @@ supersonic = true
 ball_dist = [1000.0, 3000.0]
 boost = [30.0, 100.0]
 ```
+
+ST32 adds three optional fields, all default off so every existing `train_st*.toml` keeps this drill: `target_goal_dist` (keeper distance to its own goal line), `attacker_speed_range` (closing speed with no 2200 floor; an `attacker_speed` whose top is at or below 2200 is also used as written), and `ball_threat` (ball driven into the defended net). `dist_range` is an alias of `distance`. See ST32.
 
 #### `air_dribble_wall_challenge` (configurable, default off)
 Mid air dribble with the other car on a wall between the ball and its own goal, wheels on the wall and jump still available. Trains keeping the ball when a wall defender (Galactus, Megabyte) jumps off, boosts, and 50/50s the dribble. Which car dribbles is random and the field is mirrored, so each team practices both roles. Same side wall 60%, back wall by the challenger's goal 25%, opposite side wall 15% (`same_wall_frac`, `back_wall_frac`, `opposite_wall_frac`). Absent from a mix, weight is 0 and existing configs are unchanged. ST22 is the first run to schedule it, at 10% of starts.
@@ -1971,6 +1973,45 @@ Queued 2026-11-12 4:10 PM ET as `ST31 ST31` in `~/ippo_runs/ST_QUEUE`. The queue
   - Dilution means setters matter less than expected.
   - Keep the normal concede rewards.
 - **Applied:** fr7 0.10 + bank 0.075, the unsaveable filter, windows out to 4.5 s, mix by concede rate with a 10% floor and Galactus 25%, rewards unchanged. The v1 draft (fr7 0.075 + v1 bank 0.10) is kept in `/opt/dlami/nvme/st31_stage/v1_draft/`.
+
+## ST32 Cross-exam: recoverable `demo_threat`, and the Galactus gate at 4 points (2026-11-13)
+
+ST30 (`gal_demo_v2.f32` pre-demo replay + synthetic `demo_threat`) did not move Galactus: 36.2 vs ST25's 40.8, and the post-demo concede share stayed 62% (76/123). The three reviews agree on why, and on what not to change.
+
+### The three reviews
+
+- **Discord (read-only).** Rolv, on replay setters: states where the bot is already going to concede are not a useful start; give the situation from before the outcome, when there is still a play. That is the ST30 bank. 76/76 post-demo concedes land within 3 s (median 0.67 s), so those snapshots are a decided demo, not a decision. SoldierDoge, on shadow defense and gamma: the keeper has to be in a state it can actually shadow and recover from. Stretching gamma, or paying a victim penalty on top of a broken spawn, does not create that state. ST28 and ST29 already failed the victim penalty on both leagues, and ST25's gamma (0.998) stays. Aech, on setters and entropy: the missing piece is the setter. Entropy was already moved (ST7, and ST25 holds ENT 0.016); another entropy bump does not teach a dodge the drill never shows.
+- **Outside research.** Unsupervised environment design scores a start by learnability `p(1-p)`: a start the policy always fails (`p≈0`) or always solves teaches nothing. ST30's pre-demo bank is the `p≈0` case (the demo is already the goal). A recoverable threat, where dodging or clearing succeeds and freezing concedes, sits where `p(1-p)` is large. Mix it into the normal starts. Do not replace them, and do not go back to a victim penalty.
+- **Code / ST30 `diag_gal`.** The 62% share is the same number ST25 already had (76/123). Real Galactus victims are a median 547 uu from their goal line (p25 222 uu), about 96% grounded and goal-side, and Galactus closes at a median 2066 uu/s (p25 1962). The pre-ST32 `DemoThreat::apply` did not build that state. Target `y` was hardcoded `1000..4000`, so the keeper was never closer than 1120 uu to the goal line. The attacker was placed on `normalize(target_pos)`, the single ray from midfield. The ball was static (`z=100`, `ball_dist` 1000–3000), so getting demoed in the drill did not put a shot on net 0.67 s later. `attacker_speed` was then `.max(2200.0)`, above the speed Galactus actually arrives at.
+
+What the reviews rule out: another pre-demo replay bank, a third victim-penalty run, a gamma change, an entropy change, and any cut into the normal-play / kickoff majority. What they leave: ST25's reward, PPO and league, with `demo_threat` rebuilt so the threat is recoverable.
+
+### Design
+
+`train_st32.toml` is `train_st25.toml` with one setter change. `demo_threat` stays at weight 0.15. Kickoff 0.315, random 0.105+0.105, replay 0.175 and aerial_defense 0.15 are unchanged, so normal play is still the majority. Reward `st.toml` (flip_reset 70), OPPCH 0.70, 1 epoch, TPI 300k, MB 100k, LR 5e-5, ENT 0.016, gamma 0.998, the ST25 league (ST20r 2.0, FR4 0.816, Galactus 6.429, Megabyte 2.0, Ripple 1.286).
+
+The new drill (`src/setters.rs`, optional fields, `#[serde(default)]`, so every existing `train_st*.toml` still parses and the legacy path is the old function):
+
+| Field | ST32 value | What it fixes |
+|---|---|---|
+| `target_goal_dist` | `[250.0, 900.0]` | Keeper on its own goal line (lateral `x` in ±900, grounded, facing the ball, boost 50–100). Real median is 547 uu. |
+| `dist_range` | `[1800.0, 3200.0]` | Alias of `distance`. Approach is a ±55° cone around defender-to-midfield, clamped inside the field, instead of the midfield ray. At 1950–2150 uu/s that is about 0.9–1.6 s to react. |
+| `attacker_speed_range` | `[1950.0, 2150.0]` | No `.max(2200.0)`. An explicit `attacker_speed` whose top is at or below 2200 is also used as written. |
+| `ball_threat` | `true` (default `false`) | Ball 1800–3200 uu from the defended goal, horizontal speed clamped to 900–1450 uu/s from a 1.05–1.95 s window (a 3200 uu ball still arrives in ~2.2 s, not 3.5 s), small positive `z`. Aimed into the mouth. The keeper is goal-side of the ball, so a dodge or jump can clear it, and a demo leaves a shot that scores. |
+
+`st_ST32.env` follows `st_ST31.env` for the start point. Fresh start reads `$BESTF/FINAL_CKPT`. `BESTF=st31_final` selects `train_st32p.toml` (ST31's template, including the 0.075 `preconcede_v2` replay, plus this drill). Otherwise `train_st32.toml` (ST25). The choice is stored in `exp_ST32/TRAIN_TMPL` and reused on resume.
+
+`st_promote.py` now gates Galactus at `gc >= gb - 0.04` (docstring and the check). The absolute floor stays 0.27. ST30 and ST31 called the 4-point rule by hand because the script allowed 8; from ST32 the script is the rule.
+
+Binary, so a rebuild cannot replace the one ST31 is running: `B0=/opt/dlami/nvme/ippo_bins/indococo-train-st32`. `st_launch.sh` copies `B0` into `exp_$RUN/indococo-train` at start. `BIN` is read before the env file is sourced; the env file sets `B0` itself.
+
+```sh
+cd /home/ubuntu/indonesian_coconut/indococo_ppo_bot
+cargo build --release --features torch,ripple --bin indococo-train
+install -m 755 target/release/indococo-train /opt/dlami/nvme/ippo_bins/indococo-train-st32
+```
+
+Read ST32 against ST25, or against ST31 if that run promotes. Success: the automatic gate (h2h ≥ 52, FR4 / pool / bp5 within tolerance, Galactus within 4 points and at least the 0.27 floor), and on a `diag_gal` rerun the post-demo share of Galactus goals below the 62% (76/123) that ST25 and ST30 both posted. The reaction window is the thing to watch: if the bot never dodges, the ball speed or the cone is still too tight; if it always dodges and Galactus does not move, the drill is too easy and the live demo is still something else.
 
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 

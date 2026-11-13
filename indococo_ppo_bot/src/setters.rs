@@ -675,18 +675,63 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AerialDefense {
     }
 }
 
-/// Demo threat drill: opponent supersonic heading toward our car. Trains demo
-/// awareness and evasion. Randomizes which team is targeted so both agents learn.
+/// Half-angle of the recoverable approach cone, around the defender-to-midfield
+/// direction. 55° sits in the ±45–60° band: wide enough that the close is not
+/// the single midfield ray, narrow enough that the attacker still comes from
+/// upfield with about a second to react.
+const DEMO_APPROACH_CONE_DEG: f32 = 55.0;
+/// Keeper lateral spread when [`DemoThreat::target_goal_dist`] is set.
+const DEMO_KEEPER_X: f32 = 900.0;
+/// Grounded keeper boost in the goal-side drill (real Galactus victims sit ~90).
+const DEMO_KEEPER_BOOST: [f32; 2] = [50.0, 100.0];
+/// Ball distance from the defended goal line when `ball_threat` is on.
+/// 3200 uu at the 1450 uu/s cap is ~2.2 s, inside the ~1–2 s scoring window
+/// once slow far shots are sped up (see [`DemoThreat::ball_threat_state`]).
+const BALL_THREAT_DIST: [f32; 2] = [1800.0, 3200.0];
+/// Horizontal ball speed toward the net when `ball_threat` is on.
+const BALL_THREAT_SPEED: [f32; 2] = [900.0, 1450.0];
+/// Desired time for the ball to reach the goal line, before the speed clamp.
+const BALL_THREAT_ETA: [f32; 2] = [1.05, 1.95];
+
+/// Demo threat drill: opponent heading toward our car. Trains demo awareness
+/// and evasion. Randomizes which team is targeted so both agents learn.
+///
+/// With no optional fields this is the original drill: a supersonic car on
+/// the ray from midfield, a static ball, and the target at least ~1120 uu
+/// from its goal line. ST32 turns on [`Self::target_goal_dist`],
+/// [`Self::attacker_speed_range`] and [`Self::ball_threat`] so the keeper is
+/// goal-side, the close is a general angle at a realistic speed, and failing
+/// to dodge actually concedes.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DemoThreat {
-    /// Distance between cars at start.
+    /// Distance between cars at start. `dist_range` is an alias so ST32 toml
+    /// can use that name without a second field.
+    #[serde(alias = "dist_range")]
     pub distance: [f32; 2],
-    /// Attacker speed toward target (clamped to at least 2200 for supersonic).
+    /// Attacker speed toward the target. When this range sits at or below
+    /// 2200 uu/s it is used as written. Otherwise it is clamped up to 2200
+    /// so the legacy supersonic drill is unchanged. Prefer
+    /// [`Self::attacker_speed_range`] for an explicit closing speed.
     pub attacker_speed: [f32; 2],
-    /// Ball positioning: distance from midfield.
+    /// Ball positioning for the static ball: distance from midfield.
+    /// Ignored when [`Self::ball_threat`] is set.
     pub ball_dist: [f32; 2],
     pub boost: [f32; 2],
+    /// When set, place the defender this far from its own goal line (uu),
+    /// goal-side, grounded, facing the ball. `None` keeps the legacy
+    /// midfield-relative placement.
+    #[serde(default)]
+    pub target_goal_dist: Option<[f32; 2]>,
+    /// Closing speed (uu/s) used as written, with no 2200 floor. `None`
+    /// falls back to [`Self::attacker_speed`].
+    #[serde(default)]
+    pub attacker_speed_range: Option<[f32; 2]>,
+    /// When `true`, the ball is in the defensive half with a velocity into
+    /// the defender's net, so a demo concedes and a dodge can still save.
+    /// `None` and `false` keep the static ball. Default `false`.
+    #[serde(default)]
+    pub ball_threat: Option<bool>,
 }
 
 impl Default for DemoThreat {
@@ -696,19 +741,103 @@ impl Default for DemoThreat {
             attacker_speed: [2250.0, 2300.0],
             ball_dist: [1000.0, 3000.0],
             boost: [30.0, 100.0],
+            target_goal_dist: None,
+            attacker_speed_range: None,
+            ball_threat: None,
         }
     }
 }
 
+impl DemoThreat {
+    /// Legacy geometry, static ball, and the supersonic floor.
+    fn use_legacy(&self) -> bool {
+        self.target_goal_dist.is_none()
+            && self.attacker_speed_range.is_none()
+            && !self.ball_threat.unwrap_or(false)
+            && self.attacker_speed[1] > 2200.0
+    }
+
+    /// Closing speed. The 2200 floor applies only to the legacy supersonic
+    /// default, so an explicit sub-supersonic `attacker_speed` or
+    /// `attacker_speed_range` is honored.
+    fn sample_speed(&self, rng: &mut impl RngExt) -> f32 {
+        if let Some(band) = self.attacker_speed_range {
+            return range(rng, band);
+        }
+        let speed = range(rng, self.attacker_speed);
+        if self.attacker_speed[1] > 2200.0 {
+            speed.max(2200.0)
+        } else {
+            speed
+        }
+    }
+
+    /// Ball in the half being attacked, traveling into that net on a small arc.
+    /// Speed is chosen from the 1.05–1.95 s window and clamped to
+    /// 900–1450 uu/s, so a 3200 uu ball still arrives in ~2.2 s instead of
+    /// the 3.5 s a 900 uu/s shot would take.
+    fn ball_threat_state(rng: &mut impl RngExt, goal_y: f32, goal_sign: f32) -> (Vec3A, Vec3A) {
+        let ball_dist = range(rng, BALL_THREAT_DIST);
+        let eta = range(rng, BALL_THREAT_ETA);
+        let speed = (ball_dist / eta).clamp(BALL_THREAT_SPEED[0], BALL_THREAT_SPEED[1]);
+        let ball_x: f32 = rng.random_range(-700.0..700.0);
+        let ball_y = goal_y - goal_sign * ball_dist;
+        let ball_z = rng.random_range(93.15..220.0);
+        let ball_pos = Vec3A::new(
+            ball_x.clamp(-SIDE_WALL_X + 100.0, SIDE_WALL_X - 100.0),
+            ball_y.clamp(-BACK_WALL_Y + 100.0, BACK_WALL_Y - 100.0),
+            ball_z,
+        );
+        // Pull the aim point toward the mouth center so the shot is on net
+        // and the sideways component stays small (the y-speed carries the ETA).
+        let aim_x = (ball_x * 0.35).clamp(-450.0, 450.0);
+        let aim_z = rng.random_range(140.0..320.0);
+        let aim = Vec3A::new(aim_x, goal_y, aim_z);
+        let to_aim = aim - ball_pos;
+        let horiz = Vec3A::new(to_aim.x, to_aim.y, 0.0);
+        let horiz = if horiz.length_squared() < 1.0 {
+            Vec3A::new(0.0, -goal_sign, 0.0)
+        } else {
+            horiz.normalize()
+        };
+        let vz = rng.random_range(120.0..420.0);
+        let ball_vel = Vec3A::new(horiz.x * speed, horiz.y * speed, vz);
+        (ball_pos, ball_vel)
+    }
+}
+
+/// Grounded rotation whose nose is `dir` (xy). Falls back to +y.
+fn face_xy(dir: Vec3A) -> Mat3A {
+    let mut flat = Vec3A::new(dir.x, dir.y, 0.0);
+    if flat.length_squared() < 1e-6 {
+        flat = Vec3A::Y;
+    }
+    let forward = flat.normalize();
+    let up = Vec3A::Z;
+    Mat3A::from_cols(forward, up.cross(forward), up)
+}
+
 impl<SI: SharedInfoRng> StateSetter<SI> for DemoThreat {
     fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
+        if self.use_legacy() {
+            self.apply_legacy(arena, shared_info);
+        } else {
+            self.apply_recoverable(arena, shared_info);
+        }
+    }
+}
+
+impl DemoThreat {
+    /// Original drill. RNG order matches the pre-ST32 setter so old configs
+    /// keep the same states for a given seed.
+    fn apply_legacy<SI: SharedInfoRng>(&self, arena: &mut Arena, shared_info: &mut SI) {
         arena.reset_to_random_kickoff(None);
         let rng = shared_info.rng();
-        
+
         // Pick which car is targeted (randomize for symmetric training)
         let target_idx = rng.random_range(0..arena.num_cars());
         let attacker_idx = 1 - target_idx;
-        
+
         // Place ball randomly in the field
         let ball_y_side = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
         let ball_pos = Vec3A::new(
@@ -717,7 +846,7 @@ impl<SI: SharedInfoRng> StateSetter<SI> for DemoThreat {
             100.0,
         );
         arena.set_ball_state(ball_at(ball_pos, Vec3A::ZERO));
-        
+
         // Target: random position on their defensive half
         let target_y_side = if target_idx == 0 { -1.0 } else { 1.0 };
         let target_x: f32 = rng.random_range(-2500.0..2500.0);
@@ -727,18 +856,13 @@ impl<SI: SharedInfoRng> StateSetter<SI> for DemoThreat {
             target_y_raw.clamp(-5120.0 + 100.0, 5120.0 - 100.0),
             CAR_REST_HEIGHT,
         );
-        
+
         // Attacker: positioned to demo the target, supersonic speed
-        let to_target_2d = Vec3A::new(
-            target_pos.x,
-            target_pos.y,
-            0.0,
-        )
-        .normalize();
+        let to_target_2d = Vec3A::new(target_pos.x, target_pos.y, 0.0).normalize();
         let dist = range(rng, self.distance);
         let attacker_pos_raw = target_pos - to_target_2d * dist;
         let attacker_pos = clamp_car_pos(attacker_pos_raw);
-        
+
         // Ensure supersonic speed (>= 2200 uu/s)
         let speed = range(rng, self.attacker_speed).max(2200.0);
         let mut attacker = CarState::DEFAULT;
@@ -746,31 +870,31 @@ impl<SI: SharedInfoRng> StateSetter<SI> for DemoThreat {
         attacker.phys.vel = to_target_2d * speed;
         attacker.phys.rot_mat = orientation(rng, Vec3A::Z);
         attacker.boost = 100.0;
-        
+
         let mut target = CarState::DEFAULT;
         target.phys.pos = target_pos;
         target.phys.vel = Vec3A::ZERO;
         target.phys.rot_mat = orientation(rng, Vec3A::Z);
         target.boost = range(rng, self.boost);
-        
+
         arena.set_car_state(target_idx, target.core());
         arena.set_car_state(attacker_idx, attacker.core());
-        
+
         // Validate invariants
+        assert!(speed >= 2200.0, "attacker not supersonic: speed={}", speed);
         assert!(
-            speed >= 2200.0,
-            "attacker not supersonic: speed={}",
-            speed
-        );
-        assert!(
-            attacker_pos.x.abs() <= 4096.0 && attacker_pos.y.abs() <= 5120.0 && attacker_pos.z >= CAR_REST_HEIGHT,
+            attacker_pos.x.abs() <= 4096.0
+                && attacker_pos.y.abs() <= 5120.0
+                && attacker_pos.z >= CAR_REST_HEIGHT,
             "attacker outside bounds: ({}, {}, {})",
             attacker_pos.x,
             attacker_pos.y,
             attacker_pos.z
         );
         assert!(
-            target_pos.x.abs() <= 4096.0 && target_pos.y.abs() <= 5120.0 && target_pos.z >= CAR_REST_HEIGHT,
+            target_pos.x.abs() <= 4096.0
+                && target_pos.y.abs() <= 5120.0
+                && target_pos.z >= CAR_REST_HEIGHT,
             "target outside bounds: ({}, {}, {})",
             target_pos.x,
             target_pos.y,
@@ -783,6 +907,160 @@ impl<SI: SharedInfoRng> StateSetter<SI> for DemoThreat {
             heading_dot
         );
     }
+
+    /// Goal-side keeper, a cone approach, an optional threatening ball.
+    /// Each optional field falls back to the legacy piece when it is unset,
+    /// so a config can turn on one of them.
+    fn apply_recoverable<SI: SharedInfoRng>(&self, arena: &mut Arena, shared_info: &mut SI) {
+        arena.reset_to_random_kickoff(None);
+        let rng = shared_info.rng();
+
+        let target_idx = rng.random_range(0..arena.num_cars());
+        let attacker_idx = 1 - target_idx;
+        // Blue (car 0) defends y = -5120. Orange defends y = +5120.
+        let goal_y: f32 = if target_idx == 0 { -BACK_WALL_Y } else { BACK_WALL_Y };
+        let goal_sign = goal_sign_of(goal_y);
+
+        let target_pos = if let Some(goal_dist) = self.target_goal_dist {
+            let x = rng.random_range(-DEMO_KEEPER_X..DEMO_KEEPER_X);
+            let along = range(rng, goal_dist);
+            Vec3A::new(
+                x.clamp(-SIDE_WALL_X + 100.0, SIDE_WALL_X - 100.0),
+                (goal_y - goal_sign * along).clamp(-BACK_WALL_Y + 100.0, BACK_WALL_Y - 100.0),
+                CAR_REST_HEIGHT,
+            )
+        } else {
+            let target_y_side = if target_idx == 0 { -1.0 } else { 1.0 };
+            let target_x: f32 = rng.random_range(-2500.0..2500.0);
+            let target_y_raw: f32 = target_y_side * rng.random_range(1000.0..4000.0);
+            Vec3A::new(
+                target_x.clamp(-SIDE_WALL_X + 100.0, SIDE_WALL_X - 100.0),
+                target_y_raw.clamp(-BACK_WALL_Y + 100.0, BACK_WALL_Y - 100.0),
+                CAR_REST_HEIGHT,
+            )
+        };
+
+        let (ball_pos, ball_vel) = if self.ball_threat.unwrap_or(false) {
+            Self::ball_threat_state(rng, goal_y, goal_sign)
+        } else {
+            let ball_y_side = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            let ball_pos = Vec3A::new(
+                rng.random_range(-2000.0..2000.0),
+                ball_y_side * range(rng, self.ball_dist),
+                100.0,
+            );
+            (ball_pos, Vec3A::ZERO)
+        };
+        arena.set_ball_state(ball_at(ball_pos, ball_vel));
+
+        let dist = range(rng, self.distance);
+        let (attacker_pos, to_target_2d) = if self.target_goal_dist.is_some() {
+            // Cone around defender → midfield, then drive straight at the keeper.
+            let max_ang = DEMO_APPROACH_CONE_DEG.to_radians();
+            let ang = rng.random_range(-max_ang..max_ang);
+            let (s, c) = ang.sin_cos();
+            // At ang = 0 this is (0, -goal_sign): straight upfield from the net.
+            let approach = Vec3A::new(goal_sign * s, -goal_sign * c, 0.0);
+            let attacker_pos = clamp_car_pos(target_pos + approach * dist);
+            let to_target = target_pos - attacker_pos;
+            let to_target_2d = Vec3A::new(to_target.x, to_target.y, 0.0).normalize();
+            (attacker_pos, to_target_2d)
+        } else {
+            let to_target_2d = Vec3A::new(target_pos.x, target_pos.y, 0.0).normalize();
+            let attacker_pos = clamp_car_pos(target_pos - to_target_2d * dist);
+            (attacker_pos, to_target_2d)
+        };
+
+        let speed = self.sample_speed(rng);
+        let mut attacker = CarState::DEFAULT;
+        attacker.phys.pos = attacker_pos;
+        attacker.phys.vel = to_target_2d * speed;
+        attacker.phys.rot_mat = if self.target_goal_dist.is_some() {
+            face_xy(to_target_2d)
+        } else {
+            orientation(rng, Vec3A::Z)
+        };
+        attacker.boost = 100.0;
+
+        let mut target = CarState::DEFAULT;
+        target.phys.pos = target_pos;
+        target.phys.vel = Vec3A::ZERO;
+        target.phys.rot_mat = if self.target_goal_dist.is_some() {
+            face_xy(ball_pos - target_pos)
+        } else {
+            orientation(rng, Vec3A::Z)
+        };
+        target.boost = if self.target_goal_dist.is_some() {
+            range(rng, DEMO_KEEPER_BOOST)
+        } else {
+            range(rng, self.boost)
+        };
+
+        arena.set_car_state(target_idx, target.core());
+        arena.set_car_state(attacker_idx, attacker.core());
+
+        if self.attacker_speed_range.is_none() && self.attacker_speed[1] > 2200.0 {
+            assert!(speed >= 2200.0, "attacker not supersonic: speed={}", speed);
+        }
+        assert!(
+            attacker_pos.x.abs() <= SIDE_WALL_X
+                && attacker_pos.y.abs() <= BACK_WALL_Y
+                && attacker_pos.z >= CAR_REST_HEIGHT,
+            "attacker outside bounds: ({}, {}, {})",
+            attacker_pos.x,
+            attacker_pos.y,
+            attacker_pos.z
+        );
+        assert!(
+            target_pos.x.abs() <= SIDE_WALL_X
+                && target_pos.y.abs() <= BACK_WALL_Y
+                && target_pos.z >= CAR_REST_HEIGHT,
+            "target outside bounds: ({}, {}, {})",
+            target_pos.x,
+            target_pos.y,
+            target_pos.z
+        );
+        let heading_dot = attacker.phys.vel.normalize().dot(to_target_2d);
+        assert!(
+            heading_dot > 0.99,
+            "attacker not heading at target: dot={}",
+            heading_dot
+        );
+        if self.ball_threat.unwrap_or(false) {
+            assert!(
+                ball_vel.y * goal_sign > 0.0,
+                "ball not moving toward defended goal: vel.y={}, goal_sign={}",
+                ball_vel.y,
+                goal_sign
+            );
+            assert!(
+                ball_pos.x.abs() <= SIDE_WALL_X && ball_pos.y.abs() <= BACK_WALL_Y && ball_pos.z > 90.0,
+                "ball outside field: ({}, {}, {})",
+                ball_pos.x,
+                ball_pos.y,
+                ball_pos.z
+            );
+        }
+        if let Some(goal_dist) = self.target_goal_dist {
+            let along = (target_pos.y - goal_y).abs();
+            assert!(
+                along + 1.0 >= goal_dist[0] && along <= goal_dist[1] + 1.0,
+                "keeper not in goal-dist window: along={along}, range={goal_dist:?}"
+            );
+            let from_keeper = attacker_pos - target_pos;
+            let from_xy = Vec3A::new(from_keeper.x, from_keeper.y, 0.0).normalize();
+            let upfield = Vec3A::new(0.0, -goal_sign, 0.0);
+            assert!(
+                from_xy.dot(upfield) >= DEMO_APPROACH_CONE_DEG.to_radians().cos() - 1e-3,
+                "attacker outside the approach cone: dot={}",
+                from_xy.dot(upfield)
+            );
+        }
+    }
+}
+
+fn goal_sign_of(goal_y: f32) -> f32 {
+    if goal_y >= 0.0 { 1.0 } else { -1.0 }
 }
 
 /// Which wall the challenger defends from.
@@ -1030,6 +1308,8 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AirDribbleWallChallenge {
 mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
+    use rlgymppo_utils::rlgym::rocketsim::Vec3A;
+    use rlgymppo_utils::shared_info::SharedInfoRng;
 
     use super::*;
 
@@ -1337,6 +1617,25 @@ mod tests {
                 "attacker not heading at target: dot={}",
                 heading_dot
             );
+
+            // Legacy approach is the midfield ray: attacker and target are
+            // colinear with the origin (clamp can move a car by a few uu).
+            let cross = attacker.phys.pos.x * target.phys.pos.y
+                - attacker.phys.pos.y * target.phys.pos.x;
+            assert!(
+                cross.abs() < 5.0,
+                "legacy approach not radial from midfield: cross={cross}"
+            );
+            // Static ball, and the keeper is never close to the goal line.
+            let ball = arena.get_ball_state();
+            assert!(ball.phys.vel.length() < 1.0, "legacy ball is moving");
+            assert!((ball.phys.pos.z - 100.0).abs() < 1.0, "legacy ball z");
+            let goal_y = if target_idx == 0 { -5120.0 } else { 5120.0 };
+            let goal_gap = (target.phys.pos.y - goal_y).abs();
+            assert!(
+                goal_gap >= 1120.0 - 1.0,
+                "legacy keeper closer than 1120 uu to the goal: {goal_gap}"
+            );
         }
         
         // Target car index should be randomized ~50/50
@@ -1346,6 +1645,253 @@ mod tests {
             "target selection not balanced: {:.2}% chose car 0",
             target_0_frac * 100.0
         );
+    }
+
+    fn demo_arena(seed: u64) -> (rlgymppo_utils::rlgym::rocketsim::Arena, DemoRng) {
+        use rlgymppo_utils::rlgym::rocketsim::{Arena, CarBodyConfig, GameMode, Team, init_from_default};
+        init_from_default(true).unwrap();
+        let mut arena = Arena::new(GameMode::Soccar);
+        arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
+        arena.add_car(Team::Orange, CarBodyConfig::OCTANE);
+        (
+            arena,
+            DemoRng {
+                rng: SmallRng::seed_from_u64(seed),
+            },
+        )
+    }
+
+    struct DemoRng {
+        rng: SmallRng,
+    }
+
+    impl SharedInfoRng for DemoRng {
+        type Rng = SmallRng;
+        fn rng(&mut self) -> &mut SmallRng {
+            &mut self.rng
+        }
+    }
+
+    fn st32_demo() -> DemoThreat {
+        DemoThreat {
+            distance: [1800.0, 3200.0],
+            target_goal_dist: Some([250.0, 900.0]),
+            attacker_speed_range: Some([1950.0, 2150.0]),
+            ball_threat: Some(true),
+            ..DemoThreat::default()
+        }
+    }
+
+    #[test]
+    fn demo_threat_toml_is_backwards_compatible_and_accepts_st32() {
+        let legacy: WeightedSetter = toml::from_str(
+            r#"
+            kind = "demo_threat"
+            weight = 0.15
+            distance = [1800.0, 3000.0]
+            "#,
+        )
+        .unwrap();
+        let SetterKind::DemoThreat(demo) = legacy.kind else {
+            panic!("kind");
+        };
+        assert_eq!(demo.distance, [1800.0, 3000.0]);
+        assert_eq!(demo.attacker_speed, [2250.0, 2300.0]);
+        assert_eq!(demo.target_goal_dist, None);
+        assert_eq!(demo.attacker_speed_range, None);
+        assert_eq!(demo.ball_threat, None);
+        assert!(demo.use_legacy());
+
+        let bare: WeightedSetter = toml::from_str("kind = \"demo_threat\"\nweight = 0.05").unwrap();
+        assert_eq!(bare.kind, SetterKind::DemoThreat(DemoThreat::default()));
+
+        let st32: WeightedSetter = toml::from_str(
+            r#"
+            kind = "demo_threat"
+            weight = 0.15
+            dist_range = [1800.0, 3200.0]
+            target_goal_dist = [250.0, 900.0]
+            attacker_speed_range = [1950.0, 2150.0]
+            ball_threat = true
+            "#,
+        )
+        .unwrap();
+        let SetterKind::DemoThreat(demo) = st32.kind else {
+            panic!("kind");
+        };
+        assert_eq!(demo.distance, [1800.0, 3200.0]);
+        assert_eq!(demo.target_goal_dist, Some([250.0, 900.0]));
+        assert_eq!(demo.attacker_speed_range, Some([1950.0, 2150.0]));
+        assert_eq!(demo.ball_threat, Some(true));
+        assert!(!demo.use_legacy());
+
+        let off: WeightedSetter = toml::from_str(
+            "kind = \"demo_threat\"\nweight = 0.15\nball_threat = false\ndistance = [1800.0, 3000.0]",
+        )
+        .unwrap();
+        let SetterKind::DemoThreat(demo) = off.kind else {
+            panic!("kind");
+        };
+        assert_eq!(demo.ball_threat, Some(false));
+        assert!(demo.use_legacy());
+
+        assert!(
+            toml::from_str::<WeightedSetter>("kind = \"demo_threat\"\nweight = 1.0\nnope = 1.0")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn demo_threat_st32_is_a_saveable_goal_side_threat() {
+        let (mut arena, mut shared) = demo_arena(32);
+        let mut setter = st32_demo();
+        let mut target_0 = 0;
+        for _ in 0..2_000 {
+            setter.apply(&mut arena, &mut shared);
+            let ball = arena.get_ball_state();
+            let car0 = arena.get_car_state(0);
+            let car1 = arena.get_car_state(1);
+            let (attacker, keeper, keeper_idx) = if car0.phys.vel.length() > car1.phys.vel.length() {
+                (&car0, &car1, 1)
+            } else {
+                (&car1, &car0, 0)
+            };
+            if keeper_idx == 0 {
+                target_0 += 1;
+            }
+            let goal_y = if keeper_idx == 0 { -5120.0 } else { 5120.0 };
+            let goal_sign = if goal_y < 0.0 { -1.0 } else { 1.0 };
+
+            for (idx, car) in [(0, &car0), (1, &car1)] {
+                assert!(
+                    car.phys.pos.x.abs() <= 4096.0
+                        && car.phys.pos.y.abs() <= 5120.0
+                        && car.phys.pos.z >= CAR_REST_HEIGHT - 0.1,
+                    "car {idx} out of bounds: {:?}",
+                    car.phys.pos
+                );
+            }
+            assert!(
+                ball.phys.pos.x.abs() <= 4096.0
+                    && ball.phys.pos.y.abs() <= 5120.0
+                    && ball.phys.pos.z > 90.0,
+                "ball out of bounds: {:?}",
+                ball.phys.pos
+            );
+
+            let goal_gap = (keeper.phys.pos.y - goal_y).abs();
+            assert!(
+                (250.0..900.0).contains(&goal_gap),
+                "keeper goal gap {goal_gap}"
+            );
+            assert!(keeper.phys.pos.x.abs() < 900.0, "keeper x {}", keeper.phys.pos.x);
+            assert!(
+                (keeper.phys.pos.z - CAR_REST_HEIGHT).abs() < 0.1,
+                "keeper not grounded"
+            );
+            assert!(
+                (50.0..100.0).contains(&keeper.boost),
+                "keeper boost {}",
+                keeper.boost
+            );
+            assert!(keeper.phys.vel.length() < 1.0, "keeper already moving");
+
+            let to_ball = ball.phys.pos - keeper.phys.pos;
+            let to_ball_xy = Vec3A::new(to_ball.x, to_ball.y, 0.0).normalize();
+            assert!(
+                keeper.phys.rot_mat.x_axis.dot(to_ball_xy) > 0.95,
+                "keeper not facing the ball"
+            );
+
+            let speed = attacker.phys.vel.length();
+            assert!(
+                (1950.0..2150.0).contains(&speed),
+                "closing speed {speed}"
+            );
+            let to_keeper = (keeper.phys.pos - attacker.phys.pos).normalize();
+            assert!(
+                attacker.phys.vel.normalize().dot(to_keeper) > 0.95,
+                "attacker not heading at the keeper"
+            );
+            assert!(
+                attacker.phys.rot_mat.x_axis.dot(attacker.phys.vel.normalize()) > 0.95,
+                "attacker not facing its velocity"
+            );
+            let from_keeper = attacker.phys.pos - keeper.phys.pos;
+            let from_xy = Vec3A::new(from_keeper.x, from_keeper.y, 0.0).normalize();
+            let upfield = Vec3A::new(0.0, -goal_sign, 0.0);
+            let cone = from_xy.dot(upfield);
+            assert!(
+                cone >= DEMO_APPROACH_CONE_DEG.to_radians().cos() - 1e-3,
+                "approach outside the cone: dot={cone}"
+            );
+            let sep = (attacker.phys.pos - keeper.phys.pos).length();
+            assert!((1800.0..3400.0).contains(&sep), "separation {sep}");
+            let react = sep / speed;
+            assert!(
+                (0.8..1.8).contains(&react),
+                "reaction window {react} s"
+            );
+
+            let ball_from_goal = (ball.phys.pos.y - goal_y).abs();
+            assert!(
+                (1800.0..3200.0).contains(&ball_from_goal),
+                "ball dist {ball_from_goal}"
+            );
+            assert!(
+                ball_from_goal > goal_gap + 500.0,
+                "keeper not goal-side of the ball"
+            );
+            assert!(
+                ball.phys.vel.y * goal_sign > 0.0,
+                "ball vel.y {} not toward goal {}",
+                ball.phys.vel.y,
+                goal_sign
+            );
+            let horiz = Vec3A::new(ball.phys.vel.x, ball.phys.vel.y, 0.0).length();
+            assert!(
+                horiz >= 900.0 - 1e-2 && horiz <= 1450.0 + 1e-2,
+                "ball horizontal speed {horiz}"
+            );
+            assert!(ball.phys.vel.z > 0.0, "ball has no loft");
+            let eta = ball_from_goal / ball.phys.vel.y.abs();
+            assert!((1.0..2.5).contains(&eta), "ball eta {eta} s");
+            let t_cross = (goal_y - ball.phys.pos.y) / ball.phys.vel.y;
+            let cross_x = ball.phys.pos.x + ball.phys.vel.x * t_cross;
+            assert!(
+                cross_x.abs() < 800.0,
+                "shot misses the mouth: cross_x={cross_x}"
+            );
+        }
+        let frac = target_0 as f32 / 2_000.0;
+        assert!((0.45..0.55).contains(&frac), "keeper side balance {frac}");
+    }
+
+    #[test]
+    fn demo_threat_honors_explicit_subsonic_attacker_speed() {
+        let (mut arena, mut shared) = demo_arena(7);
+        let mut setter = DemoThreat {
+            attacker_speed: [1950.0, 2150.0],
+            ..DemoThreat::default()
+        };
+        assert!(!setter.use_legacy());
+        for _ in 0..200 {
+            setter.apply(&mut arena, &mut shared);
+            let car0 = arena.get_car_state(0);
+            let car1 = arena.get_car_state(1);
+            let speed = car0.phys.vel.length().max(car1.phys.vel.length());
+            assert!(
+                (1950.0..2150.0).contains(&speed),
+                "explicit attacker_speed was clamped: {speed}"
+            );
+            assert!(
+                car0.phys.pos.x.abs() <= 4096.0
+                    && car0.phys.pos.y.abs() <= 5120.0
+                    && car1.phys.pos.x.abs() <= 4096.0
+                    && car1.phys.pos.y.abs() <= 5120.0,
+                "car outside the field"
+            );
+        }
     }
 }
 

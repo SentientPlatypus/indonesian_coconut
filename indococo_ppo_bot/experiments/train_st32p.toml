@@ -1,0 +1,120 @@
+# ST32p = ST31's recipe (ST25 + 0.075 preconcede_v2 replay), used when ST31
+# promotes, with ONE change: demo_threat stays 0.15 but uses the recoverable
+# ST32 geometry (goal-side keeper, ±55° approach, closing speed 1950-2150,
+# ball_threat). Template copied from train_st31.toml; everything else is
+# byte-identical. See EXPERIMENTS.md ST32.
+# ST31 = ST25's recipe (reward st.toml), used when ST30 does not promote,
+# with ONE change: 0.075 of the fr7 normal-play replay -> replay over
+# real pre-concede states (st31_snap/preconcede_v2.f32). Template copied
+# from train_st25.toml; everything else byte-identical.
+# ST learner settings (EXPERIMENTS.md ST). Filled in by st_launch.sh from
+# st_<VARIANT>.env. ST25 = ST24 (ST23 + ST20r_final@2.0 league opponent;
+# OPPCH 0.70, ppo epochs 1, binary 9d4b2a6, league unchanged) plus ONE
+# change: the demo_threat drill is retuned to the way Galactus beats us now.
+# Evidence (diag_gal, 200 g ST23 vs Galactus, 2026-11-11): 59% of conceded
+# goals (73/124) come within 3.5 s of us being demoed (ST16: 29%), aerial
+# goals fell 55 -> 24 since the ST19 aerial_defense setter. 93/200 games had
+# a demo on us; win rate 9.7% in those vs ~63% in the rest. Context 1 s
+# before the demo: Galactus ~2.5k uu away (p25-p75 2.1k-2.9k) at ~2050 uu/s,
+# we are on the ground, goal-side, ~0.5k uu from our goal line, ~93 boost.
+# The ST19 drill (5% of starts, 800-1500 uu) has not moved this.
+# Change: demo_threat 0.05 -> 0.15 of starts, distance [800,1500] ->
+# [1800,3000]; the +0.10 comes from normal play (kickoff/random/replay
+# 0.80 -> 0.70, x0.875), aerial_defense stays 0.15. Measured vs BEST at
+# launch (st23_final unless ST24 promotes).
+reward_config = "@RUN@/cfg/experiments/st.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+# League: past bests as fixed opponents (scaled 0.816). ST20r@2.0 is added
+# via EXTRA_OPPS in st_ST25.env, not here.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = 0.816
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 0.816
+
+# ST25 setter mix: normal play x0.875 (kickoff 0.315, random 0.105+0.105,
+# replay 0.175), aerial_defense 0.15 (unchanged), demo_threat 0.15 with the
+# attacker starting 1800-3000 uu away (diag_gal ST23). Sum 1.0.
+# No air_dribble_wall_challenge.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.315
+[[state_setters]]
+kind = "random"
+weight = 0.105
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.105
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "replay"
+weight = 0.10
+path = "@SNAP@"
+# ST31's one change (reconciled after the Nov 12 cross-exam): 0.075 of the
+# 0.175 normal-play replay (fr7_snap, kept at 0.10) moves to a replay setter
+# over real states 1.5-4.5 s before a NON-demo goal against ST25 by FR4,
+# Galactus, Dice, Kira, Ripple and Chronos (st31_snap/preconcede_v2.f32;
+# kickoff goals and goals within 3.5 s of a demo on us excluded, that is
+# ST30's lever; unsaveable states filtered; opponent mix by concede rate,
+# floor 10%, Galactus 25%). Real-play replay mass stays 0.175. Start weight,
+# not step-weighted. Mirrored half the time (cars swapped), so either side is
+# the defender. Metric label "replay" (shared). Replay has no boost option.
+[[state_setters]]
+kind = "replay"
+weight = 0.075
+path = "/home/ubuntu/ippo_runs/st31_snap/preconcede_v2.f32"
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.15
+# ST32's one change on top of ST31: demo_threat stays 0.15, now a goal-side
+# keeper (250-900 uu), attacker 1800-3200 uu upfield in a ±55° cone at
+# 1950-2150 uu/s, and a ball into that net (ball_threat) so the demo is a
+# saveable threat rather than a static-ball drill.
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.15
+dist_range = [1800.0, 3200.0]
+target_goal_dist = [250.0, 900.0]
+attacker_speed_range = [1950.0, 2150.0]
+ball_threat = true
+
+# ST25 (same as ST24): Rust Ripple v1.1 (9d4b2a6 binary, LibTorch CUDA; RIPPLE_DEVICE=cuda)
+# at ~5.2% of iterations (0.7*1.286/17.427) because OPPCH is 0.70 and
+# ST20r@2.0 was added to the league.
+[[opponents.external]]
+name = "ripple"
+kind = "ripple"
+path = "/home/ubuntu/eval_bots/ripple/bots/v1.1"
+weight = 1.286

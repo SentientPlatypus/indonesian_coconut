@@ -4,7 +4,7 @@ promote = >= 52% decisive vs BEST over the finals h2h (500 g since ST6, seed 424
 (tolerances = noise allowance; bp5 skipped if either side is missing).
 Galactus (galactus_final.jsonl 500 g, or legacy galactus1000.jsonl; seed 424242) blocks on:
   1. Absolute floor: must be >= GALACTUS_FLOOR (default 0.27, env var ST_GALACTUS_FLOOR or --galactus-floor)
-  2. Relative guard: must be >= BEST's - 0.08 to prevent catastrophic regressions
+  2. Relative guard: must be >= BEST's - 0.04 to prevent catastrophic regressions
 Both conditions must hold; either may skip if candidate/best Galactus is missing."""
 import json, sys, os
 import argparse
@@ -41,7 +41,7 @@ ok = ok and (pc is None or pb is None or pc >= pb - 1.0)
 ok = ok and (bc is None or bb is None or bc >= bb - 1.0)
 gc, gb = wr(galf(F)), wr(galf(BF))
 # Galactus gate: absolute floor AND relative guard (both must hold)
-galactus_ok = gc is None or gb is None or (gc >= GALACTUS_FLOOR and gc >= gb - 0.08)
+galactus_ok = gc is None or gb is None or (gc >= GALACTUS_FLOOR and gc >= gb - 0.04)
 ok = ok and galactus_ok
 # Generalization panel (report only, not part of the gate): per-opponent win rates
 # across pool400 + bp5 + Galactus; min / mean / weakest matchup.
