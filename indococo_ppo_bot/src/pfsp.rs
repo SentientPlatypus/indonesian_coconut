@@ -9,8 +9,9 @@
 //!   the rest (`1 - self_share - past_share`) is the adaptive league: every
 //!   `[[opponents.fixed]]` and `[[opponents.external]]` entry.
 //! * Each league member's learner win rate `x` comes from finished training
-//!   episodes (goals), attributed to the opponent the episode started and
-//!   ended against. It is a Beta(1,1) posterior over exponentially decayed
+//!   episodes (goals), attributed to the rollout's opponent when it started
+//!   the episode or drove it for `MIN_INHERITED_STEPS` (episodes run across
+//!   rollouts). It is a Beta(1,1) posterior over exponentially decayed
 //!   counts (`ema_games` ~ 40 games), shared by every env/worker.
 //! * League mass goes in proportion to `f_hard(x)`: `1 - x`, and for very hard
 //!   opponents (`x < low_x`, 0.25) the variance form `x(1 - x)` scaled by
@@ -291,19 +292,60 @@ pub fn record_outcome(opponent: &str, learner_won: bool) {
     }
 }
 
-/// A goal in an episode that started against `start` (`(name, old_team)`).
-/// Counted only if the rollout's opponent is still the same, so an episode
-/// that straddles two rollouts is dropped.
-pub fn record_goal(start: Option<&(String, usize)>, scoring_team: u8) {
+/// Steps (15 Hz) the rollout's opponent must have driven an episode that
+/// began in an earlier rollout before its goal counts (5 s). Episodes keep
+/// running across rollouts (~590 steps per game per 300k-step rollout vs
+/// ~290-step episodes), so many goals land in an episode inherited from the
+/// previous rollout's opponent; those count for the new opponent only if it
+/// had at least this long to play from the inherited state.
+pub const MIN_INHERITED_STEPS: u32 = 75;
+
+/// Per-env episode bookkeeping for the PFSP win rates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EpisodeTracker {
+    seq: u64,
+    fresh: bool,
+    steps: u32,
+    decided: bool,
+}
+
+impl EpisodeTracker {
+    /// Episode start during rollout `seq`.
+    pub fn reset(&mut self, seq: u64) {
+        *self = Self { seq, fresh: true, steps: 0, decided: false };
+    }
+
+    /// One step during rollout `seq` with the ball at `ball_y`. Returns the
+    /// scoring team (0 blue, 1 orange) when this step's goal counts: the
+    /// episode's first goal, scored by the rollout's opponent's game that
+    /// began in this rollout or was driven by it for `MIN_INHERITED_STEPS`.
+    pub fn step(&mut self, seq: u64, ball_y: f64) -> Option<u8> {
+        if seq != self.seq {
+            *self = Self { seq, fresh: false, steps: 0, decided: self.decided };
+        } else {
+            self.steps = self.steps.saturating_add(1);
+        }
+        if self.decided || ball_y.abs() <= crate::consts::GOAL_THRESHOLD {
+            return None;
+        }
+        self.decided = true;
+        (self.fresh || self.steps >= MIN_INHERITED_STEPS).then_some(if ball_y > 0.0 {
+            crate::consts::BLUE_TEAM
+        } else {
+            crate::consts::ORANGE_TEAM
+        })
+    }
+}
+
+/// A counted goal (see [`EpisodeTracker::step`]) for the current rollout's
+/// opponent. Self-play and past versions are not tracked.
+pub fn record_goal(scoring_team: u8) {
     if !enabled() {
         return;
     }
-    let Some((name, team)) = start else { return };
-    let same = crate::setters::with_current_opponent(|c| {
-        c.is_some_and(|(n, t)| n == name.as_str() && t == *team)
-    });
-    if same {
-        record_outcome(name, usize::from(scoring_team) != *team);
+    let hit = crate::setters::with_current_opponent(|c| c.map(|(n, t)| (n.to_owned(), t)));
+    if let Some((name, team)) = hit {
+        record_outcome(&name, usize::from(scoring_team) != team);
     }
 }
 
@@ -429,6 +471,36 @@ mod tests {
         }
         let g = s[idx("galactus")] * league;
         assert!((0.20 - 1e-9..=0.26 + 1e-9).contains(&g), "galactus share {g}");
+    }
+
+    #[test]
+    fn episode_tracker_counts_fresh_and_long_inherited_episodes_once() {
+        let goal = crate::consts::GOAL_THRESHOLD + 10.0;
+        let mut t = EpisodeTracker::default();
+        // Fresh episode in rollout 5: its goal counts at once, only once.
+        t.reset(5);
+        assert_eq!(t.step(5, 0.0), None);
+        assert_eq!(t.step(5, goal), Some(crate::consts::BLUE_TEAM));
+        assert_eq!(t.step(5, goal), None);
+        // Inherited by rollout 6, goal 10 steps later: dropped.
+        t.reset(5);
+        assert_eq!(t.step(6, 0.0), None);
+        for _ in 0..9 {
+            assert_eq!(t.step(6, 0.0), None);
+        }
+        assert_eq!(t.step(6, -goal), None);
+        // Inherited, goal after MIN_INHERITED_STEPS under the new opponent.
+        t.reset(5);
+        for _ in 0..=MIN_INHERITED_STEPS {
+            assert_eq!(t.step(7, 0.0), None);
+        }
+        assert_eq!(t.step(7, -goal), Some(crate::consts::ORANGE_TEAM));
+        // A second switch restarts the clock.
+        t.reset(1);
+        for _ in 0..MIN_INHERITED_STEPS {
+            t.step(2, 0.0);
+        }
+        assert_eq!(t.step(3, goal), None);
     }
 
     #[test]

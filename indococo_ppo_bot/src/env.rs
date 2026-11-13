@@ -37,11 +37,9 @@ pub struct SharedInfo {
     setter: &'static str,
     /// Curriculum episode still being decided.
     attempt: Option<Attempt>,
-    /// ST35 PFSP: the rollout opponent (name, team) this episode started
-    /// against (`None` = self-play or PFSP off), and whether its goal was
-    /// already counted.
-    pfsp_opp: Option<(String, usize)>,
-    pfsp_decided: bool,
+    /// ST35 PFSP: which rollout drives this episode and whether its goal
+    /// counts for that rollout's opponent ([`crate::pfsp::EpisodeTracker`]).
+    pfsp: crate::pfsp::EpisodeTracker,
 }
 
 impl Default for SharedInfo {
@@ -59,8 +57,7 @@ impl From<u64> for SharedInfo {
             resets: TickResetTracker::default(),
             setter: "",
             attempt: None,
-            pfsp_opp: None,
-            pfsp_decided: false,
+            pfsp: crate::pfsp::EpisodeTracker::default(),
         }
     }
 }
@@ -69,12 +66,9 @@ impl SharedInfoProvider for SharedInfo {
     fn reset(&mut self, state: &GameState) {
         self.resets.reset(state);
         self.events.reset(StateView::from_game_state(state));
-        self.pfsp_decided = false;
-        self.pfsp_opp = if crate::pfsp::enabled() {
-            crate::setters::with_current_opponent(|o| o.map(|(n, t)| (n.to_owned(), t)))
-        } else {
-            None
-        };
+        if crate::pfsp::enabled() {
+            self.pfsp.reset(crate::setters::rollout_seq());
+        }
     }
 
     fn on_tick(&mut self, arena: &Arena, _tick_events: &[ArenaEvent]) {
@@ -85,12 +79,10 @@ impl SharedInfoProvider for SharedInfo {
     fn update(&mut self, gs: &GameState) {
         self.resets.finish_step();
         // ST35 PFSP: a goal decides the episode for the opponent's win rate.
-        if !self.pfsp_decided && self.pfsp_opp.is_some() {
-            let y = f64::from(gs.ball.pos.y);
-            if y.abs() > crate::consts::GOAL_THRESHOLD {
-                self.pfsp_decided = true;
-                let team = if y > 0.0 { crate::consts::BLUE_TEAM } else { crate::consts::ORANGE_TEAM };
-                crate::pfsp::record_goal(self.pfsp_opp.as_ref(), team);
+        if crate::pfsp::enabled() {
+            let seq = crate::setters::rollout_seq();
+            if let Some(team) = self.pfsp.step(seq, f64::from(gs.ball.pos.y)) {
+                crate::pfsp::record_goal(team);
             }
         }
         if let Some(mut a) = self.attempt {

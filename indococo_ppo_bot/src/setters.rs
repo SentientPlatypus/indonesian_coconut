@@ -66,10 +66,21 @@ pub struct WeightedSetter {
 static CURRENT_OPPONENT: std::sync::RwLock<Option<(String, usize)>> =
     std::sync::RwLock::new(None);
 
+/// ST35: bumped at every rollout pick, so an env can tell how long the
+/// current opponent has been driving its episode (`crate::pfsp`).
+static ROLLOUT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Records the opponent of the next rollout (the trainer's pick hook).
 pub fn set_current_opponent(name: Option<&str>, old_team: usize) {
     let mut cur = CURRENT_OPPONENT.write().unwrap_or_else(|e| e.into_inner());
     *cur = name.map(|n| (n.to_owned(), old_team));
+    ROLLOUT_SEQ.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+/// Number of rollout picks so far (see [`set_current_opponent`]).
+#[must_use]
+pub fn rollout_seq() -> u64 {
+    ROLLOUT_SEQ.load(std::sync::atomic::Ordering::Acquire)
 }
 
 /// Runs `f` on the current opponent's name and team, without cloning.
