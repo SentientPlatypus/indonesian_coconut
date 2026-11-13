@@ -1,0 +1,19 @@
+# ST34 reward config: the ST stack (st.toml) with ONE change, face_ball.
+# face_ball (nose-to-ball cosine, x2 airborne) was weight 1.0 AND zero-summed
+# (r_me - r_opp). In ST32's last 200 iterations it paid |1.09|/step, 9.0% of
+# all |reward| and 11.3% of the dense (non-goal) |reward|, nonzero on 100% of
+# steps, while shadow_space (the only goal-side shadow term) paid 0.0044/step.
+# 95% of the demos that cost us goals vs Galactus hit us parked on the ground
+# ~0.5k uu off our goal line facing the ball+carrier (diag_gal ST25/31/32).
+# Change: face_ball 1.0 -> 0.1 and taken off the zero-sum path (a movement
+# prior on self only, as in Zealan's guide / Kaiyo; Necto has none, Seer
+# ~0.0005x goal). speed_to_ball is already floored at 0 in code, so it stays
+# zero-summed. Everything else (flip_reset 70, demo victim 1.0, goal +-1200,
+# shadow_space 18, other zero_sum terms) is st.toml unchanged.
+extends = "st.toml"
+
+[weights]
+face_ball = 0.1
+
+[zero_sum]
+face_ball = 0.0   # ZeroSum wraps only when opp_scale > 0 (rewards/config.rs build)
