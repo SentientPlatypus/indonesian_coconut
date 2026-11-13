@@ -179,6 +179,12 @@ if [[ -x $HB ]]; then
   done
   log "$RUN demos_against (cand/opp per 200 g): BEST $(grep -o "\"demos_against_a\":[0-9]*,\"demos_against_b\":[0-9]*" $F/demos_h2h_BEST.json 2>/dev/null) FR4 $(grep -o "\"demos_against_a\":[0-9]*,\"demos_against_b\":[0-9]*" $F/demos_h2h_FR4.json 2>/dev/null)"
 fi
+# Report-only figures (tools/viz/make_all.py -> $R/viz/$RUN): detached, nice 19, 15 min cap.
+# Never blocks or breaks the chain (backgrounded; any failure only lands in viz.log).
+VIZ=$C/tools/viz/make_all.py
+if [[ -f $VIZ ]] && mkdir -p $R/viz/$RUN 2>/dev/null; then
+  setsid nohup timeout 900 nice -n 19 $PYT $VIZ --runs-dir $R --current $RUN --best "$(basename "$BESTF")" --out $R/viz/$RUN --summary-json $R/viz/$RUN/summary.json > $R/viz/$RUN/viz.log 2>&1 < /dev/null &
+fi
 if [[ ! -f $R/ST_NO_FOLLOWUP ]]; then
   Q=$R/ST_QUEUE; next=$(head -1 $Q 2>/dev/null)
   if [[ -n "$next" ]]; then sed -i 1d $Q; else next="${RUN}r $VARIANT"; fi

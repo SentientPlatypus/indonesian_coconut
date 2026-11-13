@@ -1,0 +1,2396 @@
+{
+ "best": "ST25",
+ "current": "ST33",
+ "mid": {
+  "ST19r": [
+   {
+    "steps": 15367700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794203401",
+    "h2h_BEST_200": 0.475,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.255,
+    "megabyte_200": 0.7739
+   },
+   {
+    "steps": 15417800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794204684",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.295,
+    "megabyte_200": 0.72
+   },
+   {
+    "steps": 15467900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794205943",
+    "h2h_BEST_200": 0.475,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.275,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 15518000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794207166",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.325,
+    "megabyte_200": 0.77
+   },
+   {
+    "steps": 15568100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794208388",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.7,
+    "galactus_200": 0.315,
+    "megabyte_200": 0.74
+   },
+   {
+    "steps": 15618200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794209635",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.7,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.78
+   },
+   {
+    "steps": 15668300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794210873",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.33,
+    "megabyte_200": 0.775
+   },
+   {
+    "steps": 15718400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794212154",
+    "h2h_BEST_200": 0.44,
+    "h2h_FR4_200": 0.72,
+    "galactus_200": 0.295,
+    "megabyte_200": 0.765
+   },
+   {
+    "steps": 15768500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794213386",
+    "h2h_BEST_200": 0.465,
+    "h2h_FR4_200": 0.71,
+    "galactus_200": 0.27,
+    "megabyte_200": 0.75
+   },
+   {
+    "steps": 15818600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794214651",
+    "h2h_BEST_200": 0.415,
+    "h2h_FR4_200": 0.74,
+    "galactus_200": 0.34,
+    "megabyte_200": 0.795
+   },
+   {
+    "steps": 15868700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794215880",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.715,
+    "galactus_200": 0.265,
+    "megabyte_200": 0.73
+   },
+   {
+    "steps": 15918800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794217094",
+    "h2h_BEST_200": 0.54,
+    "h2h_FR4_200": 0.71,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.75
+   },
+   {
+    "steps": 15968900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794218337",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.775
+   },
+   {
+    "steps": 16019000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794219554",
+    "h2h_BEST_200": 0.485,
+    "h2h_FR4_200": 0.69,
+    "galactus_200": 0.33,
+    "megabyte_200": 0.745
+   },
+   {
+    "steps": 16069100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794220734",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.315,
+    "megabyte_200": 0.785
+   },
+   {
+    "steps": 16119200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794221941",
+    "h2h_BEST_200": 0.445,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.31,
+    "megabyte_200": 0.78
+   },
+   {
+    "steps": 16169300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794223132",
+    "h2h_BEST_200": 0.45,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.305,
+    "megabyte_200": 0.71
+   },
+   {
+    "steps": 16219400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794224372",
+    "h2h_BEST_200": 0.57,
+    "h2h_FR4_200": 0.795,
+    "galactus_200": 0.295,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 16269500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794225611",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.3,
+    "megabyte_200": 0.77
+   },
+   {
+    "steps": 16307600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST19r/checkpoints/1794226565",
+    "h2h_BEST_200": 0.44,
+    "h2h_FR4_200": 0.7337,
+    "galactus_200": 0.335,
+    "megabyte_200": 0.725
+   }
+  ],
+  "ST20r": [
+   {
+    "steps": 16941200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794258860",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.73,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.795
+   },
+   {
+    "steps": 16991300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794260192",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.71,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.815
+   },
+   {
+    "steps": 17041400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794261543",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.3,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 17091500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794262731",
+    "h2h_BEST_200": 0.59,
+    "h2h_FR4_200": 0.7,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.815
+   },
+   {
+    "steps": 17141600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794264025",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.315,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 17191700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794265337",
+    "h2h_BEST_200": 0.46,
+    "h2h_FR4_200": 0.73,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.875
+   },
+   {
+    "steps": 17241800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794266623",
+    "h2h_BEST_200": 0.545,
+    "h2h_FR4_200": 0.74,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.81
+   },
+   {
+    "steps": 17291900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794267910",
+    "h2h_BEST_200": 0.525,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.34,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 17342000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794269236",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.285,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 17392100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794270557",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.34,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 17442200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794271830",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.72,
+    "galactus_200": 0.34,
+    "megabyte_200": 0.75
+   },
+   {
+    "steps": 17492300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794273105",
+    "h2h_BEST_200": 0.57,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.335,
+    "megabyte_200": 0.8
+   },
+   {
+    "steps": 17542400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794274373",
+    "h2h_BEST_200": 0.525,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.325,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 17592500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794275724",
+    "h2h_BEST_200": 0.55,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.29,
+    "megabyte_200": 0.77
+   },
+   {
+    "steps": 17642600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794276990",
+    "h2h_BEST_200": 0.585,
+    "h2h_FR4_200": 0.81,
+    "galactus_200": 0.34,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 17692700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794278289",
+    "h2h_BEST_200": 0.55,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.315,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 17742800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794279561",
+    "h2h_BEST_200": 0.54,
+    "h2h_FR4_200": 0.69,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 17792900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794280824",
+    "h2h_BEST_200": 0.555,
+    "h2h_FR4_200": 0.785,
+    "galactus_200": 0.33,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 17843000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794282090",
+    "h2h_BEST_200": 0.5327,
+    "h2h_FR4_200": 0.805,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 17881100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST20r/checkpoints/1794283093",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.365,
+    "megabyte_200": 0.835
+   }
+  ],
+  "ST21": [
+   {
+    "steps": 17702900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794287253",
+    "h2h_BEST_200": 0.415,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 17753000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794288789",
+    "h2h_BEST_200": 0.445,
+    "h2h_FR4_200": 0.72,
+    "galactus_200": 0.365,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 17803100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794290105",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.74,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 17853200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794291473",
+    "h2h_BEST_200": 0.475,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.395,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 17903300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794292765",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 17953400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794294085",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 18003500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794295394",
+    "h2h_BEST_200": 0.525,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 18053600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794296692",
+    "h2h_BEST_200": 0.6,
+    "h2h_FR4_200": 0.71,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.79
+   },
+   {
+    "steps": 18103700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794297987",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.74,
+    "galactus_200": 0.41,
+    "megabyte_200": 0.81
+   },
+   {
+    "steps": 18153800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794299310",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.38,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 18203900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794300646",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.395,
+    "megabyte_200": 0.865
+   },
+   {
+    "steps": 18254000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794301954",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.325,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 18304100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794303214",
+    "h2h_BEST_200": 0.56,
+    "h2h_FR4_200": 0.775,
+    "galactus_200": 0.325,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 18354200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794304572",
+    "h2h_BEST_200": 0.44,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.33,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 18404300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794305823",
+    "h2h_BEST_200": 0.57,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 18454400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794307140",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.405,
+    "megabyte_200": 0.855
+   },
+   {
+    "steps": 18504500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794308452",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.31,
+    "megabyte_200": 0.81
+   },
+   {
+    "steps": 18554600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794309709",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.7,
+    "galactus_200": 0.41,
+    "megabyte_200": 0.855
+   },
+   {
+    "steps": 18604700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794310987",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.69,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.79
+   },
+   {
+    "steps": 18642800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST21/checkpoints/1794312013",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.405,
+    "megabyte_200": 0.804
+   }
+  ],
+  "ST22": [
+   {
+    "steps": 18113900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794316097",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.395,
+    "megabyte_200": 0.815
+   },
+   {
+    "steps": 18164000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794317436",
+    "h2h_BEST_200": 0.57,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.36,
+    "megabyte_200": 0.815
+   },
+   {
+    "steps": 18214100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794318731",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.8
+   },
+   {
+    "steps": 18264200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794320074",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.415,
+    "megabyte_200": 0.81
+   },
+   {
+    "steps": 18314300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794321361",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.33,
+    "megabyte_200": 0.795
+   },
+   {
+    "steps": 18364400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794322679",
+    "h2h_BEST_200": 0.485,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.365,
+    "megabyte_200": 0.785
+   },
+   {
+    "steps": 18414500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794323950",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 18464600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794325273",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.785
+   },
+   {
+    "steps": 18514700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794326659",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.695,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 18564800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794327975",
+    "h2h_BEST_200": 0.555,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.41,
+    "megabyte_200": 0.845
+   },
+   {
+    "steps": 18614900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794329337",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.8,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.7739
+   },
+   {
+    "steps": 18665000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794330631",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.685,
+    "galactus_200": 0.34,
+    "megabyte_200": 0.76
+   },
+   {
+    "steps": 18715100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794331948",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.375,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 18765200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794333328",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.785,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 18815300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794334643",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.71,
+    "galactus_200": 0.38,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 18865400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794335958",
+    "h2h_BEST_200": 0.535,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.335,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 18915500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794337269",
+    "h2h_BEST_200": 0.535,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.36,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 18965600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794338544",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.73,
+    "galactus_200": 0.29,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 19015700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794339838",
+    "h2h_BEST_200": 0.44,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 19053800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST22/checkpoints/1794340888",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.72,
+    "galactus_200": 0.32,
+    "megabyte_200": 0.795
+   }
+  ],
+  "ST23": [
+   {
+    "steps": 18113900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794346123",
+    "h2h_BEST_200": 0.455,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.865
+   },
+   {
+    "steps": 18164000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794347321",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.775,
+    "galactus_200": 0.415,
+    "megabyte_200": 0.815
+   },
+   {
+    "steps": 18214100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794348480",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.795,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 18264200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794349602",
+    "h2h_BEST_200": 0.405,
+    "h2h_FR4_200": 0.785,
+    "galactus_200": 0.38,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 18314300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794350770",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 18364400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794351845",
+    "h2h_BEST_200": 0.415,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.845
+   },
+   {
+    "steps": 18414500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794353024",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.77,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 18464600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794354160",
+    "h2h_BEST_200": 0.43,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 18514700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794355293",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.335,
+    "megabyte_200": 0.81
+   },
+   {
+    "steps": 18564800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794356416",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 18614900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794357537",
+    "h2h_BEST_200": 0.435,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 18665000000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794358711",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.36,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 18715100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794359912",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.375,
+    "megabyte_200": 0.785
+   },
+   {
+    "steps": 18765200000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794361139",
+    "h2h_BEST_200": 0.41,
+    "h2h_FR4_200": 0.8,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.875
+   },
+   {
+    "steps": 18815300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794362289",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 18865400000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794363518",
+    "h2h_BEST_200": 0.44,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.34,
+    "megabyte_200": 0.815
+   },
+   {
+    "steps": 18915500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794364748",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 18965600000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794365924",
+    "h2h_BEST_200": 0.475,
+    "h2h_FR4_200": 0.74,
+    "galactus_200": 0.305,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 19015700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794367057",
+    "h2h_BEST_200": 0.555,
+    "h2h_FR4_200": 0.81,
+    "galactus_200": 0.405,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 19053800000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST23/checkpoints/1794367982",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.685,
+    "galactus_200": 0.395,
+    "megabyte_200": 0.815
+   }
+  ],
+  "ST24": [
+   {
+    "steps": 19126100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794372720",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.8,
+    "galactus_200": 0.36,
+    "megabyte_200": 0.845
+   },
+   {
+    "steps": 19226300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794374794",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.335,
+    "megabyte_200": 0.795
+   },
+   {
+    "steps": 19326500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794376842",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.815,
+    "galactus_200": 0.36,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 19426700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794378834",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 19526900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794380819",
+    "h2h_BEST_200": 0.455,
+    "h2h_FR4_200": 0.69,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.855
+   },
+   {
+    "steps": 19627100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794382795",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.395,
+    "megabyte_200": 0.875
+   },
+   {
+    "steps": 19727300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794384802",
+    "h2h_BEST_200": 0.565,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 19827500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794386828",
+    "h2h_BEST_200": 0.45,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.325,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 19927700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794388900",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.795,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 20015900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST24/checkpoints/1794390719",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.315,
+    "megabyte_200": 0.82
+   }
+  ],
+  "ST25": [
+   {
+    "steps": 19837700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794395470",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.81,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 19937900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794397482",
+    "h2h_BEST_200": 0.535,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.89
+   },
+   {
+    "steps": 20038100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794399473",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.71,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.865
+   },
+   {
+    "steps": 20138300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794401405",
+    "h2h_BEST_200": 0.555,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.81
+   },
+   {
+    "steps": 20238500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794403444",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.795,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 20338700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794405465",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.775,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.89
+   },
+   {
+    "steps": 20438900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794407487",
+    "h2h_BEST_200": 0.575,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 20539100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794409555",
+    "h2h_BEST_200": 0.525,
+    "h2h_FR4_200": 0.795,
+    "galactus_200": 0.38,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 20639300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794411535",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.805,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 20727500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST25/checkpoints/1794413355",
+    "h2h_BEST_200": 0.605,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.405,
+    "megabyte_200": 0.82
+   }
+  ],
+  "ST26": [
+   {
+    "steps": 20837900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794418053",
+    "h2h_BEST_200": 0.46,
+    "h2h_FR4_200": 0.82,
+    "galactus_200": 0.36,
+    "megabyte_200": 0.81
+   },
+   {
+    "steps": 20938100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794420157",
+    "h2h_BEST_200": 0.465,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.41,
+    "megabyte_200": 0.905
+   },
+   {
+    "steps": 21038300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794422216",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.705,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.86
+   },
+   {
+    "steps": 21138500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794424323",
+    "h2h_BEST_200": 0.455,
+    "h2h_FR4_200": 0.84,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.88
+   },
+   {
+    "steps": 21238700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794426403",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.8,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 21338900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794428492",
+    "h2h_BEST_200": 0.435,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.38,
+    "megabyte_200": 0.885
+   },
+   {
+    "steps": 21439100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794430558",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.89
+   },
+   {
+    "steps": 21539300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794432635",
+    "h2h_BEST_200": 0.41,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.845
+   },
+   {
+    "steps": 21639500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794434780",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 21727700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST26/checkpoints/1794436587",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.375,
+    "megabyte_200": 0.885
+   }
+  ],
+  "ST27": [
+   {
+    "steps": 21749900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794441321",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.865
+   },
+   {
+    "steps": 21850100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794443464",
+    "h2h_BEST_200": 0.45,
+    "h2h_FR4_200": 0.775,
+    "galactus_200": 0.445,
+    "megabyte_200": 0.89
+   },
+   {
+    "steps": 21950300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794445471",
+    "h2h_BEST_200": 0.465,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.8
+   },
+   {
+    "steps": 22050500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794447516",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.775,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.885
+   },
+   {
+    "steps": 22150700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794449505",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.375,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 22250900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794451521",
+    "h2h_BEST_200": 0.45,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 22351100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794453589",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.335,
+    "megabyte_200": 0.86
+   },
+   {
+    "steps": 22451300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794455562",
+    "h2h_BEST_200": 0.445,
+    "h2h_FR4_200": 0.785,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.845
+   },
+   {
+    "steps": 22551500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794457656",
+    "h2h_BEST_200": 0.43,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.405,
+    "megabyte_200": 0.865
+   },
+   {
+    "steps": 22639700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST27/checkpoints/1794459436",
+    "h2h_BEST_200": 0.465,
+    "h2h_FR4_200": 0.795,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.885
+   }
+  ],
+  "ST28": [
+   {
+    "steps": 20837900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794466028",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 20938100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794468038",
+    "h2h_BEST_200": 0.415,
+    "h2h_FR4_200": 0.74,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.87
+   },
+   {
+    "steps": 21038300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794470042",
+    "h2h_BEST_200": 0.44,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.365,
+    "megabyte_200": 0.875
+   },
+   {
+    "steps": 21138500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794472117",
+    "h2h_BEST_200": 0.54,
+    "h2h_FR4_200": 0.785,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 21238700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794474205",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.77,
+    "galactus_200": 0.365,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 21338900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794476255",
+    "h2h_BEST_200": 0.485,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.31,
+    "megabyte_200": 0.88
+   },
+   {
+    "steps": 21439100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794478243",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.805,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 21539300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794480237",
+    "h2h_BEST_200": 0.435,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.855
+   },
+   {
+    "steps": 21639500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794482282",
+    "h2h_BEST_200": 0.51,
+    "h2h_FR4_200": 0.77,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.86
+   },
+   {
+    "steps": 21727700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST28/checkpoints/1794484071",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.86
+   }
+  ],
+  "ST29": [
+   {
+    "steps": 20837900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794488837",
+    "h2h_BEST_200": 0.425,
+    "h2h_FR4_200": 0.735,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 20938100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794490966",
+    "h2h_BEST_200": 0.38,
+    "h2h_FR4_200": 0.71,
+    "galactus_200": 0.45,
+    "megabyte_200": 0.88
+   },
+   {
+    "steps": 21038300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794493010",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.38,
+    "megabyte_200": 0.81
+   },
+   {
+    "steps": 21138500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794495010",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.77,
+    "galactus_200": 0.425,
+    "megabyte_200": 0.785
+   },
+   {
+    "steps": 21238700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794496963",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.77,
+    "galactus_200": 0.46,
+    "megabyte_200": 0.855
+   },
+   {
+    "steps": 21338900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794498946",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.73,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.87
+   },
+   {
+    "steps": 21439100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794500956",
+    "h2h_BEST_200": 0.465,
+    "h2h_FR4_200": 0.72,
+    "galactus_200": 0.395,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 21539300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794502994",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.785,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 21639500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794504959",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.81,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.83
+   },
+   {
+    "steps": 21727700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST29/checkpoints/1794506680",
+    "h2h_BEST_200": 0.495,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.41,
+    "megabyte_200": 0.82
+   }
+  ],
+  "ST30": [
+   {
+    "steps": 20837900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794511479",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.725,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.89
+   },
+   {
+    "steps": 20938100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794514141",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.36,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 21038300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794516824",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.35,
+    "megabyte_200": 0.84
+   },
+   {
+    "steps": 21138500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794518800",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 21238700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794520812",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.325,
+    "megabyte_200": 0.855
+   },
+   {
+    "steps": 21338900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794522860",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.375,
+    "megabyte_200": 0.87
+   },
+   {
+    "steps": 21439100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794524851",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.395,
+    "megabyte_200": 0.89
+   },
+   {
+    "steps": 21539300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794526875",
+    "h2h_BEST_200": 0.5,
+    "h2h_FR4_200": 0.78,
+    "galactus_200": 0.465,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 21639500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794528794",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.71,
+    "galactus_200": 0.405,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 21727700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST30/checkpoints/1794530622",
+    "h2h_BEST_200": 0.535,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.415,
+    "megabyte_200": 0.825
+   }
+  ],
+  "ST31": [
+   {
+    "steps": 20837900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794537984",
+    "h2h_BEST_200": 0.465,
+    "h2h_FR4_200": 0.8,
+    "galactus_200": 0.44,
+    "megabyte_200": 0.825
+   },
+   {
+    "steps": 20938100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794540025",
+    "h2h_BEST_200": 0.455,
+    "h2h_FR4_200": 0.73,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.845
+   },
+   {
+    "steps": 21038300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794542027",
+    "h2h_BEST_200": 0.47,
+    "h2h_FR4_200": 0.855,
+    "galactus_200": 0.37,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 21138500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794544078",
+    "h2h_BEST_200": 0.42,
+    "h2h_FR4_200": 0.73,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 21238700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794546100",
+    "h2h_BEST_200": 0.475,
+    "h2h_FR4_200": 0.79,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.8643
+   },
+   {
+    "steps": 21338900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794548118",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.705,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.87
+   },
+   {
+    "steps": 21439100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794550186",
+    "h2h_BEST_200": 0.43,
+    "h2h_FR4_200": 0.755,
+    "galactus_200": 0.365,
+    "megabyte_200": 0.835
+   },
+   {
+    "steps": 21539300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794552175",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.775,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.805
+   },
+   {
+    "steps": 21639500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794554187",
+    "h2h_BEST_200": 0.53,
+    "h2h_FR4_200": 0.785,
+    "galactus_200": 0.375,
+    "megabyte_200": 0.895
+   },
+   {
+    "steps": 21727700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST31/checkpoints/1794555970",
+    "h2h_BEST_200": 0.505,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.365,
+    "megabyte_200": 0.835
+   }
+  ],
+  "ST32": [
+   {
+    "steps": 20837900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794560713",
+    "h2h_BEST_200": 0.485,
+    "h2h_FR4_200": 0.765,
+    "galactus_200": 0.345,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 20938100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794562724",
+    "h2h_BEST_200": 0.44,
+    "h2h_FR4_200": 0.85,
+    "galactus_200": 0.4,
+    "megabyte_200": 0.935
+   },
+   {
+    "steps": 21038300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794564706",
+    "h2h_BEST_200": 0.49,
+    "h2h_FR4_200": 0.83,
+    "galactus_200": 0.385,
+    "megabyte_200": 0.87
+   },
+   {
+    "steps": 21138500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794566779",
+    "h2h_BEST_200": 0.45,
+    "h2h_FR4_200": 0.76,
+    "galactus_200": 0.38,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 21238700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794568806",
+    "h2h_BEST_200": 0.515,
+    "h2h_FR4_200": 0.8,
+    "galactus_200": 0.405,
+    "megabyte_200": 0.82
+   },
+   {
+    "steps": 21338900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794570782",
+    "h2h_BEST_200": 0.48,
+    "h2h_FR4_200": 0.75,
+    "galactus_200": 0.34,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 21439100000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794572779",
+    "h2h_BEST_200": 0.475,
+    "h2h_FR4_200": 0.8,
+    "galactus_200": 0.45,
+    "megabyte_200": 0.88
+   },
+   {
+    "steps": 21539300000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794574746",
+    "h2h_BEST_200": 0.52,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.355,
+    "megabyte_200": 0.85
+   },
+   {
+    "steps": 21639500000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794576796",
+    "h2h_BEST_200": 0.45,
+    "h2h_FR4_200": 0.745,
+    "galactus_200": 0.39,
+    "megabyte_200": 0.89
+   },
+   {
+    "steps": 21727700000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST32/checkpoints/1794578605",
+    "h2h_BEST_200": 0.44,
+    "h2h_FR4_200": 0.77,
+    "galactus_200": 0.375,
+    "megabyte_200": 0.875
+   }
+  ],
+  "ST33": [
+   {
+    "steps": 20837900000,
+    "ckpt": "/home/ubuntu/ippo_runs/exp_ST33/checkpoints/1794584766",
+    "h2h_BEST_200": 0.455,
+    "h2h_FR4_200": 0.805,
+    "galactus_200": 0.42,
+    "megabyte_200": 0.84
+   }
+  ]
+ },
+ "leaderboard": [
+  {
+   "run": "ST19r",
+   "h2h": 0.504,
+   "fr4": 0.716,
+   "pool": 92.62,
+   "bp5": 67.38,
+   "gal": 0.342,
+   "mega": 0.81,
+   "gen": 0.8002,
+   "promote": true,
+   "declined": false,
+   "gate_fail": [
+    "fr4",
+    "h2h"
+   ]
+  },
+  {
+   "run": "ST20r",
+   "h2h": 0.584,
+   "fr4": 0.758,
+   "pool": 92.42,
+   "bp5": 69.74,
+   "gal": 0.342,
+   "mega": 0.792,
+   "gen": 0.8107,
+   "promote": true,
+   "declined": false,
+   "gate_fail": []
+  },
+  {
+   "run": "ST21",
+   "h2h": 0.528,
+   "fr4": 0.754,
+   "pool": 92.75,
+   "bp5": 68.17,
+   "gal": 0.356,
+   "mega": 0.816,
+   "gen": 0.8034,
+   "promote": true,
+   "declined": false,
+   "gate_fail": [
+    "bp5"
+   ]
+  },
+  {
+   "run": "ST22",
+   "h2h": 0.506,
+   "fr4": 0.76,
+   "pool": 92.58,
+   "bp5": 68.75,
+   "gal": 0.358,
+   "mega": 0.848,
+   "gen": 0.8061,
+   "promote": false,
+   "declined": false,
+   "gate_fail": [
+    "h2h"
+   ]
+  },
+  {
+   "run": "ST23",
+   "h2h": 0.56,
+   "fr4": 0.796,
+   "pool": 93.21,
+   "bp5": 68.67,
+   "gal": 0.354,
+   "mega": 0.832,
+   "gen": 0.8087,
+   "promote": true,
+   "declined": false,
+   "gate_fail": []
+  },
+  {
+   "run": "ST24",
+   "h2h": 0.536,
+   "fr4": 0.77,
+   "pool": 93.0,
+   "bp5": 67.0,
+   "gal": 0.37,
+   "mega": 0.832,
+   "gen": 0.801,
+   "promote": false,
+   "declined": false,
+   "gate_fail": [
+    "bp5",
+    "fr4"
+   ]
+  },
+  {
+   "run": "ST25",
+   "h2h": 0.562,
+   "fr4": 0.784,
+   "pool": 93.33,
+   "bp5": 69.21,
+   "gal": 0.408,
+   "mega": 0.84,
+   "gen": 0.8132,
+   "promote": true,
+   "declined": false,
+   "gate_fail": [
+    "fr4"
+   ]
+  },
+  {
+   "run": "ST26",
+   "h2h": 0.49,
+   "fr4": 0.722,
+   "pool": 93.21,
+   "bp5": 68.33,
+   "gal": 0.346,
+   "mega": 0.826,
+   "gen": 0.8061,
+   "promote": false,
+   "declined": false,
+   "gate_fail": [
+    "fr4",
+    "h2h"
+   ]
+  },
+  {
+   "run": "ST27",
+   "h2h": 0.488,
+   "fr4": 0.73,
+   "pool": 92.17,
+   "bp5": 69.37,
+   "gal": 0.388,
+   "mega": 0.852,
+   "gen": 0.809,
+   "promote": false,
+   "declined": false,
+   "gate_fail": [
+    "fr4",
+    "h2h",
+    "pool"
+   ]
+  },
+  {
+   "run": "ST28",
+   "h2h": 0.514,
+   "fr4": 0.754,
+   "pool": 93.29,
+   "bp5": 72.04,
+   "gal": 0.404,
+   "mega": 0.832,
+   "gen": 0.827,
+   "promote": false,
+   "declined": false,
+   "gate_fail": [
+    "fr4",
+    "h2h"
+   ]
+  },
+  {
+   "run": "ST29",
+   "h2h": 0.484,
+   "fr4": 0.77,
+   "pool": 93.46,
+   "bp5": 69.42,
+   "gal": 0.394,
+   "mega": 0.842,
+   "gen": 0.8133,
+   "promote": false,
+   "declined": false,
+   "gate_fail": [
+    "fr4",
+    "h2h"
+   ]
+  },
+  {
+   "run": "ST30",
+   "h2h": 0.56,
+   "fr4": 0.774,
+   "pool": 93.08,
+   "bp5": 70.25,
+   "gal": 0.362,
+   "mega": 0.822,
+   "gen": 0.8166,
+   "promote": false,
+   "declined": true,
+   "gate_fail": [
+    "gal"
+   ]
+  },
+  {
+   "run": "ST31",
+   "h2h": 0.488,
+   "fr4": 0.734,
+   "pool": 93.29,
+   "bp5": 69.37,
+   "gal": 0.396,
+   "mega": 0.868,
+   "gen": 0.8155,
+   "promote": false,
+   "declined": false,
+   "gate_fail": [
+    "fr4",
+    "h2h"
+   ]
+  },
+  {
+   "run": "ST32",
+   "h2h": 0.526,
+   "fr4": 0.788,
+   "pool": 93.54,
+   "bp5": 70.29,
+   "gal": 0.39,
+   "mega": 0.828,
+   "gen": 0.8179,
+   "promote": false,
+   "declined": true,
+   "gate_fail": []
+  }
+ ],
+ "gen_panel": {
+  "ST19r": {
+   "1v1.pt": 0.825,
+   "ppo_430M": 0.8375,
+   "nexto": 0.93,
+   "necto": 0.9725,
+   "element": 0.9975,
+   "immortal": 0.995,
+   "ripple": 0.65,
+   "kira": 0.675,
+   "dice": 0.605,
+   "chronos": 0.7725,
+   "galactus": 0.34,
+   "seer": 1.0
+  },
+  "ST20r": {
+   "1v1.pt": 0.8275,
+   "ppo_430M": 0.8325,
+   "nexto": 0.9425,
+   "necto": 0.985,
+   "element": 0.99,
+   "immortal": 0.9675,
+   "ripple": 0.725,
+   "kira": 0.675,
+   "dice": 0.6767,
+   "chronos": 0.7675,
+   "galactus": 0.3425,
+   "seer": 0.9975
+  },
+  "ST21": {
+   "1v1.pt": 0.855,
+   "ppo_430M": 0.85,
+   "nexto": 0.925,
+   "necto": 0.9825,
+   "element": 0.985,
+   "immortal": 0.9675,
+   "ripple": 0.7175,
+   "kira": 0.665,
+   "dice": 0.5725,
+   "chronos": 0.7675,
+   "galactus": 0.37,
+   "seer": 0.9975
+  },
+  "ST22": {
+   "1v1.pt": 0.8275,
+   "ppo_430M": 0.845,
+   "nexto": 0.9225,
+   "necto": 0.9825,
+   "element": 1.0,
+   "immortal": 0.9775,
+   "ripple": 0.69,
+   "kira": 0.68,
+   "dice": 0.6025,
+   "chronos": 0.79,
+   "galactus": 0.365,
+   "seer": 0.9975
+  },
+  "ST23": {
+   "1v1.pt": 0.865,
+   "ppo_430M": 0.85,
+   "nexto": 0.9175,
+   "necto": 0.9875,
+   "element": 0.99,
+   "immortal": 0.9825,
+   "ripple": 0.6725,
+   "kira": 0.685,
+   "dice": 0.6525,
+   "chronos": 0.7525,
+   "galactus": 0.3625,
+   "seer": 0.995
+  },
+  "ST24": {
+   "1v1.pt": 0.8375,
+   "ppo_430M": 0.8475,
+   "nexto": 0.93,
+   "necto": 0.99,
+   "element": 0.99,
+   "immortal": 0.985,
+   "ripple": 0.645,
+   "kira": 0.6725,
+   "dice": 0.5775,
+   "chronos": 0.7675,
+   "galactus": 0.3575,
+   "seer": 1.0
+  },
+  "ST25": {
+   "1v1.pt": 0.8575,
+   "ppo_430M": 0.8675,
+   "nexto": 0.925,
+   "necto": 0.9925,
+   "element": 0.99,
+   "immortal": 0.9674,
+   "ripple": 0.6825,
+   "kira": 0.665,
+   "dice": 0.6175,
+   "chronos": 0.7875,
+   "galactus": 0.4025,
+   "seer": 0.9975
+  },
+  "ST26": {
+   "1v1.pt": 0.865,
+   "ppo_430M": 0.8325,
+   "nexto": 0.945,
+   "necto": 0.9724,
+   "element": 0.9875,
+   "immortal": 0.99,
+   "ripple": 0.665,
+   "kira": 0.645,
+   "dice": 0.6825,
+   "chronos": 0.7475,
+   "galactus": 0.365,
+   "seer": 0.995
+  },
+  "ST27": {
+   "1v1.pt": 0.825,
+   "ppo_430M": 0.8325,
+   "nexto": 0.92,
+   "necto": 0.975,
+   "element": 0.99,
+   "immortal": 0.9875,
+   "ripple": 0.6925,
+   "kira": 0.715,
+   "dice": 0.6375,
+   "chronos": 0.7475,
+   "galactus": 0.3725,
+   "seer": 0.9975
+  },
+  "ST28": {
+   "1v1.pt": 0.845,
+   "ppo_430M": 0.8825,
+   "nexto": 0.92,
+   "necto": 0.98,
+   "element": 0.995,
+   "immortal": 0.975,
+   "ripple": 0.76,
+   "kira": 0.725,
+   "dice": 0.625,
+   "chronos": 0.8125,
+   "galactus": 0.4,
+   "seer": 1.0
+  },
+  "ST29": {
+   "1v1.pt": 0.83,
+   "ppo_430M": 0.875,
+   "nexto": 0.9525,
+   "necto": 0.98,
+   "element": 0.9875,
+   "immortal": 0.9825,
+   "ripple": 0.6875,
+   "kira": 0.68,
+   "dice": 0.6075,
+   "chronos": 0.7825,
+   "galactus": 0.4075,
+   "seer": 1.0
+  },
+  "ST30": {
+   "1v1.pt": 0.8625,
+   "ppo_430M": 0.8375,
+   "nexto": 0.9225,
+   "necto": 0.9875,
+   "element": 0.9875,
+   "immortal": 0.9875,
+   "ripple": 0.69,
+   "kira": 0.7,
+   "dice": 0.625,
+   "chronos": 0.84,
+   "galactus": 0.3625,
+   "seer": 0.9975
+  },
+  "ST31": {
+   "1v1.pt": 0.8375,
+   "ppo_430M": 0.8675,
+   "nexto": 0.9375,
+   "necto": 0.98,
+   "element": 0.99,
+   "immortal": 0.985,
+   "ripple": 0.68,
+   "kira": 0.72,
+   "dice": 0.5875,
+   "chronos": 0.8075,
+   "galactus": 0.37,
+   "seer": 0.9975
+  },
+  "ST32": {
+   "1v1.pt": 0.86,
+   "ppo_430M": 0.8375,
+   "nexto": 0.935,
+   "necto": 0.995,
+   "element": 0.9925,
+   "immortal": 0.9925,
+   "ripple": 0.66,
+   "kira": 0.745,
+   "dice": 0.6625,
+   "chronos": 0.745,
+   "galactus": 0.405,
+   "seer": 1.0
+  }
+ },
+ "diag": {
+  "ST23": {
+   "buckets": [
+    [
+     "0-6s",
+     9,
+     1.0
+    ],
+    [
+     "6-15s",
+     71,
+     0.48
+    ],
+    [
+     "15-30s",
+     87,
+     0.32
+    ],
+    [
+     "30-60s",
+     30,
+     0.17
+    ],
+    [
+     "60-400s",
+     3,
+     0.0
+    ]
+   ],
+   "games": 200,
+   "wr": 0.38,
+   "conceded": {
+    "victim demoed in last 3.5s": 73,
+    "aerial/air shot (z>300)": 24,
+    "ground: victim out of position (ball-side)": 20,
+    "ground: victim goal-side but far (beaten by shot)": 3,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 2,
+    "own touch last (deflection/own goal)": 2
+   },
+   "scored": {
+    "aerial/air shot (z>300)": 27,
+    "ground: victim out of position (ball-side)": 18,
+    "own touch last (deflection/own goal)": 15,
+    "kickoff(<=6s)": 9,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 6,
+    "victim demoed in last 3.5s": 1
+   },
+   "n_conceded": 124,
+   "n_scored": 76,
+   "demoed_us": 113,
+   "demoed_them": 7,
+   "games_demoed": 93,
+   "wr_demoed": 0.097,
+   "kickoff": {
+    "lost": 34,
+    "won": 142,
+    "neutral": 24
+   }
+  },
+  "ST25": {
+   "buckets": [
+    [
+     "0-6s",
+     7,
+     1.0
+    ],
+    [
+     "6-15s",
+     54,
+     0.43
+    ],
+    [
+     "15-30s",
+     95,
+     0.32
+    ],
+    [
+     "30-60s",
+     40,
+     0.38
+    ],
+    [
+     "60-400s",
+     4,
+     0.5
+    ]
+   ],
+   "games": 200,
+   "wr": 0.385,
+   "conceded": {
+    "victim demoed in last 3.5s": 76,
+    "ground: victim out of position (ball-side)": 21,
+    "aerial/air shot (z>300)": 15,
+    "ground: victim goal-side but far (beaten by shot)": 6,
+    "own touch last (deflection/own goal)": 3,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 2
+   },
+   "scored": {
+    "aerial/air shot (z>300)": 26,
+    "ground: victim out of position (ball-side)": 21,
+    "victim demoed in last 3.5s": 10,
+    "own touch last (deflection/own goal)": 9,
+    "kickoff(<=6s)": 7,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 4
+   },
+   "n_conceded": 123,
+   "n_scored": 77,
+   "demoed_us": 115,
+   "demoed_them": 16,
+   "games_demoed": 95,
+   "wr_demoed": 0.126,
+   "kickoff": {
+    "won": 148,
+    "lost": 30,
+    "neutral": 22
+   }
+  },
+  "ST28": {
+   "buckets": [
+    [
+     "0-6s",
+     5,
+     1.0
+    ],
+    [
+     "6-15s",
+     63,
+     0.52
+    ],
+    [
+     "15-30s",
+     93,
+     0.26
+    ],
+    [
+     "30-60s",
+     37,
+     0.22
+    ],
+    [
+     "60-400s",
+     2,
+     0.0
+    ]
+   ],
+   "games": 200,
+   "wr": 0.35,
+   "conceded": {
+    "victim demoed in last 3.5s": 88,
+    "aerial/air shot (z>300)": 21,
+    "ground: victim out of position (ball-side)": 15,
+    "ground: victim goal-side but far (beaten by shot)": 4,
+    "own touch last (deflection/own goal)": 2
+   },
+   "scored": {
+    "ground: victim out of position (ball-side)": 25,
+    "aerial/air shot (z>300)": 17,
+    "victim demoed in last 3.5s": 12,
+    "own touch last (deflection/own goal)": 9,
+    "kickoff(<=6s)": 5,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 2
+   },
+   "n_conceded": 130,
+   "n_scored": 70,
+   "demoed_us": 127,
+   "demoed_them": 20,
+   "games_demoed": 106,
+   "wr_demoed": 0.113,
+   "kickoff": {
+    "won": 144,
+    "neutral": 31,
+    "lost": 25
+   }
+  },
+  "ST29": {
+   "buckets": [
+    [
+     "0-6s",
+     3,
+     1.0
+    ],
+    [
+     "6-15s",
+     65,
+     0.51
+    ],
+    [
+     "15-30s",
+     88,
+     0.26
+    ],
+    [
+     "30-60s",
+     43,
+     0.23
+    ],
+    [
+     "60-400s",
+     1,
+     1.0
+    ]
+   ],
+   "games": 200,
+   "wr": 0.35,
+   "conceded": {
+    "victim demoed in last 3.5s": 74,
+    "aerial/air shot (z>300)": 28,
+    "ground: victim out of position (ball-side)": 16,
+    "own touch last (deflection/own goal)": 7,
+    "ground: victim goal-side but far (beaten by shot)": 5
+   },
+   "scored": {
+    "aerial/air shot (z>300)": 34,
+    "ground: victim out of position (ball-side)": 15,
+    "own touch last (deflection/own goal)": 8,
+    "victim demoed in last 3.5s": 5,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 4,
+    "kickoff(<=6s)": 3,
+    "ground: victim goal-side but far (beaten by shot)": 1
+   },
+   "n_conceded": 130,
+   "n_scored": 70,
+   "demoed_us": 121,
+   "demoed_them": 9,
+   "games_demoed": 95,
+   "wr_demoed": 0.147,
+   "kickoff": {
+    "won": 152,
+    "lost": 20,
+    "neutral": 28
+   }
+  },
+  "ST30": {
+   "buckets": [
+    [
+     "0-6s",
+     4,
+     1.0
+    ],
+    [
+     "6-15s",
+     65,
+     0.65
+    ],
+    [
+     "15-30s",
+     95,
+     0.25
+    ],
+    [
+     "30-60s",
+     31,
+     0.19
+    ],
+    [
+     "60-400s",
+     5,
+     0.2
+    ]
+   ],
+   "games": 200,
+   "wr": 0.385,
+   "conceded": {
+    "victim demoed in last 3.5s": 76,
+    "aerial/air shot (z>300)": 20,
+    "ground: victim out of position (ball-side)": 18,
+    "ground: victim goal-side but far (beaten by shot)": 4,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 4,
+    "own touch last (deflection/own goal)": 1
+   },
+   "scored": {
+    "ground: victim out of position (ball-side)": 30,
+    "aerial/air shot (z>300)": 19,
+    "victim demoed in last 3.5s": 9,
+    "own touch last (deflection/own goal)": 9,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 6,
+    "kickoff(<=6s)": 4
+   },
+   "n_conceded": 123,
+   "n_scored": 77,
+   "demoed_us": 112,
+   "demoed_them": 15,
+   "games_demoed": 93,
+   "wr_demoed": 0.086,
+   "kickoff": {
+    "won": 162,
+    "neutral": 20,
+    "lost": 18
+   }
+  },
+  "ST31": {
+   "buckets": [
+    [
+     "0-6s",
+     7,
+     0.86
+    ],
+    [
+     "6-15s",
+     60,
+     0.5
+    ],
+    [
+     "15-30s",
+     88,
+     0.28
+    ],
+    [
+     "30-60s",
+     42,
+     0.31
+    ],
+    [
+     "60-400s",
+     3,
+     0.0
+    ]
+   ],
+   "games": 200,
+   "wr": 0.37,
+   "conceded": {
+    "victim demoed in last 3.5s": 87,
+    "aerial/air shot (z>300)": 17,
+    "ground: victim out of position (ball-side)": 16,
+    "ground: victim goal-side but far (beaten by shot)": 4,
+    "own touch last (deflection/own goal)": 1,
+    "kickoff(<=6s)": 1
+   },
+   "scored": {
+    "aerial/air shot (z>300)": 28,
+    "ground: victim out of position (ball-side)": 18,
+    "own touch last (deflection/own goal)": 11,
+    "victim demoed in last 3.5s": 8,
+    "kickoff(<=6s)": 6,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 2,
+    "ground: victim goal-side but far (beaten by shot)": 1
+   },
+   "n_conceded": 126,
+   "n_scored": 74,
+   "demoed_us": 136,
+   "demoed_them": 13,
+   "games_demoed": 104,
+   "wr_demoed": 0.087,
+   "kickoff": {
+    "won": 165,
+    "neutral": 19,
+    "lost": 16
+   }
+  },
+  "ST32": {
+   "buckets": [
+    [
+     "0-6s",
+     6,
+     1.0
+    ],
+    [
+     "6-15s",
+     72,
+     0.53
+    ],
+    [
+     "15-30s",
+     79,
+     0.25
+    ],
+    [
+     "30-60s",
+     43,
+     0.23
+    ]
+   ],
+   "games": 200,
+   "wr": 0.37,
+   "conceded": {
+    "victim demoed in last 3.5s": 74,
+    "aerial/air shot (z>300)": 25,
+    "ground: victim out of position (ball-side)": 16,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 4,
+    "own touch last (deflection/own goal)": 4,
+    "ground: victim goal-side but far (beaten by shot)": 3
+   },
+   "scored": {
+    "ground: victim out of position (ball-side)": 26,
+    "aerial/air shot (z>300)": 26,
+    "own touch last (deflection/own goal)": 8,
+    "kickoff(<=6s)": 6,
+    "victim demoed in last 3.5s": 4,
+    "ground: victim goal-side & near ball (lost challenge/whiff)": 3,
+    "ground: victim goal-side but far (beaten by shot)": 1
+   },
+   "n_conceded": 126,
+   "n_scored": 74,
+   "demoed_us": 125,
+   "demoed_them": 9,
+   "games_demoed": 93,
+   "wr_demoed": 0.097,
+   "kickoff": {
+    "won": 156,
+    "neutral": 20,
+    "lost": 24
+   }
+  }
+ },
+ "figures": [
+  "docs/figures/train_curves_ST32.png",
+  "docs/figures/reward_breakdown_ST32.png",
+  "docs/figures/behavior_ST32.png",
+  "docs/figures/mid_eval_ST32.png",
+  "docs/figures/train_curves_ST33.png",
+  "docs/figures/reward_breakdown_ST33.png",
+  "docs/figures/behavior_ST33.png",
+  "docs/figures/mid_eval_ST33.png",
+  "docs/figures/mid_eval_overlay.png",
+  "docs/figures/leaderboard_heatmap.png",
+  "docs/figures/bp5_radar.png",
+  "docs/figures/runs_compare.png",
+  "docs/figures/galactus_diag.png",
+  "docs/figures/demo_heatmap.png"
+ ]
+}

@@ -723,6 +723,26 @@ shaping), AUD (air reward audit: `aud.toml`) and CTRL (ADB continuation, its
 control); see EXPERIMENTS.md. `RATES_MIX` picks the rates setter file
 (FR3 uses `experiments/rates_fr3.toml`).
 
+## Metrics and figures (tools/viz)
+
+`tools/viz/make_all.py` turns the logs the chain already writes into figures in `docs/figures/`. It reads per-iteration `metrics.jsonl`, the per-chunk `mid.jsonl`, the finals JSONL files and `PROMOTE.json`, and the `diag_gal` summaries and trajectories. Running it takes about 10 s on one CPU core at nice 19, and it never touches a running trainer. See [tools/viz/README.md](tools/viz/README.md) for every figure and flag.
+
+```bash
+/home/ubuntu/coco-venv/bin/python tools/viz/make_all.py \
+    --runs ST19r,ST20r,ST21,ST22,ST23,ST24,ST25,ST26,ST27,ST28,ST29,ST30,ST31,ST32,ST33 \
+    --current ST32,ST33 --best ST25 --out docs/figures --summary-json docs/figures/summary.json
+```
+
+After each run's finals, `st_launch.sh` runs the same tool detached into `~/ippo_runs/viz/<RUN>/`. It runs with `setsid nohup timeout 900 nice -n 19` in the background, so it can't block or break the follow-up launch.
+
+![leaderboard](docs/figures/leaderboard_heatmap.png)
+![mid evals](docs/figures/mid_eval_ST32.png)
+![galactus](docs/figures/galactus_diag.png)
+![demo heatmap](docs/figures/demo_heatmap.png)
+![gen panel](docs/figures/bp5_radar.png)
+![training curves](docs/figures/train_curves_ST32.png)
+![reward breakdown](docs/figures/reward_breakdown_ST32.png)
+
 ## Deploy (RLBot v5)
 
 `../rlbot_indococo_ppo/` holds `bot.toml`, `loadout.toml`, the binaries
