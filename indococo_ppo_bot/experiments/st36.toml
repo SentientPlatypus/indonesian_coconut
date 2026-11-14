@@ -1,0 +1,28 @@
+# ST36 reward config: the ST stack (st.toml) with ONE new term, shadow_box.
+# Attack-conditional, potential-based, box-weighted shadow / goal-side
+# reward at Necto scale (full swing 0.025 of a goal: weight 30 at goal 1200).
+# Not zero-sum. face_ball and every other st.toml weight stay as in ST25;
+# this file extends st.toml, not st34.toml (the face_ball cut was not
+# promoted and made the Galactus demo hole worse).
+# r = gamma * phi(s') - phi(s), gamma = 0.998 (same as PPO).
+# Gate off (ball not in our half, or not coming in, or we are closer to it)
+# pays 0 and freezes prev phi, so a clear is never penalized.
+extends = "st.toml"
+
+[weights]
+shadow_box = 30.0
+
+[shadow_box]
+gamma = 0.998
+threat_speed_min = 300.0
+line_width = 1200.0
+band_low_end = 700.0
+band_peak_start = 800.0
+band_peak_end = 2400.0
+band_far = 3500.0
+band_low_value = 0.15
+# goal_half_width defaults to GOAL_CENTER_TO_POST (892.755)
+lateral_fade = 800.0
+speed_ref = 800.0
+speed_floor = 0.3
+goal_line_y = 5120.0

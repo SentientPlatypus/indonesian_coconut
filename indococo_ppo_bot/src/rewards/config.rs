@@ -38,6 +38,7 @@ use super::possession::Possession;
 use super::possession_range_carry::{PossessionRangeCarry, TakeoffParams};
 use super::pressure_flick::PressureFlick;
 use super::reset_align::{ResetAlign, ResetAlignParams};
+use super::shadow_box::{ShadowBox, ShadowBoxParams};
 use super::safe_boost_collect::SafeBoostCollect;
 use super::speed_toward_ball::SpeedTowardBall;
 use super::touch::Touch;
@@ -125,6 +126,7 @@ pub struct RewardWeights {
     pub air_dribble_bump: f64,
     pub flip_reset_use: f64,
     pub reset_align: f64,
+    pub shadow_box: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -196,6 +198,7 @@ pub struct RewardConfig {
     pub air_dribble_bump: AirDribbleBumpParams,
     pub flip_reset_use: FlipResetUseParams,
     pub reset_align: ResetAlignParams,
+    pub shadow_box: ShadowBoxParams,
     /// `{setter kind: {term: scale}}`: term weights multiplied by `scale` in
     /// episodes started by that setter (e.g. no air dribble reward in
     /// `reset_curriculum` episodes). Unknown term names panic in `build`.
@@ -367,7 +370,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 5] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 6] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -395,6 +398,11 @@ impl RewardConfig {
                 "reset_align",
                 w.reset_align,
                 Box::new(ResetAlign::new(self.reset_align.clone())),
+            ),
+            (
+                "shadow_box",
+                w.shadow_box,
+                Box::new(ShadowBox::new(self.shadow_box.clone())),
             ),
         ];
         terms.extend(
@@ -557,5 +565,33 @@ mod extends_tests {
         .unwrap();
         assert!(RewardConfig::from_file(&dir.join("bad.toml")).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn st36_adds_shadow_box_on_st_toml() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let st = RewardConfig::from_file(&dir.join("st.toml")).unwrap();
+        assert_eq!(st.weights.shadow_box, 0.0);
+        let names: Vec<_> = st.build().terms.iter().map(|t| t.name).collect();
+        assert!(!names.contains(&"shadow_box"), "{names:?}");
+
+        let st36 = RewardConfig::from_file(&dir.join("st36.toml")).unwrap();
+        assert_eq!(st36.weights.shadow_box, 30.0);
+        assert_eq!(st36.weights.face_ball, 1.0);
+        assert_eq!(st36.weights.shadow_space, 18.0);
+        assert_eq!(st36.weights.recover, 70.0);
+        assert!((st36.shadow_box.gamma - 0.998).abs() < 1e-12);
+        assert!(st36.zero_sum.get("shadow_box").is_none() || st36.zero_sum["shadow_box"] == 0.0);
+        let built = st36.build();
+        let term = built
+            .terms
+            .iter()
+            .find(|t| t.name == "shadow_box")
+            .expect("shadow_box term");
+        assert_eq!(term.weight, 30.0);
+        assert_eq!(
+            built.terms.iter().find(|t| t.name == "face_ball").unwrap().weight,
+            1.0
+        );
     }
 }

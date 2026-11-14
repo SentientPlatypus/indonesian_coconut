@@ -1,0 +1,94 @@
+# ST36p = ST35's recipe (train_st35.toml: PFSP on, Galactus clamp [0.25, 0.26],
+# setters, PPO 1 epoch, policy bf16 off, ENT 0.016, gamma 0.998, CHUNK 100M)
+# with ONE change: reward_config -> st36.toml (shadow_box weight 30).
+# Used ONLY if ST35 promotes (start ST35's final). Same PFSP binary tree
+# plus the new term. See EXPERIMENTS.md ST36.
+reward_config = "@RUN@/cfg/experiments/st36.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 512
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = true
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+# League (static fallback = the PFSP prior mix at OPPCH 0.70: past 0.20,
+# galactus 0.20, megabyte/ripple/ST25_final 0.09, FR4/HUNT 0.015). Galactus,
+# Megabyte and ST25_final/HUNT_final are appended by st_launch.sh.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = 0.20
+[[opponents.fixed]]
+name = "FR4_final"
+checkpoint = "@RUN@/opponents/FR4_final"
+weight = 0.015
+
+# ST35: PFSP over the league (see the header). Shares are of all rollouts
+# for self/past/clamp and of league mass for the floor. Logged per rollout to
+# train.log ("PFSP pick=...") and logs/pfsp.jsonl.
+[pfsp]
+self_share = 0.30
+past_share = 0.20
+ema_games = 40
+floor = 0.03
+smooth = 0.25
+low_x = 0.25
+clamp = { galactus = [0.25, 0.26] }
+pinned = ["HUNT_final", "FR4_final"]
+log = "@RUN@/logs/pfsp.jsonl"
+
+# ST25 setter mix: normal play x0.875 (kickoff 0.315, random 0.105+0.105,
+# replay 0.175), aerial_defense 0.15 (unchanged), demo_threat 0.15 with the
+# attacker starting 1800-3000 uu away (diag_gal ST23). Sum 1.0.
+# No air_dribble_wall_challenge.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.315
+[[state_setters]]
+kind = "random"
+weight = 0.105
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.105
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "replay"
+weight = 0.175
+path = "@SNAP@"
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.15
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.15
+distance = [1800.0, 3000.0]
+
+# Rust Ripple v1.1 (LibTorch CUDA; RIPPLE_DEVICE=cuda), PFSP-weighted.
+[[opponents.external]]
+name = "ripple"
+kind = "ripple"
+path = "/home/ubuntu/eval_bots/ripple/bots/v1.1"
+weight = 0.09
