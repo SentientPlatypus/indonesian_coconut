@@ -2417,6 +2417,12 @@ Risks and watch items:
 - jones_0004's bump warning: aerial bumps against us vs Galactus and the public bots.
 - If ST35 promotes, ST36p carries PFSP plus this term (the start point's recipe plus one change). If it does not, PFSP stays off so this is still a single lever.
 
+## ST36 results: PBRS `shadow_box` w30 from ST35, not promoted (2026-11-14)
+
+ST36 = PBRS `shadow_box` weight 30 (gamma 0.998, not zero-sum) from the ST35 checkpoint with PFSP (`train_st36p.toml`, Galactus clamp [0.25, 0.26], binary `indococo-train-st36-1cbe86c`). It started from `exp_ST35/checkpoints/1794632008` (20938.1M) because ST35's auto gate was `promote=true`. Finals finished 2026-11-14 11:06 AM ET. Selected checkpoint `exp_ST36/checkpoints/1794658145` at 21349.1M.
+
+Finals (gate vs ST35, which was then BESTF): h2h **50.0%** vs ST35 (250-250 over 500 g; gate miss, needs ≥52), pool **92.88** (ST35 93.0), bp5 **69.99** (ST35 69.54), Galactus **41.4%** (ST35 37.6%, ST25 40.8%), Megabyte **84.2%** (report-only; ST25 84.0%), gen min/mean **0.414 / 0.8149**. **Not promoted; BEST stays ST25** (`st25_final`). Shipped as `checkpoints_to_test/st36_21349M.bpk` (sha256 `7306467f…b18347`). ST36r auto-repeat started 11:07 AM ET from this checkpoint.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.

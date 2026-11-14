@@ -14,6 +14,19 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
+### st36_21349M.bpk
+
+| | |
+|---|---|
+| Lineage | ST36 (PBRS `shadow_box` weight 30, gamma 0.998, not zero-sum, on the ST35 PFSP tree, `train_st36p.toml`, binary `indococo-train-st36-1cbe86c`), continued from ST35 20938.1M, selected chunk `1794658145` (21349.1M steps). 106-input obs (`INDOCOCO_OBS_EXT=1`). **Not promoted** (h2h 50.0 vs ST35, gate needs ≥52). ST25 remains current best. |
+| H2H | **50.0%** vs ST35 (250-250) over 500 games |
+| Pool | **92.88** on pool400 (ST35 93.0, ST25 93.33): 1v1.pt 81.2, 430M 84.5, Nexto 96.5, Necto 98.8, Element 99.5, Immortal 96.8 |
+| Botpack5 | **69.99** avg (ST35 69.54, ST25 69.21): Ripple 71.0, Kira 71.4, Dice 64.2, Chronos 72.8, Galactus 40.8, Seer 99.8 |
+| Galactus | **41.4%** over 500 games (ST35 37.6%, ST25 40.8%) |
+| Megabyte | **84.2%** over 500 games (report-only; ST25 84.0%) |
+| Gen panel | min **0.414** / mean **0.8149** (ST35 0.376 / 0.8126, ST25 0.408 / 0.8132) |
+| sha256 | `7306467f253fb0213dbb9bb4c536ed91a2651ef1fbd16cb96b5b835fdcb18347` |
+
 ### st25_20728M.bpk (current best)
 
 | | |
