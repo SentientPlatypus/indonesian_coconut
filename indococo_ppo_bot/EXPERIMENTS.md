@@ -2333,6 +2333,44 @@ Risks and watch items:
 - The new 20% past-version share is a big jump from 3.3%. Watch h2h vs ST25 for self-play collapse or forgetting.
 - Sampling noise: one rollout gives the ~40-game window, so x moves fast. The 25% per-pick smoothing and the floors bound the swings. Watch the PFSP lines.
 
+## ST34 results: `face_ball` 1.0 -> 0.1 and off the zero-sum path, not promoted (2026-11-13)
+
+ST34 (ST25 recipe with `face_ball` 1.0 -> 0.1 and `[zero_sum] face_ball = 0.0`; binary `indococo-train-rip-9d4b2a6`, from ST25, `train_st34.toml`) finished 2026-11-13 10:47 PM ET. Selected (keep-best of the top 3) checkpoint 21038.3M (`exp_ST34/checkpoints/1794611698`); the selector's 500-game re-eval was h2h 0.482 / Galactus 0.400. It fails the gate on h2h (47.8 < 52), so it was not promoted. The other gates passed: pool 92.38 vs 93.33 (−0.95, within 1.0), bp5 69.75 vs 69.21, Galactus 39.8 vs 40.8 (within 0.04). **BEST stays ST25** (`st25_final`, `exp_ST25/checkpoints/1794413355`). `st34_final/PROMOTE.json` is `promote=false`, so the launcher's newest-`promote=true` fallback stays on st25_final. ST35 started 10:48 PM ET from the ST25 checkpoint with `train_st35.toml` and the PFSP binary, because ST34 did not auto-promote.
+
+| Metric | ST34 | ST33 | ST25 (BEST) |
+|---|---|---|---|
+| h2h vs ST25 (500 g) | 47.8% (239-261) | 53.2% | — |
+| pool400 | 92.38 | 93.79 | 93.33 |
+| bp5 | 69.75 | 69.67 | 69.21 |
+| bp5 Dice / Kira / Ripple / Chronos | 63.5 / 69.8 / 67.5 / 79.0 | 63.2 / 72.5 / 66.0 / 77.2 | 61.75 / 66.5 / 68.25 / 78.75 |
+| Galactus (500 g) | 39.8 | 38.8 | 40.8 |
+| Megabyte (report-only) | 84.4 | 84.4 | 84.0 |
+| gen min / mean | 0.398 / 0.8115 | 0.388 / 0.8167 | 0.408 / 0.8132 |
+| demos in h2h vs ST25 (against / by us, 200 g) | 68 / 60 | 59 / 55 | — |
+
+Mid evals (200 g) were noisy and had no trend across the 1000M: h2h vs ST25 0.425-0.530 and Galactus 0.325-0.410. The last mid, on 21727.7M, was h2h 0.520 and Galactus 0.325; keep-best took the earlier 21038.3M chunk (mid h2h 0.530 / Galactus 0.395), whose 500-game re-eval and finals agreed (h2h 0.482 then 0.478, Galactus 0.400 then 0.398). Galactus is still the weakest gen-panel slot (gen min 0.398 vs ST25 0.408).
+
+`diag_gal` on the selected final (200 g, seeds 0-99 both sides, `~/ippo_runs/diag_gal/st34_*`; no FR4 diag):
+
+| vs Galactus (200 g) | ST34 | ST33 | ST25 |
+|---|---|---|---|
+| decisive wr | 0.350 | 0.395 | 0.385 |
+| goals conceded | 130 | 121 | 123 |
+| conceded within 3.5 s of a demo on us | 91 (70%) | 77 (64%) | 76 (62%) |
+| aerial (z > 300) conceded | 16 | 24 | 15 |
+| out of position (ball-side) conceded | 12 | 9 | 21 |
+| demos on us / by us | 136 / 6 | 117 / 16 | 115 / 16 |
+| games with a demo on us: count, wr | 109, 0.119 | 98, 0.163 | 95, 0.126 |
+| wr by first-goal time 0-6 / 6-15 / 15-30 / 30-60 s | 1.00 / .49 / .22 / .30 | 1.00 / .48 / .27 / .40 | 1.00 / .43 / .32 / .38 |
+
+The success bar was demos on us and post-demo concedes below ST25 (115 and 76 per 200 g), and goals conceded vs Galactus down. ST34 missed all three: 136 demos on us, 91/130 (70%) post-demo, 130 goals conceded (ST25 123). Aerial concedes stayed in line with ST25 (16 vs 15), unlike the ST32/ST33 slip (25 / 24). The 200-game diag wr (35.0%) is a bit below the 500-game finals (39.8%); that is the usual mid/diag sampling noise, and the concede mix is the result.
+
+Demo context (`demo_ctx.py`, 1 s before each demo on us): the parked-facing-the-ball posture did not leave, and we sat closer to the goal line than ST25. 100 events; Galactus median 2492 uu away (ST25 2445, ST33 2729) at 2056 uu/s; we are on the ground 96%, goal-side 96%, median 401 uu off our goal line (ST25 620, ST33 386) with median 96 boost; 91% lead to a goal within 3.5 s.
+
+Kickoffs vs Galactus are still a strength. ST34 won 159/200 kickoffs (79.5%; lost 19, neutral 22), vs ST25 148/200 (74.0%; lost 30, neutral 22) and ST33 155/200 (77.5%; lost 21, neutral 24). Kickoff-window goals (first goal <=6 s) were 4 scored (6% of our 70) and 0 of 130 conceded (0-6 s wr 1.00, n=4). The post-demo share (70%) is the failure mode, not kickoffs.
+
+Lesson: cutting `face_ball` 1.0 -> 0.1 and taking it off the zero-sum path gave no gain. Head-to-head fell to 47.8, the Galactus demo hole got worse (post-demo 62% -> 70%, demos on us 115 -> 136, 200-game wr 38.5% -> 35.0%), and the bot is still parked on the ground near our goal with ~96 boost as Galactus closes from ~2.5k uu. Drop the `face_ball` reduction; do not carry `st34.toml` into ST36. A later defensive-alignment term has to move that posture, not pay us for sitting even closer to the net.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
