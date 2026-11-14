@@ -5,6 +5,20 @@
 
 Indonesian Coconut is a 1v1 Rocket League bot trained with PPO on a discrete 90-action lookup table. On this branch it runs on [indococo-ppo](https://github.com/SentientPlatypus/indococo-ppo), a Rust stack built on RocketSim and Burn. It rewards goals, ball velocity toward goal, aerial touches/distance, flip resets, air dribble bumps, demos, boost management, and possession, and trains with self-play against a league of frozen past checkpoints and ported public bots (FR4, Galactus, Megabyte and others), in 1B-step stages with mid-evals every 50M steps, keep-best promotion, and cosine LR decay. indococo-ppo trains about 1.7x faster than upstream rlgymppo_rs (40.8k → 70.1k steps/s on one L4 with TF32 + bf16 critic; see [its benchmark](https://github.com/SentientPlatypus/indococo-ppo#speedup-at-a-glance)).
 
+## Positioning
+
+![ST25 vs Ripple v1.1 arena heatmap](indococo_ppo_bot/docs/figures/positions/arena_broadcast_ripple.png)
+
+ST25's positioning vs Ripple v1.1, shown in the 3D Soccar arena. An [interactive 3D arena heatmap](indococo_ppo_bot/docs/figures/positions/arena_heatmap.html) is also available.
+
+![ST25 top-down position density vs Galactus and Ripple v1.1](indococo_ppo_bot/docs/figures/positions/positions_topdown.png)
+
+ST25's top-down position density vs Galactus and Ripple v1.1: us, the opponent, and us while the opponent attacks.
+
+![ST25 height profile vs Galactus and Ripple v1.1](indococo_ppo_bot/docs/figures/positions/positions_height.png)
+
+ST25's side-view height profile vs Galactus and Ripple v1.1, with time spent in each height band.
+
 See the following table for benchmark matches.
 
 ## Bots beaten
