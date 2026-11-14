@@ -16,6 +16,7 @@
 //! indococo-train megabyte-logits <megabyte_dir> <obs.jsonl>    # Rust Megabyte logits for parity check
 //! indococo-train ripple-h2h <ckpt> <ripple_dir> <games> [threads]  # Rust Ripple h2h (CPU)
 //! indococo-train ripple-dump <ripple_dir> <steps> <out.jsonl>  # Dump Ripple tensors for Python parity
+//! INDOCOCO_OBS_TEAM=1 indococo-train widen-team <1v1_ckpt> <dst_ckpt>  # TM1 warm start (actor+critic)
 //! ```
 
 use std::collections::BTreeMap;
@@ -101,6 +102,32 @@ struct TrainConfig {
     /// `indococo_bot::pfsp`.
     #[serde(default)]
     pfsp: Option<indococo_bot::pfsp::PfspConfig>,
+    /// TM1 team training (2v2 / 3v3): mode mix and obs slot shuffle.
+    #[serde(default)]
+    team: Option<TeamTrainConfig>,
+}
+
+/// `[team]` of the train config.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TeamTrainConfig {
+    /// Share of collected EXPERIENCE per cars-per-team, e.g.
+    /// `{ "1" = 0.25, "2" = 0.40, "3" = 0.35 }` (arenas are split by
+    /// share / cars, see `env::set_mode_mix`). Empty = INDOCOCO_TEAM_SIZE for
+    /// every arena. Needs the team-ext obs (INDOCOCO_OBS_TEAM=1) when it
+    /// mixes sizes.
+    mode_mix: BTreeMap<String, f64>,
+    /// Per-episode random slot order within allies and opponents.
+    obs_shuffle: bool,
+}
+
+impl Default for TeamTrainConfig {
+    fn default() -> Self {
+        Self {
+            mode_mix: BTreeMap::new(),
+            obs_shuffle: true,
+        }
+    }
 }
 
 /// Device for the Galactus and Megabyte forwards.
@@ -493,6 +520,28 @@ fn train_cfg(cfg: TrainConfig) {
     let fixed = load_fixed_opponents(&cfg.opponents, &dev);
     let external = load_external_opponents(&cfg.opponents, &dev, cfg.league_bots_device);
     install_pfsp(&cfg, &fixed, &external);
+    // TM1: rewards read the learner step (team-spirit schedule).
+    indococo_bot::team::set_step_source(rlgymppo::cumulative_steps);
+    if let Some(t) = &cfg.team {
+        indococo_bot::obs::set_obs_shuffle(t.obs_shuffle && indococo_bot::obs::obs_team());
+        if !t.mode_mix.is_empty() {
+            let mix: Vec<(usize, f64)> = t
+                .mode_mix
+                .iter()
+                .map(|(k, &p)| (k.parse().unwrap_or_else(|_| panic!("[team] mode_mix key {k:?}")), p))
+                .filter(|&(_, p)| p > 0.0)
+                .collect();
+            let sizes: std::collections::BTreeSet<usize> = mix.iter().map(|m| m.0).collect();
+            assert!(
+                sizes.len() <= 1 || indococo_bot::obs::obs_team(),
+                "[team] mode_mix mixes team sizes: needs INDOCOCO_OBS_TEAM=1 (fixed-width obs)"
+            );
+            indococo_bot::env::set_mode_mix(&mix);
+            println!("TEAM mode_mix (experience share) {mix:?}, obs_team {}, shuffle {}", indococo_bot::obs::obs_team(), indococo_bot::obs::obs_shuffle());
+        } else {
+            println!("TEAM team_size {}, obs_team {}, shuffle {}", indococo_bot::obs::team_size(), indococo_bot::obs::obs_team(), indococo_bot::obs::obs_shuffle());
+        }
+    }
     for phase in plan_phases(&cfg, checkpoint_steps(&cfg.checkpoints)) {
         println!(
             "PHASE policy_lr={} iterations={:?}",
@@ -500,7 +549,7 @@ fn train_cfg(cfg: TrainConfig) {
         );
         let (rewards, setters) = (rewards.clone(), cfg.state_setters.clone());
         let mut learner = learner_config(&cfg, phase, dev.clone(), fixed.clone(), external.clone()).init(
-            move |_| create_env(&rewards, &setters),
+            move |id| indococo_bot::env::create_env_for_game(&rewards, &setters, id),
             default_adamw_optimizer(),
         );
         learner.load();
@@ -896,6 +945,24 @@ fn load_net_any(path: &Path, kind: NetKind, dev: &Device) -> Result<Net, String>
     if width == obs_size() {
         return pick(new_model(dev)).try_load_file(path).map_err(|e| format!("{e:?}"));
     }
+    // TM1: a 106-wide 1v1 net in a team-ext process (league opponents,
+    // warm starts): columns mapped onto the team layout, zero elsewhere.
+    let one = indococo_bot::obs::ext_obs_size_for(1);
+    if indococo_bot::obs::obs_team() && width == one {
+        let legacy = pick(model_with_input(one, dev)).try_load_file(path).map_err(|e| format!("{e:?}"))?;
+        let mut st = SafetensorsStore::from_bytes(None);
+        legacy.save_into(&mut st).map_err(|e| format!("{e:?}"))?;
+        let bytes = remap_safetensors(
+            &st.get_bytes().map_err(|e| format!("{e:?}"))?,
+            one,
+            obs_size(),
+            indococo_bot::obs::team_col_of_1v1,
+        );
+        let mut st = SafetensorsStore::from_bytes(Some(bytes));
+        let mut net = pick(new_model(dev));
+        net.load_from(&mut st).map_err(|e| format!("{e:?}"))?;
+        return Ok(net);
+    }
     if width != base_obs_size() {
         return Err(format!("{}: input width {width}, this process uses {}", path.display(), obs_size()));
     }
@@ -948,6 +1015,125 @@ fn widen_safetensors(bytes: &[u8], from: usize, to: usize) -> Vec<u8> {
     out.extend(h);
     out.extend(out_data);
     out
+}
+
+/// Rewrites `linear_layers.0.weight` (`[from, out]`, f32 row-major) as
+/// `[to, out]`: input row `k` moves to row `map(k)`, all other rows zero.
+fn remap_safetensors(bytes: &[u8], from: usize, to: usize, map: fn(usize) -> usize) -> Vec<u8> {
+    let n = u64::from_le_bytes(bytes[..8].try_into().expect("header len")) as usize;
+    let header: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&bytes[8..8 + n]).expect("safetensors header");
+    let data = &bytes[8 + n..];
+    let mut keys: Vec<(String, serde_json::Value)> = header.into_iter().collect();
+    keys.sort_by_key(|(k, v)| if k == "__metadata__" { 0 } else { v["data_offsets"][0].as_u64().unwrap_or(0) + 1 });
+    let mut out_header = serde_json::Map::new();
+    let mut out_data = Vec::with_capacity(data.len() + to * 4 * 2048);
+    for (k, mut v) in keys {
+        if k == "__metadata__" {
+            out_header.insert(k, v);
+            continue;
+        }
+        let (a, b) = (v["data_offsets"][0].as_u64().unwrap() as usize, v["data_offsets"][1].as_u64().unwrap() as usize);
+        let start = out_data.len();
+        if k == "linear_layers.0.weight" {
+            let shape: Vec<usize> = v["shape"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect();
+            assert_eq!(shape[0], from, "{k} shape {shape:?}");
+            assert_eq!(v["dtype"], "F32");
+            let row = shape[1] * 4;
+            let src = &data[a..b];
+            let mut w = vec![0u8; to * row];
+            for r in 0..from {
+                let d = map(r);
+                assert!(d < to, "remap row {r} -> {d} out of {to}");
+                w[d * row..(d + 1) * row].copy_from_slice(&src[r * row..(r + 1) * row]);
+            }
+            out_data.extend_from_slice(&w);
+            v["shape"] = serde_json::json!([to, shape[1]]);
+        } else {
+            out_data.extend_from_slice(&data[a..b]);
+        }
+        v["data_offsets"] = serde_json::json!([start, out_data.len()]);
+        out_header.insert(k, v);
+    }
+    let mut h = serde_json::to_vec(&out_header).expect("header");
+    while h.len() % 8 != 0 {
+        h.push(b' ');
+    }
+    let mut out = (h.len() as u64).to_le_bytes().to_vec();
+    out.extend(h);
+    out.extend(out_data);
+    out
+}
+
+/// `widen-team <src_ck> <dst_ck>` (INDOCOCO_OBS_TEAM=1): a team-ext
+/// checkpoint from a 106-wide 1v1 one. Actor AND critic first layers are
+/// remapped ([`indococo_bot::obs::team_col_of_1v1`]), new columns zero, so
+/// the critic keeps its 1v1 values (still run the critic warm-up: team
+/// returns differ). stats.toml copied. Verifies on 1v1 states that the
+/// widened nets on team-ext obs equal the source nets on the 1v1 obs, and
+/// prints the logit change on 2v2/3v3 states (teammates are unseen at step 0).
+fn widen_team(src: &Path, dst: &Path) {
+    assert!(indococo_bot::obs::obs_team(), "widen-team needs INDOCOCO_OBS_TEAM=1");
+    init_from_default(true).expect("load collision meshes");
+    let dev = Device::flex();
+    std::fs::create_dir_all(dst).expect("create dst");
+    let one = indococo_bot::obs::ext_obs_size_for(1);
+    let actor = load_net_any(&src.join("actor.bpk"), NetKind::Actor, &dev).expect("actor");
+    let critic = load_net_any(&src.join("critic.bpk"), NetKind::Critic, &dev).expect("critic");
+    actor.clone().save_file(dst.join("actor.bpk")).expect("save actor");
+    critic.clone().save_file(dst.join("critic.bpk")).expect("save critic");
+    std::fs::copy(src.join("stats.toml"), dst.join("stats.toml")).expect("copy stats");
+    let base_actor = model_with_input(one, &dev).actor.try_load_file(src.join("actor.bpk")).expect("src actor");
+    let base_critic = model_with_input(one, &dev).critic.try_load_file(src.join("critic.bpk")).expect("src critic");
+    let re_actor = load_net_any(&dst.join("actor.bpk"), NetKind::Actor, &dev).expect("reload actor");
+    let mut report = serde_json::Map::new();
+    for per_team in 1..=3usize {
+        let mut env = indococo_bot::env::create_env_sized(&RewardConfig::default(), &default_mix(), per_team);
+        let mut rng = SmallRng::seed_from_u64(11 + per_team as u64);
+        let (mut state, mut obs, _) = env.reset();
+        let (mut team_rows, mut one_rows) = (Vec::new(), Vec::new());
+        for _ in 0..256 {
+            let order = indococo_bot::obs::pad_order(&state);
+            for (i, o) in obs.iter().enumerate() {
+                team_rows.extend_from_slice(o);
+                // The 1v1 obs of the same car: own car + FIRST opponent only.
+                let mut b = indococo_bot::obs::build_head(&state, i, &order);
+                let t = state.cars[i].0.team;
+                let opp = (0..state.cars.len()).find(|&j| state.cars[j].0.team != t).expect("opponent");
+                let mut two = state.clone();
+                two.cars = vec![state.cars[i].clone(), state.cars[opp].clone()];
+                let full = indococo_bot::obs::build_one(&two, 0, &order);
+                b.extend_from_slice(&full[72..92]);
+                let e = indococo_bot::obs::ext_features(&b, indococo_bot::obs::prev_action(&state.cars[i].1));
+                b.extend(e);
+                one_rows.extend(b);
+            }
+            let actions: Vec<usize> = obs.iter().map(|_| rng.random_range(0..N_ACTIONS)).collect();
+            let res = env.step(&state, &actions);
+            (state, obs) = (res.state, res.obs);
+            if res.is_terminal || res.truncated {
+                let (s, o, _) = env.reset();
+                (state, obs) = (s, o);
+            }
+        }
+        let n = team_rows.len() / obs_size();
+        let xt = Tensor::<2>::from_data(TensorData::new(team_rows, [n, obs_size()]), &dev);
+        let xo = Tensor::<2>::from_data(TensorData::new(one_rows, [n, one]), &dev);
+        let maxdiff = |a: Tensor<2>, b: Tensor<2>| -> f32 {
+            (a - b).abs().max().into_data().try_to_vec::<f32>().expect("diff")[0]
+        };
+        report.insert(
+            format!("{per_team}v{per_team}"),
+            serde_json::json!({
+                "rows": n,
+                "actor_max_abs_logit_diff": maxdiff(actor.forward(xt.clone()), base_actor.forward(xo.clone())),
+                "reloaded_actor_max_abs_logit_diff": maxdiff(re_actor.forward(xt.clone()), base_actor.forward(xo.clone())),
+                "critic_max_abs_value_diff": maxdiff(critic.forward(xt), base_critic.forward(xo)),
+            }),
+        );
+    }
+    report.insert("dst".into(), serde_json::json!(dst));
+    println!("WIDEN_TEAM {}", serde_json::Value::Object(report));
 }
 
 /// `widen <src_ck> <dst_ck>`: an FR8 (extended obs) checkpoint from a
@@ -1210,6 +1396,7 @@ fn main() {
         "normal-obs" => bc_cli::normal_obs(&args[1..]),
         "import" => import(Path::new(arg(1)), Path::new(arg(2))),
         "widen" => widen(Path::new(arg(1)), Path::new(arg(2))),
+        "widen-team" => widen_team(Path::new(arg(1)), Path::new(arg(2))),
         "export" => export(Path::new(arg(1)), Path::new(arg(2))),
         "record" => record(
             Path::new(arg(1)),
@@ -1577,12 +1764,12 @@ fn megabyte_worker(mix: &[WeightedSetter], ckpt: &Path, mdir: &Path, games: usiz
         G { env, state, obs, a_team: (k % 2) as u8, live }
     };
     let mut g: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
-    let mut mb_obs: Vec<f32> = vec![0.0; ENVS * mx::OBS_SIZE];
-    let mut mb_mask: Vec<bool> = vec![false; ENVS * mx::N_ACTIONS];
+    let mut mb_obs: Vec<f32> = Vec::new();
+    let mut mb_mask: Vec<bool> = Vec::new();
     loop {
         let live = g.iter().filter(|e| e.live).count();
         if live == 0 { break; }
-        // Get candidate actions (greedy)
+        // Candidate actions (greedy), one per candidate car (all team sizes).
         let mut oa = Vec::new();
         for e in g.iter().filter(|e| e.live) {
             for (i, (info, _)) in e.state.cars.iter().enumerate() {
@@ -1593,36 +1780,39 @@ fn megabyte_worker(mix: &[WeightedSetter], ckpt: &Path, mdir: &Path, games: usiz
         }
         let aa = argmax_actions(&na, &oa, &dev);
         let mut ia = 0;
-        // Build Megabyte obs and get actions for opponent cars
+        // TM1: Megabyte drives EVERY car of the other team (was: only the first).
+        let mut rows = 0usize;
+        mb_obs.clear();
+        mb_mask.clear();
         for k in 0..ENVS {
             if !g[k].live { continue; }
-            let off = k * mx::OBS_SIZE;
-            let moff = k * mx::N_ACTIONS;
-            // Find Megabyte's car (the one NOT on a_team)
             for (i, (info, _)) in g[k].state.cars.iter().enumerate() {
                 if info.team as u8 != g[k].a_team {
+                    let (off, moff) = (mb_obs.len(), mb_mask.len());
+                    mb_obs.resize(off + mx::OBS_SIZE, 0.0);
+                    mb_mask.resize(moff + mx::N_ACTIONS, false);
                     mb.build(&g[k].state, i, &mut mb_obs[off..off + mx::OBS_SIZE], &mut mb_mask[moff..moff + mx::N_ACTIONS]);
-                    break;
+                    rows += 1;
                 }
             }
         }
-        let mb_acts = mb.infer(&mb_obs, &mb_mask, ENVS);
+        let mb_acts = mb.infer(&mb_obs, &mb_mask, rows);
+        let mut im = 0;
         // Step environments with action delay protocol
         for k in 0..ENVS {
             if !g[k].live { continue; }
             let e = &mut g[k];
-            let a_act = aa[ia];
-            ia += 1;
-            let mb_act = mb_acts[k];
-            // Build acts array in game order (blue first, orange second)
+            // Build acts array in game order
             let mut acts = Vec::new();
             let mut ext = Vec::new();  // (car_idx, held_controls, new_controls)
             for (i, (info, car)) in e.state.cars.iter().enumerate() {
                 if info.team as u8 == e.a_team {
-                    acts.push(a_act);
+                    acts.push(aa[ia]);
+                    ia += 1;
                 } else {
                     acts.push(0);  // placeholder
-                    ext.push((i, car.controls, mx::controls_of(mb_act)));
+                    ext.push((i, car.controls, mx::controls_of(mb_acts[im])));
+                    im += 1;
                 }
             }
             // Apply candidate actions
@@ -1957,6 +2147,9 @@ fn snapshots(setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize, out
 /// (draw). Also counts flip resets and their goalward uses per side (all cars),
 /// plus demos-for and demos-against.
 /// Prints one JSON line: wins, losses, draws, win_rate_decisive, resets, demos_against.
+/// `h2h` counters: 9 classic + TM1 team counters (see `h2h`).
+const N_H2H: usize = 25;
+
 fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
     init_from_default(true).expect("load collision meshes");
     let mix = vec![WeightedSetter { opp_weights: Default::default(),
@@ -1964,7 +2157,7 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
         kind: indococo_bot::setters::SetterKind::Kickoff,
     }];
     let per = games.div_ceil(threads);
-    let res: Vec<[u64; 9]> = std::thread::scope(|s| {
+    let res: Vec<[u64; N_H2H]> = std::thread::scope(|s| {
         let hs: Vec<_> = (0..threads)
             .map(|t| {
                 let mix = &mix;
@@ -1973,29 +2166,45 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
             .collect();
         hs.into_iter().map(|h| h.join().expect("worker")).collect()
     });
-    let mut tot = [0u64; 9];
+    let mut tot = [0u64; N_H2H];
     for r in &res {
-        for i in 0..9 {
+        for i in 0..N_H2H {
             tot[i] += r[i];
         }
     }
-    let [w, l, d, ra, rb, ua, ub, da, db] = tot;
-    let out = serde_json::json!({
+    let [w, l, d, ra, rb, ua, ub, da, db] = <[u64; 9]>::try_from(&tot[..9]).expect("9");
+    let mut out = serde_json::json!({
         "a": a, "b": b, "team_size": indococo_bot::obs::team_size(),
         "games": w + l + d, "wins": w, "losses": l, "draws": d,
         "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
         "resets_a": ra, "resets_b": rb, "uses_a": ua, "uses_b": ub,
         "demos_against_a": da, "demos_against_b": db,
     });
+    // TM1 team metrics (team modes only): per side a / b.
+    if indococo_bot::obs::team_size() > 1 {
+        let steps = tot[19].max(1) as f64;
+        let mins = steps / (120.0 / 8.0 * 60.0);
+        let side = |k: usize| serde_json::json!({
+            "passes_per_min": tot[9 + k] as f64 / mins,
+            "aerial_passes_per_min": tot[11 + k] as f64 / mins,
+            "double_taps": tot[13 + k],
+            "air_double_touches_per_min": tot[15 + k] as f64 / mins,
+            "double_commit_ratio": tot[17 + k] as f64 / steps,
+            "kickoff_duplicate_share": tot[20 + k] as f64 / tot[22].max(1) as f64,
+            "last_man_back_ratio": tot[23 + k] as f64 / steps,
+            "flip_resets_per_game": ([ra, rb][k] as f64) / ((w + l + d).max(1) as f64),
+        });
+        out["team"] = serde_json::json!({"a": side(0), "b": side(1), "steps": tot[19], "kickoffs": tot[22]});
+    }
     println!("{out}");
 }
 
-fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u64) -> [u64; 9] {
+fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u64) -> [u64; N_H2H] {
     const ENVS: usize = 8;
     let dev = Device::flex();
     let (na, nb) = (load_actor(a, &dev), load_actor(b, &dev));
     let mut rng = SmallRng::seed_from_u64(seed);
-    let mut out = [0u64; 9];
+    let mut out = [0u64; N_H2H];
     let mut started = 0usize;
     struct G {
         env: BotEnv,
@@ -2004,6 +2213,7 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
         prev: StateView,
         a_team: u8,
         uses: FlipResetUse,
+        touches: indococo_bot::team::TouchTracker,
         live: bool,
     }
     let mut new_game = |k: usize, started: &mut usize| -> G {
@@ -2017,9 +2227,11 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
             ..FlipResetUseParams::default()
         });
         uses.reset(&prev);
+        let mut touches = indococo_bot::team::TouchTracker::default();
+        touches.reset(&prev);
         let live = *started < games;
         *started += 1;
-        G { env, state, obs, prev, a_team: (k % 2) as u8, uses, live }
+        G { env, state, obs, prev, a_team: (k % 2) as u8, uses, touches, live }
     };
     let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
     while gs.iter().any(|g| g.live) {
@@ -2056,6 +2268,35 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
                 if events[i].demoed {
                     out[7 + side] += 1;
                 }
+            }
+            if view.cars.len() > 2 {
+                let te = g.touches.step(&view);
+                let sd = |car: usize| usize::from(view.cars[car].team != g.a_team);
+                for p in &te.passes {
+                    out[9 + sd(p.receiver)] += 1;
+                    if p.aerial {
+                        out[11 + sd(p.receiver)] += 1;
+                    }
+                }
+                if let Some((scorer, _)) = te.double_tap {
+                    out[13 + sd(scorer)] += 1;
+                }
+                for &c in &te.air_doubles {
+                    out[15 + sd(c)] += 1;
+                }
+                if te.kickoff_touched {
+                    out[22] += 1;
+                    if let Some(t) = te.kickoff_duplicate {
+                        out[20 + usize::from(t != g.a_team)] += 1;
+                    }
+                }
+                for (k, team) in [g.a_team, 1 - g.a_team].into_iter().enumerate() {
+                    let near = view.cars.iter().filter(|c| c.team == team && !c.is_demoed() && c.pos.distance(view.ball.pos) < 500.0).count();
+                    out[17 + k] += u64::from(near >= 2);
+                    let back = view.cars.iter().any(|c| c.team == team && !c.is_demoed() && c.attack_sign() * (c.pos.y - view.ball.pos.y) < 0.0);
+                    out[23 + k] += u64::from(back);
+                }
+                out[19] += 1;
             }
             let done = res.is_terminal || res.truncated;
             if done {

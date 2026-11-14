@@ -30,6 +30,8 @@ pub mod rewards;
 pub mod setters;
 pub mod speed;
 pub mod state;
+pub mod team;
+pub mod team_setters;
 
 /// Collection-thread CUDA stream used when `async_collect` is on.
 /// Registered with `rlgymppo::set_collect_stream_hook`.

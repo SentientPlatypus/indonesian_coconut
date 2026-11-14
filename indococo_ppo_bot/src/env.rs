@@ -40,6 +40,9 @@ pub struct SharedInfo {
     /// ST35 PFSP: which rollout drives this episode and whether its goal
     /// counts for that rollout's opponent ([`crate::pfsp::EpisodeTracker`]).
     pfsp: crate::pfsp::EpisodeTracker,
+    /// TM1 team metrics (`Team/*`), only with more than one car per team.
+    team: crate::team::TouchTracker,
+    prev_view: Option<StateView>,
 }
 
 impl Default for SharedInfo {
@@ -58,6 +61,8 @@ impl From<u64> for SharedInfo {
             setter: "",
             attempt: None,
             pfsp: crate::pfsp::EpisodeTracker::default(),
+            team: crate::team::TouchTracker::default(),
+            prev_view: None,
         }
     }
 }
@@ -66,6 +71,10 @@ impl SharedInfoProvider for SharedInfo {
     fn reset(&mut self, state: &GameState) {
         self.resets.reset(state);
         self.events.reset(StateView::from_game_state(state));
+        self.prev_view = None;
+        if state.cars.len() > 2 {
+            self.team.reset(&StateView::from_game_state(state));
+        }
         if crate::pfsp::enabled() {
             self.pfsp.reset(crate::setters::rollout_seq());
         }
@@ -119,6 +128,7 @@ impl SharedInfo {
     fn count_events(&mut self, gs: &GameState) {
         let per_min = |hit: bool| AvgTracker::from(if hit { STEPS_PER_MINUTE } else { 0.0 });
         let view = self.view(gs);
+        let team_view = (gs.cars.len() > 2).then(|| view.clone());
         for e in self.events.step(view) {
             self.metrics["Events/Has Flip Ratio"] += AvgTracker::from(e.has_flip);
             self.metrics["Events/Flip Resets per min"] += per_min(e.flip_reset);
@@ -133,6 +143,60 @@ impl SharedInfo {
             self.metrics["Events/Goals per min"] += per_min(e.goal);
             self.metrics["Events/Aerial Goals per min"] += per_min(e.aerial_goal);
         }
+        if let Some(v) = team_view {
+            self.count_team(&v);
+        }
+    }
+
+    /// `Team/*` (team modes): per game-minute counts and per-step ratios,
+    /// also split by mode (`@2v2`, `@3v3`).
+    fn count_team(&mut self, view: &StateView) {
+        let per_min = |n: usize| n as f64 * STEPS_PER_MINUTE;
+        let mode = format!("@{0}v{0}", view.cars.len() / 2);
+        let ev = self.team.step(view);
+        let put = |m: &mut Report, key: &str, v: f64| {
+            m[key] += AvgTracker::from(v);
+            m[format!("{key} {mode}").as_str()] += AvgTracker::from(v);
+        };
+        let b = |x: bool| if x { 1.0 } else { 0.0 };
+        let aerial = ev.passes.iter().filter(|p| p.aerial).count();
+        put(&mut self.metrics, "Team/Passes per game-min", per_min(ev.passes.len()));
+        put(&mut self.metrics, "Team/Aerial passes per game-min", per_min(aerial));
+        put(&mut self.metrics, "Team/Giveaways per game-min", per_min(ev.giveaways.len()));
+        put(&mut self.metrics, "Team/Air double touches per game-min", per_min(ev.air_doubles.len()));
+        put(&mut self.metrics, "Team/Double taps per game-min", per_min(usize::from(ev.double_tap.is_some())));
+        if ev.kickoff_touched {
+            put(&mut self.metrics, "Team/Kickoff duplicate share", b(ev.kickoff_duplicate.is_some()));
+        }
+        // Double commit: 2+ teammates within 500 uu of the ball.
+        let mut bumps = 0;
+        for team in [0u8, 1u8] {
+            let near = view
+                .cars
+                .iter()
+                .filter(|c| c.team == team && !c.is_demoed() && c.pos.distance(view.ball.pos) < 500.0)
+                .count();
+            put(&mut self.metrics, "Team/Double commit ratio", b(near >= 2));
+            // Someone goal-side of the ball (between it and the own goal).
+            let back = view.cars.iter().any(|c| {
+                c.team == team && !c.is_demoed() && c.attack_sign() * (c.pos.y - view.ball.pos.y) < 0.0
+            });
+            put(&mut self.metrics, "Team/Last man back ratio", b(back));
+        }
+        if let Some(prev) = &self.prev_view {
+            for (i, c) in view.cars.iter().enumerate() {
+                if let Some(v) = c.bump_victim {
+                    let new = prev.cars.get(i).is_some_and(|p| p.bump_victim != Some(v));
+                    if new && view.cars.get(v).is_some_and(|o| o.team == c.team) {
+                        bumps += 1;
+                    }
+                }
+            }
+        }
+        put(&mut self.metrics, "Team/Teammate bumps per game-min", per_min(bumps));
+        let resets = view.cars.iter().filter(|c| c.tick_flip_reset == Some(true)).count();
+        put(&mut self.metrics, "Team/Flip resets per game-min", per_min(resets));
+        self.prev_view = Some(view.clone());
     }
 }
 
@@ -245,17 +309,70 @@ pub type BotEnv = Env<
 /// (see [`crate::setters`]; [`crate::setters::default_mix`] is the old fixed one).
 #[must_use]
 pub fn create_env(rewards: &RewardConfig, setters: &[WeightedSetter]) -> BotEnv {
+    create_env_sized(rewards, setters, crate::obs::team_size())
+}
+
+/// TM1 mixed team sizes: per-arena cars per team, set once by the trainer
+/// (`[team] mode_mix`). Empty = every arena uses [`crate::obs::team_size`].
+static MODE_MIX: std::sync::OnceLock<Vec<(usize, f64)>> = std::sync::OnceLock::new();
+
+/// Installs the mode mix as `(cars per team, share of EXPERIENCE)`. Arenas
+/// are split in proportion to `share / cars per team`, so each mode gets
+/// its share of the collected steps. Returns false if already set.
+pub fn set_mode_mix(mix: &[(usize, f64)]) -> bool {
+    let total: f64 = mix.iter().map(|&(k, p)| p / k as f64).sum();
+    assert!(total > 0.0, "mode_mix: no positive share");
+    let arenas: Vec<(usize, f64)> = mix
+        .iter()
+        .map(|&(k, p)| {
+            assert!((1..=3).contains(&k), "mode_mix: team size {k}");
+            (k, p / k as f64 / total)
+        })
+        .collect();
+    MODE_MIX.set(arenas).is_ok()
+}
+
+/// Cars per team for game `id` under the mode mix: a low-discrepancy
+/// (golden ratio) draw over the arena shares, so any block of games is
+/// close to the mix. `None` id or no mix: [`crate::obs::team_size`].
+#[must_use]
+pub fn team_size_for_game(id: Option<usize>) -> usize {
+    match (MODE_MIX.get(), id) {
+        (Some(mix), Some(g)) if !mix.is_empty() => {
+            let u = ((g as f64 + 0.5) * 0.618_033_988_749_895).fract();
+            let mut acc = 0.0;
+            for &(k, a) in mix {
+                acc += a;
+                if u < acc {
+                    return k;
+                }
+            }
+            mix.last().map_or(1, |m| m.0)
+        }
+        _ => crate::obs::team_size(),
+    }
+}
+
+/// [`create_env`] for game `id` of a collector pool (mode mix aware).
+#[must_use]
+pub fn create_env_for_game(rewards: &RewardConfig, setters: &[WeightedSetter], id: Option<usize>) -> BotEnv {
+    create_env_sized(rewards, setters, team_size_for_game(id))
+}
+
+/// An arena with `per_team` cars per team.
+#[must_use]
+pub fn create_env_sized(rewards: &RewardConfig, setters: &[WeightedSetter], per_team: usize) -> BotEnv {
     let mut arena = Arena::new(GameMode::Soccar);
     // Blue, Orange, Blue, Orange...: cars 0 and 1 stay one blue and one
     // orange, as the 1v1 setters (replay, mirrors) expect.
-    for _ in 0..crate::obs::team_size() {
+    for _ in 0..per_team {
         arena.add_car(Team::Blue, CarBodyConfig::OCTANE);
         arena.add_car(Team::Orange, CarBodyConfig::OCTANE);
     }
     Env::new(
         arena,
         build_mix(setters),
-        V2DefaultObs,
+        V2DefaultObs::default(),
         LookupNoMask::default(),
         rewards.build(),
         any_terminal![OnGoalCondition, GameEndedCondition<GAME_TICKS>],

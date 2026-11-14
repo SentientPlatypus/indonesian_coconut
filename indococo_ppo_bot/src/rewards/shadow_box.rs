@@ -54,6 +54,11 @@ pub struct ShadowBoxParams {
     pub speed_floor: f64,
     /// Own goal line `|y|` (the line used by `diag_gal`, 5120).
     pub goal_line_y: f64,
+    /// TM1: in team modes, only the team's last-back car (closest to its
+    /// own goal line among living teammates) can have the gate on, so one
+    /// defender shadows and the others are free to rotate or challenge.
+    /// No effect with one car per team. Default off (ST36 behaviour).
+    pub team_last_back: bool,
 }
 
 impl Default for ShadowBoxParams {
@@ -72,6 +77,7 @@ impl Default for ShadowBoxParams {
             speed_ref: 800.0,
             speed_floor: 0.3,
             goal_line_y: BACK_WALL_Y,
+            team_last_back: false,
         }
     }
 }
@@ -113,6 +119,18 @@ impl ShadowBox {
         let toward = state.ball.vel.dot(unit(own - ball));
         if toward <= self.p.threat_speed_min {
             return false;
+        }
+        if self.p.team_last_back {
+            let me = car.attack_sign() * car.pos.y;
+            let behind = state.cars.iter().any(|o| {
+                o.team == car.team
+                    && !o.is_demoed()
+                    && !std::ptr::eq(o, car)
+                    && o.attack_sign() * o.pos.y < me
+            });
+            if behind {
+                return false;
+            }
         }
         let d_me = (car.pos - ball).length();
         state

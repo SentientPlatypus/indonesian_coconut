@@ -128,6 +128,15 @@ pub enum SetterKind {
     /// Mid air dribble, with the other car on a wall between the ball and
     /// that car's own goal, ready to jump off and challenge.
     AirDribbleWallChallenge(AirDribbleWallChallenge),
+    /// TM1: open play with one car per team near the ball and the others
+    /// at support / last-back spots (`crate::team_setters`).
+    TeamPlay(crate::team_setters::TeamPlay),
+    /// TM1: aerial pass setup: a passer airborne near a high ball on the
+    /// wing, a teammate positioned to receive in front of the goal.
+    AerialPass(crate::team_setters::AerialPass),
+    /// TM1: backboard double-tap setup: ball flying at the opponent
+    /// backboard, an attacker airborne behind it.
+    BackboardDoubleTap(crate::team_setters::BackboardDoubleTap),
 }
 
 impl SetterKind {
@@ -146,7 +155,24 @@ impl SetterKind {
             Self::AerialDefense(_) => "aerial_defense",
             Self::DemoThreat(_) => "demo_threat",
             Self::AirDribbleWallChallenge(_) => "air_dribble_wall_challenge",
+            Self::TeamPlay(_) => "team_play",
+            Self::AerialPass(_) => "aerial_pass",
+            Self::BackboardDoubleTap(_) => "backboard_double_tap",
         }
+    }
+
+    /// TM1: the setter positions only cars 0 and 1, so in team modes
+    /// [`SetterMix`] moves cars 2.. to support spots afterwards.
+    #[must_use]
+    pub fn two_car_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Replay(_)
+                | Self::ResetReplay(_)
+                | Self::AerialDefense(_)
+                | Self::DemoThreat(_)
+                | Self::AirDribbleWallChallenge(_)
+        )
     }
 }
 
@@ -187,6 +213,8 @@ pub trait SetterLog {
 /// The weighted setter mix. Entries with weight 0 are dropped.
 pub struct SetterMix<SI> {
     setters: Vec<Box<dyn StateSetter<SI> + Send>>,
+    /// Per setter: positions only cars 0 and 1 ([`SetterKind::two_car_only`]).
+    two_car: Vec<bool>,
     labels: Vec<&'static str>,
     /// Distinct labels, for the metrics.
     distinct: Vec<&'static str>,
@@ -233,6 +261,11 @@ impl<SI: SharedInfoRng + SetterLog + CurriculumLog> StateSetter<SI> for SetterMi
             shared_info.record_opponent_mix(cond.map(|j| self.by_opponent[j].0.as_str()), self.labels[i]);
         }
         self.setters[i].apply(arena, shared_info);
+        // TM1: extra cars of 2v2/3v3 to support spots (never in 1v1: the
+        // draw happens only with more than 2 cars, so 1v1 RNG is unchanged).
+        if self.two_car[i] && arena.num_cars() > 2 {
+            crate::team_setters::place_support_cars(arena, shared_info.rng(), 2);
+        }
     }
 }
 
@@ -290,6 +323,7 @@ pub fn build_mix<SI: SharedInfoRng + SetterLog + CurriculumLog + 'static>(
         .collect();
     SetterMix {
         setters: used.iter().map(|s| s.kind.build::<SI>()).collect(),
+        two_car: used.iter().map(|s| s.kind.two_car_only()).collect(),
         labels,
         distinct,
         cumulative,
@@ -328,6 +362,9 @@ impl SetterKind {
             Self::AerialDefense(ref s) => Box::new(s.clone()),
             Self::DemoThreat(ref s) => Box::new(s.clone()),
             Self::AirDribbleWallChallenge(ref s) => Box::new(s.clone()),
+            Self::TeamPlay(ref s) => Box::new(s.clone()),
+            Self::AerialPass(ref s) => Box::new(s.clone()),
+            Self::BackboardDoubleTap(ref s) => Box::new(s.clone()),
         }
     }
 }
@@ -656,7 +693,10 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AerialDefense {
         let rng = shared_info.rng();
         
         // Pick which car defends (randomize for symmetric training)
-        let defender_idx = rng.random_range(0..arena.num_cars());
+        // Cars 0 (blue) and 1 (orange) play the drill; in team modes the
+        // other cars go to support spots (SetterMix). `min(2)` keeps the
+        // 1v1 RNG draw identical.
+        let defender_idx = rng.random_range(0..arena.num_cars().min(2));
         let attacker_idx = 1 - defender_idx;
         
         // Defended goal: blue goal at (0, -5120, 0) or orange goal at (0, 5120, 0)
@@ -909,7 +949,7 @@ impl DemoThreat {
 }
 
 /// Grounded rotation whose nose is `dir` (xy). Falls back to +y.
-fn face_xy(dir: Vec3A) -> Mat3A {
+pub(crate) fn face_xy(dir: Vec3A) -> Mat3A {
     let mut flat = Vec3A::new(dir.x, dir.y, 0.0);
     if flat.length_squared() < 1e-6 {
         flat = Vec3A::Y;
@@ -937,7 +977,7 @@ impl DemoThreat {
         let rng = shared_info.rng();
 
         // Pick which car is targeted (randomize for symmetric training)
-        let target_idx = rng.random_range(0..arena.num_cars());
+        let target_idx = rng.random_range(0..arena.num_cars().min(2));
         let attacker_idx = 1 - target_idx;
 
         // Place ball randomly in the field
@@ -1024,7 +1064,7 @@ impl DemoThreat {
         };
         let rng = shared_info.rng();
 
-        let target_idx = learner_idx.unwrap_or_else(|| rng.random_range(0..arena.num_cars()));
+        let target_idx = learner_idx.unwrap_or_else(|| rng.random_range(0..arena.num_cars().min(2)));
         let attacker_idx = 1 - target_idx;
         // Blue (car 0) defends y = -5120. Orange defends y = +5120.
         let goal_y: f32 = if target_idx == 0 { -BACK_WALL_Y } else { BACK_WALL_Y };

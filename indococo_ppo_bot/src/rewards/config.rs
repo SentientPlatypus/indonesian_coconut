@@ -44,7 +44,12 @@ use super::speed_toward_ball::SpeedTowardBall;
 use super::touch::Touch;
 use super::velocity_ball_to_goal::VelocityBallToGoal;
 use super::wall_pop_setup::WallPopSetup;
+use super::team_rewards::{
+    AirDoubleTouch, ConcedeDist, DoubleCommit, DoubleTap, GateKind, Pass, PassParams, TeamGate,
+    TeammateProximity,
+};
 use super::zero_sum::ZeroSum;
+use crate::team::{DoubleCommitParams, TouchParams};
 use super::{CombinedReward, StepReward, Term};
 
 /// Reads `path` as a TOML table with its `extends` chain merged in.
@@ -127,6 +132,62 @@ pub struct RewardWeights {
     pub flip_reset_use: f64,
     pub reset_align: f64,
     pub shadow_box: f64,
+    // TM1 team terms (built only when non-zero; see `[team]`).
+    pub pass: f64,
+    pub double_tap: f64,
+    pub air_double_touch: f64,
+    pub concede_dist: f64,
+    pub double_commit: f64,
+    pub teammate_proximity: f64,
+}
+
+/// `[team]`: TM1 team-mode settings. All empty / unused by default, so
+/// 1v1 configs build exactly the same reward.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TeamRewardConfig {
+    /// Team spirit schedule `[[step, tau], ...]`, steps relative to
+    /// `spirit_origin` (the run's start step; the team launcher fills it).
+    /// Per car `r_i' = (1 - tau) r_i + tau mean(team r)` for every term not in
+    /// `individual`, applied after the zero-sum wrappers (the same as before
+    /// them: blending within a team keeps the opposing team's mean). Empty =
+    /// off.
+    pub spirit: Vec<[f64; 2]>,
+    pub spirit_origin: f64,
+    /// Terms that stay individual under team spirit.
+    pub individual: Vec<String>,
+    /// Terms paid only to each team's closest car to the ball (anti-ballchase).
+    pub closest_gate: Vec<String>,
+    /// Terms zeroed while the car is double committing.
+    pub no_double_commit_gate: Vec<String>,
+    /// Terms paid only to each team's last-back car (e.g. `recover`: a
+    /// forward player upfield is rotating, not overextended).
+    pub last_back_gate: Vec<String>,
+    pub touch: TouchParams,
+    pub pass: PassParams,
+    pub double_commit: DoubleCommitParams,
+    /// `concede_dist` length scale (Necto 2300).
+    pub concede_scale: f64,
+    /// `teammate_proximity` radius.
+    pub proximity_radius: f64,
+}
+
+impl Default for TeamRewardConfig {
+    fn default() -> Self {
+        Self {
+            spirit: Vec::new(),
+            spirit_origin: 0.0,
+            individual: Vec::new(),
+            closest_gate: Vec::new(),
+            no_double_commit_gate: Vec::new(),
+            last_back_gate: Vec::new(),
+            touch: TouchParams::default(),
+            pass: PassParams::default(),
+            double_commit: DoubleCommitParams::default(),
+            concede_scale: 2300.0,
+            proximity_radius: 800.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -199,6 +260,8 @@ pub struct RewardConfig {
     pub flip_reset_use: FlipResetUseParams,
     pub reset_align: ResetAlignParams,
     pub shadow_box: ShadowBoxParams,
+    /// TM1 team settings (team spirit, gates, pass / double-touch params).
+    pub team: TeamRewardConfig,
     /// `{setter kind: {term: scale}}`: term weights multiplied by `scale` in
     /// episodes started by that setter (e.g. no air dribble reward in
     /// `reset_curriculum` episodes). Unknown term names panic in `build`.
@@ -234,9 +297,29 @@ impl RewardConfig {
     #[must_use]
     pub fn build(&self) -> CombinedReward {
         let w = &self.weights;
+        // TM1 gates go inside the zero-sum wrapper (gate the raw term);
+        // terms without zero-sum are gated in the final mapping below.
+        let tm = &self.team;
+        let gate = |key: &str, r: Box<dyn StepReward>| -> Box<dyn StepReward> {
+            let mut r = r;
+            if tm.closest_gate.iter().any(|k| k == key) {
+                r = Box::new(TeamGate::new(r, GateKind::Closest, tm.double_commit.clone()));
+            }
+            if tm.no_double_commit_gate.iter().any(|k| k == key) {
+                r = Box::new(TeamGate::new(r, GateKind::NotDoubleCommit, tm.double_commit.clone()));
+            }
+            if tm.last_back_gate.iter().any(|k| k == key) {
+                r = Box::new(TeamGate::new(r, GateKind::LastBack, tm.double_commit.clone()));
+            }
+            r
+        };
+        let wrapped = std::cell::RefCell::new(Vec::<String>::new());
         let zs = |key: &str, r: Box<dyn StepReward>| -> Box<dyn StepReward> {
             match self.zero_sum.get(key) {
-                Some(&s) if s > 0.0 => Box::new(ZeroSum::new(r, s)),
+                Some(&s) if s > 0.0 => {
+                    wrapped.borrow_mut().push(key.to_owned());
+                    Box::new(ZeroSum::new(gate(key, r), s))
+                }
                 _ => r,
             }
         };
@@ -370,7 +453,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 6] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 12] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -404,18 +487,53 @@ impl RewardConfig {
                 w.shadow_box,
                 Box::new(ShadowBox::new(self.shadow_box.clone())),
             ),
+            (
+                "pass",
+                w.pass,
+                Box::new(Pass::new(tm.touch.clone(), tm.pass.clone())),
+            ),
+            ("double_tap", w.double_tap, Box::new(DoubleTap::new(tm.touch.clone()))),
+            (
+                "air_double_touch",
+                w.air_double_touch,
+                zs("air_double_touch", Box::new(AirDoubleTouch::new(tm.touch.clone()))),
+            ),
+            ("concede_dist", w.concede_dist, Box::new(ConcedeDist::new(tm.concede_scale))),
+            (
+                "double_commit",
+                w.double_commit,
+                Box::new(DoubleCommit::new(tm.double_commit.clone())),
+            ),
+            (
+                "teammate_proximity",
+                w.teammate_proximity,
+                Box::new(TeammateProximity::new(tm.proximity_radius)),
+            ),
         ];
         terms.extend(
             experiment
                 .into_iter()
                 .filter(|(_, weight, _)| *weight != 0.0),
         );
+        for list in [&tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate] {
+            for key in list {
+                assert!(
+                    terms.iter().any(|(n, _, _)| n == key),
+                    "[team]: unknown or unweighted term {key}"
+                );
+            }
+        }
         let terms: Vec<Term> = terms
             .into_iter()
             .map(|(name, weight, reward)| Term {
                 name,
                 weight,
-                reward,
+                // Gate terms that have no zero-sum wrapper here (zs gated the others).
+                reward: if wrapped.borrow().iter().any(|k| k == name) {
+                    reward
+                } else {
+                    gate(name, reward)
+                },
             })
             .collect();
         let scales = self
@@ -435,7 +553,20 @@ impl RewardConfig {
                 (setter.clone(), per_term)
             })
             .collect();
-        CombinedReward::new(terms).with_setter_scales(scales)
+        let spirit = (!tm.spirit.is_empty()).then(|| super::combined::TeamSpirit {
+            points: tm
+                .spirit
+                .iter()
+                .map(|&[step, tau]| [step + tm.spirit_origin, tau])
+                .collect(),
+            individual: terms
+                .iter()
+                .map(|t| tm.individual.iter().any(|k| k == t.name))
+                .collect(),
+        });
+        CombinedReward::new(terms)
+            .with_setter_scales(scales)
+            .with_team_spirit(spirit)
     }
 }
 
@@ -593,5 +724,41 @@ mod extends_tests {
             built.terms.iter().find(|t| t.name == "face_ball").unwrap().weight,
             1.0
         );
+    }
+
+    #[test]
+    fn tm1_adds_team_terms_on_st36() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let st36 = RewardConfig::from_file(&dir.join("st36.toml")).unwrap();
+        assert!(st36.team.spirit.is_empty() && st36.team.closest_gate.is_empty());
+        assert!(!st36.shadow_box.team_last_back);
+        let names: Vec<_> = st36.build().terms.iter().map(|t| t.name).collect();
+        for t in ["pass", "double_tap", "air_double_touch", "concede_dist", "double_commit", "teammate_proximity"] {
+            assert!(!names.contains(&t), "{t} in st36");
+        }
+        let tm1 = RewardConfig::from_file(&dir.join("tm1.toml")).unwrap();
+        assert_eq!(tm1.weights.flip_reset, 10.0);
+        assert_eq!(tm1.weights.pass, 40.0);
+        assert_eq!(tm1.weights.double_tap, 400.0);
+        assert_eq!(tm1.weights.goal, 1200.0);
+        assert!(tm1.shadow_box.team_last_back);
+        assert_eq!(tm1.team.spirit.len(), 3);
+        let built = tm1.build();
+        let names: Vec<_> = built.terms.iter().map(|t| t.name).collect();
+        for t in ["pass", "double_tap", "air_double_touch", "concede_dist", "double_commit", "shadow_box"] {
+            assert!(names.contains(&t), "{t} missing from tm1");
+        }
+        assert!(!names.contains(&"teammate_proximity"));
+        let fr = RewardConfig::from_file(&dir.join("tm1_fr.toml")).unwrap();
+        assert_eq!(fr.weights.flip_reset_use, 30.0);
+        assert_eq!(fr.flip_reset_use.goal_bonus, 8.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown or unweighted term")]
+    fn team_lists_reject_unknown_terms() {
+        let mut c = RewardConfig::default();
+        c.team.closest_gate = vec!["nope".into()];
+        let _ = c.build();
     }
 }

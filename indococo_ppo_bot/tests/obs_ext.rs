@@ -73,7 +73,7 @@ fn extended_obs_matches_actions_and_state() {
             // RLBot view: same GameState with the held controls -> same obs
             let mut rl = state.clone();
             rl.cars[i].1.controls = k;
-            let rl_obs = V2DefaultObs.build_obs(&rl, &mut SharedInfo::default());
+            let rl_obs = V2DefaultObs::default().build_obs(&rl, &mut SharedInfo::default());
             assert_eq!(&rl_obs[i], row, "RLBot view differs");
             checked += 1;
         }

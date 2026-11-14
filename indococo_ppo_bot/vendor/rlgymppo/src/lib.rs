@@ -63,6 +63,20 @@ thread_local! {
 
 static COLLECT_STREAM_HOOK: AtomicUsize = AtomicUsize::new(0);
 
+/// Learner's `cumulative_timesteps`, published after `load()` and after every
+/// update (indococo TM1: step-based team-spirit schedule read by the rewards).
+static CUMULATIVE_STEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The learner's last published cumulative timestep count (0 before `load`).
+#[must_use]
+pub fn cumulative_steps() -> u64 {
+    CUMULATIVE_STEPS.load(Ordering::Relaxed)
+}
+
+fn publish_cumulative_steps(steps: u64) {
+    CUMULATIVE_STEPS.store(steps, Ordering::Relaxed);
+}
+
 /// Register the function a collection thread calls so its CUDA launches use
 /// a stream other than the learner thread's. `None` is not representable;
 /// pass a no-op or [`clear_collect_stream_hook`] when overlap is off.
@@ -1095,6 +1109,7 @@ where
 
         // Align save timer so we don't immediately re-save the loaded checkpoint.
         self.last_save_timestep = self.stats.cumulative_timesteps;
+        publish_cumulative_steps(self.stats.cumulative_timesteps);
 
         self.ppo.reinit_optimizers(&self.model);
 
@@ -1393,6 +1408,7 @@ where
             metrics["Throughput/consumption"] = (num_new_steps as f64 / update_s.max(1e-12)).into();
             metrics["Throughput/overall"] = (num_new_steps as f64 / wall_s).into();
             metrics["Cumulative/steps"] = self.stats.cumulative_timesteps.into();
+            publish_cumulative_steps(self.stats.cumulative_timesteps);
             metrics["Cumulative/epochs"] = self.stats.cumulative_epochs.into();
             metrics["Cumulative/updates"] = self.stats.cumulative_model_updates.into();
             maybe_print_speed(
@@ -1665,6 +1681,7 @@ where
                 num_new_steps as u64,
             );
             metrics["Cumulative/steps"] = self.stats.cumulative_timesteps.into();
+            publish_cumulative_steps(self.stats.cumulative_timesteps);
             metrics["Cumulative/epochs"] = self.stats.cumulative_epochs.into();
             metrics["Cumulative/updates"] = self.stats.cumulative_model_updates.into();
 
@@ -2025,6 +2042,7 @@ where
             metrics["Throughput/overall"] =
                 (num_new_steps as f64 / collect_start.elapsed().as_secs_f64()).into();
             metrics["Cumulative/steps"] = self.stats.cumulative_timesteps.into();
+            publish_cumulative_steps(self.stats.cumulative_timesteps);
             metrics["Cumulative/epochs"] = self.stats.cumulative_epochs.into();
             metrics["Cumulative/updates"] = self.stats.cumulative_model_updates.into();
 
