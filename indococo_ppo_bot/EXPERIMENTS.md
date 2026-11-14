@@ -2423,6 +2423,10 @@ ST36 = PBRS `shadow_box` weight 30 (gamma 0.998, not zero-sum) from the ST35 che
 
 Finals (gate vs ST35, which was then BESTF): h2h **50.0%** vs ST35 (250-250 over 500 g; gate miss, needs ≥52), pool **92.88** (ST35 93.0), bp5 **69.99** (ST35 69.54), Galactus **41.4%** (ST35 37.6%, ST25 40.8%), Megabyte **84.2%** (report-only; ST25 84.0%), gen min/mean **0.414 / 0.8149**. **Not promoted; BEST stays ST25** (`st25_final`). Shipped as `checkpoints_to_test/st36_21349M.bpk` (sha256 `7306467f…b18347`). ST36r auto-repeat started 11:07 AM ET from this checkpoint.
 
+## ST35 results: PFSP with Galactus clamp, not promoted (user declined) (2026-11-14)
+
+ST35 (PFSP 30/20/50, Galactus clamp [25%, 26%]; binary `indococo-train-st35-pfsp-eb14965`, from ST25, `train_st35.toml`) finished 2026-11-14 4:57 AM ET. Selected checkpoint 20938.1M (`exp_ST35/checkpoints/1794632008`). It passed the automatic gate (h2h 52.0 >= 52, 260-240 / 500 g; pool 93.0 vs 93.33 within 1.0; bp5 69.54 vs 69.21; Galactus 37.6 within 4 of 40.8; Megabyte 80.8 report-only vs ST25 84.0), but **the user declined promotion on 2026-11-14, so BEST stays ST25** (`st25_final`, `exp_ST25/checkpoints/1794413355`). `st35_final/PROMOTE.json` was set to `promote=false` with `auto_promote: true` and `manual_override: "declined by user 2026-11-14; BEST stays ST25"`; the auto-gate output is kept as `st35_final/PROMOTE.json.auto`. That keeps the launcher's newest-`promote=true` fallback on st25_final.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
