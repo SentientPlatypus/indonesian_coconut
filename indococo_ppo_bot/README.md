@@ -38,6 +38,8 @@ indococo_ppo_bot/
     curriculum.rs         reset_curriculum setter: adaptive levels shared by all envs, earned-reset tracking
     events.rs             flip reset / bump / demo / has_flip counters
     expert.rs             FR5 scripted flip reset expert in the 90-action space (lookahead reset + dodge use)
+    team.rs               TM1 team helpers: closest / last-back / double commit, TouchTracker (passes, double taps), step source
+    team_setters.rs       TM1 setters: team_play, aerial_pass, backboard_double_tap, support-car placement
     galactus.rs           Galactus (GigaLearn) port: GalactusOBS + ball prediction, DefaultAction, frozen net; league opponent
     bc_cli.rs             FR5 `curr` / `normal-obs` subcommands (included by bin/train.rs)
     rewards/
@@ -49,13 +51,15 @@ indococo_ppo_bot/
       <one file per reward>   goal.rs, goal_prob.rs, ... ang_vel.rs
       flip_reset_gated.rs, air_touch_height.rs, air_dribble_bump.rs, flip_reset_use.rs,
       reset_align.rs      (reset_align: potential-based wheels-to-ball alignment shaping)
+      team_rewards.rs     TM1: pass, double_tap, air_double_touch, concede_dist, double_commit, TeamGate
                           experiment terms (built only when weighted; see EXPERIMENTS.md)
-    bin/train.rs          indococo-train: train | import | export | record | rates | snapshots | curr | normal-obs | h2h | widen
+    bin/train.rs          indococo-train: train | import | export | record | rates | snapshots | curr | normal-obs | h2h | widen | widen-team
     bin/rlbot.rs          indococo-rlbot: RLBot v5 client, Burn CPU (flex) inference
   tests/
     reward_parity.rs      one test per reward term vs. Python on recorded states
     flip_reset_sim.rs     flip reset detection against RocketSim (resets, landings, setters)
     expert_sim.rs         FR5 expert: level-0 earned resets well above idle, and used
+    team_obs.rs           TM1 team-ext obs layout, padding, 1v1 column map, mirror, shuffle
     fixtures/e8b2_rewards.jsonl
   experiments/            experiment reward configs, train templates, run_experiments.sh, status.py,
                           rates_mix.toml (setter mix for `indococo-train rates`)
@@ -313,7 +317,7 @@ share of episodes, and of setter episodes where the candidate starts in the
 air, with a reset (`flier_early_reset_share`: within 3 s;
 `flier_earned_reset_share`: after 0.33 s of control and within 3 s). Run it from the repository root.
 
-### Team mode (2v2, TV2)
+### Team mode (2v2, TV2, legacy 126-wide obs)
 Set `INDOCOCO_TEAM_SIZE=2` (or 3) for the whole process: `create_env` adds
 Blue, Orange, Blue, Orange (cars 0/1 stay one blue and one orange for the
 1v1-shaped setters), the observation grows by 20 floats per extra car
@@ -333,6 +337,26 @@ widen -> import -> `tv2_init/seed` -> 50M-step PPO chunks (self-play with
 past versions, no fixed 1v1 opponents, no BC refresh) -> per chunk 200-game
 h2h vs the seed and vs the previous chunk (`logs/mid.jsonl`) -> 1000-game
 final h2h vs the seed (`tv2_final/h2h_seed.json`).
+
+### Team mode (TM1: 1v1 / 2v2 / 3v3, one shared policy, team-ext obs)
+`INDOCOCO_OBS_TEAM=1` (with `INDOCOCO_OBS_EXT=1`) switches to the 235-wide
+team-ext observation. The width is the same for every team size: the 1v1
+head and FR8 ext, own team extras (closest-to-ball, rank, kickoff taker,
+mates), then five padded 29-float slots (2 allies, 3 opponents, sorted by
+distance to the ball, rel pos/vel in our car frame, present / demoed / rank).
+One process trains a mix of team sizes (`[team] mode_mix` share of
+experience in the train toml), so it needs no `INDOCOCO_TEAM_SIZE`; evals use
+`INDOCOCO_TEAM_SIZE=1..3`. Warm start: `indococo-train widen-team <1v1_ckpt>
+<dst>` (actor + critic, new columns zero, prints `WIDEN_TEAM` diffs per
+mode). League 1v1 checkpoints load widened automatically. Team rewards and
+gates live in the reward toml (`experiments/tm1.toml`, `[team]`: spirit
+schedule, individual terms, closest / last-back / no-double-commit gates;
+terms `pass`, `double_tap`, `air_double_touch`, `concede_dist`,
+`double_commit`). `Team/*` metrics (also `@2v2` / `@3v3`) and the `"team"`
+block of `h2h` report passes, double taps, kickoff duplicates, double
+commits and last man back. Chain: `experiments/team_launch.sh` (own
+`TEAM_QUEUE`, `team_best`, `TEAM_PROMOTE.json` recommendation only; see
+EXPERIMENTS.md "TM1"). RLBot: a 235-wide policy turns team obs on by itself.
 
 ### FR7c pipeline (reset ramp, farming alarm, 48% guard)
 `experiments/fr7c_launch.sh` (started by the FR7b auto-chain: fr7_launch.sh

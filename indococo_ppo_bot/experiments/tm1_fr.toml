@@ -1,0 +1,14 @@
+# TM1 phase 2 (NOT the first run): flip resets in team play. Per reset
+# stays small (10); a reset that is used for a shot / goal pays more
+# (flip_reset_use goal bonus highest: Discord "reset rewards get farmed,
+# reward phases with the goal bonus highest"). Use with the team drills
+# `air_near_ball` at low weight. See EXPERIMENTS.md TM1.
+extends = "tm1.toml"
+
+[weights]
+flip_reset_use = 30.0
+
+[flip_reset_use]
+obtain = 0.1
+shot_bonus = 2.0
+goal_bonus = 8.0

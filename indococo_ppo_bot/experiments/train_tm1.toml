@@ -1,0 +1,89 @@
+# TM1 = first 2v2 / 3v3 run (EXPERIMENTS.md "Cross-exam note — TM1").
+# One shared policy on the 235-wide team-ext obs (INDOCOCO_OBS_TEAM=1),
+# warm-started from the ST36 1v1 final widened with `widen-team` (actor and
+# critic; new columns zero, so step 0 plays like the 1v1 policy). Mixed team
+# sizes in ONE process by experience share ([team] mode_mix; arenas split by
+# share / cars): 1v1 keeps 25% so the shared policy does not lose 1v1 skill.
+# PPO as ST: 1 epoch, no bf16, ENT 0.016, lambda 0.95, CHUNK 100M; gamma
+# 0.995 (TM1 design; horizon ~13 s at 15 steps/s); 20M critic-only warm-up.
+reward_config = "@RUN@/tm_rewards.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 384
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = false
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+[team]
+mode_mix = { "1" = 0.25, "2" = 0.40, "3" = 0.35 }
+obs_shuffle = true
+
+# Opponent team = ONE sampled version per rollout (teammates are always the
+# current policy). OPPCH of rollouts vs a frozen team: past selves (weight
+# PASTW) and the league (Galactus / Megabyte team ports, the 1v1 finals
+# widened on load). The launcher appends the external and fixed entries.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = @PASTW@
+
+# Team setter mix (sum 1.0). Kickoff ~5% (Necto-style state mix); cars 2..
+# of the 1v1-only setters (replay, aerial_defense, demo_threat) go to
+# support spots. Team drills: team_play, aerial_pass, backboard_double_tap;
+# air_near_ball = flip reset setup with teammates elsewhere (low, phase 2).
+[[state_setters]]
+kind = "kickoff"
+weight = 0.05
+[[state_setters]]
+kind = "random"
+weight = 0.10
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.10
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "team_play"
+weight = 0.25
+[[state_setters]]
+kind = "replay"
+weight = 0.15
+path = "@SNAP@"
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.08
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.05
+distance = [1800.0, 3000.0]
+[[state_setters]]
+kind = "aerial_pass"
+weight = 0.12
+[[state_setters]]
+kind = "backboard_double_tap"
+weight = 0.07
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.03

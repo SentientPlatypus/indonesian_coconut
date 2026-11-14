@@ -2427,6 +2427,134 @@ Finals (gate vs ST35, which was then BESTF): h2h **50.0%** vs ST35 (250-250 over
 
 ST35 (PFSP 30/20/50, Galactus clamp [25%, 26%]; binary `indococo-train-st35-pfsp-eb14965`, from ST25, `train_st35.toml`) finished 2026-11-14 4:57 AM ET. Selected checkpoint 20938.1M (`exp_ST35/checkpoints/1794632008`). It passed the automatic gate (h2h 52.0 >= 52, 260-240 / 500 g; pool 93.0 vs 93.33 within 1.0; bp5 69.54 vs 69.21; Galactus 37.6 within 4 of 40.8; Megabyte 80.8 report-only vs ST25 84.0), but **the user declined promotion on 2026-11-14, so BEST stays ST25** (`st25_final`, `exp_ST25/checkpoints/1794413355`). `st35_final/PROMOTE.json` was set to `promote=false` with `auto_promote: true` and `manual_override: "declined by user 2026-11-14; BEST stays ST25"`; the auto-gate output is kept as `st35_final/PROMOTE.json.auto`. That keeps the launcher's newest-`promote=true` fallback on st25_final.
 
+## TM1 (staged, not started): 2v2 / 3v3 team training, one shared policy (2026-11-14)
+
+**Status 2026-11-14 1:30 PM ET:** code, binary, configs and launcher are staged; smoke runs pass. **Not started.** The team chain is separate from the 1v1 chain: its own launcher (`experiments/team_launch.sh`), its own queue (`~/ippo_runs/TEAM_QUEUE`) and its own reference (`~/ippo_runs/team_best/FINAL_CKPT`). It never reads or writes `ST_QUEUE`, BEST/BESTF or any `PROMOTE.json`, and its finals only write a recommendation (`<run>_final/TEAM_PROMOTE.json`). `team_best` is changed by hand.
+
+TM1 trains one policy for 1v1, 2v2 and 3v3. It warm-starts from the ST36 final (`exp_ST36/checkpoints/1794658145`, 21349.1M, not promoted; the fallback is ST25 `exp_ST25/checkpoints/1794413355`), widened to the 235-wide team-ext observation. The goal is team play: rotation instead of double-committing, passes, double taps, and later flip resets.
+
+### Implementation (binary `/opt/dlami/nvme/ippo_bins/indococo-train-tm1-fada713`, sha256 `46cb69b06a005810ad6bd290926fb85a26c1199070105d8ab19f0a4e2824d785`, commit `fada713`)
+
+- **Team-ext obs (`INDOCOCO_OBS_TEAM=1`, 235 floats, any team size):**
+  - [0,72) is the 1v1 head (ball, pads, flags, own car).
+  - [72,86) is FR8 ext.
+  - [86,90) holds own extras: closest-to-ball flag, distance rank / 2, kickoff taker, mates / 2.
+  - [90,235) holds 5 fixed slots of 29 (ally0, ally1, opp0, opp1, opp2). Each slot is 20 car features, present, demoed, rel pos / 4096 and rel vel / 2300 in our car frame, and distance rank / 2. Empty slots are zero with present = 0, so one width serves every mode.
+  - Allies and opponents are sorted by distance to the ball. During training only, `[team] obs_shuffle` shuffles equal-rank ties per episode.
+  - The 1v1 106-wide path is bit-identical: `build_head` was split out and the tests are unchanged.
+  - `team_col_of_1v1` maps the 106 columns onto 235: the head maps to itself, the 1v1 opponent block goes to opp slot 0, and ext goes to [72,86).
+- **Warm start:** `indococo-train widen-team <1v1_ckpt> <dst>` widens both actor and critic, with new columns at zero, and copies stats. It checks 1v1/2v2/3v3 rows against the 1v1 obs of (own car, first opponent). On the ST36 final the max |Δlogit| is 1.5e-5 to 6.9e-5 and the max |Δvalue| is under 6e-7 in every mode. `load_net_any` applies the same remap to 106-wide league opponents when it loads them.
+- **Team spirit:** `[team] spirit` is a piecewise τ schedule over steps since `spirit_origin`: 0.3 at the start, 0.6 at +1B, 0.9 at +2B. Each non-individual term is blended as `(1−τ)·r_i + τ·mean_team(r)` after zero-sum.
+  - The blend preserves the team mean, so the order relative to zero-sum does not matter.
+  - The blend is skipped when no team has more than one car, so 1v1 stays exact.
+  - The step comes from `rlgymppo::cumulative_steps()`, a new atomic published by the vendor trainer.
+  - Metrics: `Team/tau` and `RewardAbs/team_spirit_shift`.
+- **New team terms** (`src/rewards/team_rewards.rs`, all of them experiment terms built only at a non-zero weight; `src/team.rs` has the `TouchTracker`):
+  - `pass`: a teammate-to-teammate touch with at least 800 uu of ball travel within 4 s. It pays only after the receiving team keeps the ball 1 s or scores within 4 s. It is scaled by travel/2000 (cap 2), ×1.5 when aerial, and capped at 3 per possession. A giveaway costs −0.25 to the passer.
+  - `double_tap`: a backboard double. It pays 1 to the scorer and 0.5 to the first toucher on a team double.
+  - `air_double_touch`: a second air touch of the same car with the ball above 400 uu, capped at 2 per sequence.
+  - `concede_dist` (Necto): −(1−exp(−d/2300)) once per goal for each conceding car, where d is its distance to the ball.
+  - `double_commit`: −1 when 2+ teammates are within 600 uu of the ball and both are closing at ≥ 300 uu/s.
+  - `teammate_proximity` (off).
+- **Gates** (`TeamGate`; zero-summed terms are gated inside the zero-sum):
+  - `closest_gate` pays `speed_to_ball`, `face_ball` and `shadow_space` only to the team's closest car.
+  - `last_back_gate` restricts `recover` to the last-back car.
+  - `no_double_commit_gate` covers `flip_reset`.
+  - `[shadow_box] team_last_back = true` shadows only with the last-back car.
+  - Unknown or unweighted names in a `[team]` list panic.
+- **Mode mix in one process:** `[team] mode_mix = {"1"=0.25, "2"=0.40, "3"=0.35}` is a share of experience. Arenas are split ∝ share / cars per team and assigned per game id by a golden-ratio draw (`env::set_mode_mix`, `create_env_for_game`). A mixed mix requires `INDOCOCO_OBS_TEAM=1`.
+- **Setters:**
+  - New `team_play` places 1–3 cars per team in kickoff-like and rotation spots.
+  - New `aerial_pass` puts the ball in the air in front of a teammate after a cross.
+  - New `backboard_double_tap` sends the ball at the backboard with a follow-up car.
+  - The 1v1-only setters (replay, aerial_defense, demo_threat, air-dribble challenge) set cars 0/1 as before and place the extra cars in support spots 1200–3500 uu behind the ball (`team_setters::place_support_cars`). The 1v1 RNG draws are unchanged.
+- **Opponents:** each rollout has one sampled opponent team, and teammates are always the current policy. Megabyte now drives every car of the other team.
+- **Metrics** (`Team/*`, each also suffixed ` @2v2` / ` @3v3`): passes, aerial passes, giveaways, air double touches, double taps, teammate bumps and flip resets per game-minute, plus kickoff duplicate share, double commit ratio and last-man-back ratio. `h2h` prints the same block per side under `"team"`.
+- **RLBot:** `rlbot.rs` detects a 235-wide policy and turns on team obs.
+
+Tests (`cargo test --release --features torch,ripple`): lib 135/135 (118 previous + 17 new: 8 `team`, 3 `team_rewards`, 2 `combined` spirit, 2 `team_setters`, 2 config), trainer 8/8, `team_obs` 1/1 and `reward_parity` 33/33. The remaining integration tests (`obs_ext` and the others) also passed.
+- The config tests check that `tm1.toml` adds the team terms on top of ST36 and that unknown team-list terms are rejected.
+- `team_obs` checks the layout, padding and presence, the 1v1→team column map, the orange mirror, the kickoff taker, and shuffle.
+
+### Smoke runs (`/opt/dlami/nvme/tm1_smoke`, nice 19, 4 threads / 32 games / 1 pool, `tm1.toml` + `train_tm1.toml`, league = Galactus 0.5 + Megabyte 0.25 + ST36 1v1 fixed 0.15 at chance 0.4)
+
+All runs loaded the widened seed, exited rc 0, saved a checkpoint, and had no NaN or Inf. They also confirm the logs `Training against external opponent galactus/megabyte` and `fixed opponent ST36_1v1` (the 106→235 remap on load).
+
+| run | mode | steps | `RewardAbs/pass` | `double_tap` | `air_double_touch` | `team_spirit_shift` | `concede_dist` | `double_commit` | passes / aerial passes per game-min | double taps per game-min | double commit ratio | kickoff dup share | last man back |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L2v2 | 2v2 | 6.1M (61 × 100k, ~5 min) | 0.112 | 0.026→0.005 | 0.050 | 0.255→0.242 | 0.22→0.19 | 0.10→0.12 | 2.7 / 0.85 | 0.21→0.04 | 0.068→0.072 | 0.63→0.68 | 0.82→0.84 |
+| L3v3 | 3v3 | 6.1M (~6 min) | 0.118→0.108 | 0.022→0.013 | 0.030 | 0.245→0.229 | 0.27→0.22 | 0.11 | 4.2 / 1.5 | 0.24→0.13 | 0.104 | 0.68→0.78 | 0.86→0.87 |
+| Lmix | 1/2/3 mix | 1.6M | 0.07→0.09 | 0→0.03 | 0.075 | 0.25→0.23 | 0.11→0.22 | 0.08→0.05 | @2v2 3.0 / 1.2, @3v3 5.8 / 3.4 | @2v2 0.17, @3v3 0.44 | @2v2 0.039, @3v3 0.059 | @2v2 0.2 | @2v2 0.82, @3v3 0.86 |
+
+Values are first 20% → last 20% of iterations where they moved. `Team/tau` was 0.3000 → 0.3016 (it ramps 0.3 per 1B steps). Signed `Reward/pass` was +0.08 to +0.09, positive because completed passes outnumber giveaway penalties. In Lmix the 1v1 arenas emit no `Team/*` (as intended) and `TEAM mode_mix (experience share) [(1, 0.25), (2, 0.4), (3, 0.35)]` is printed.
+
+- **Closest gate:** a 2v2 run with `closest_gate = []` (G0, the first 9 iterations of each) against L2v2:
+
+  | term (RewardAbs) | gated | ungated |
+  |---|---|---|
+  | `speed_to_ball` | 0.197 | 0.248 |
+  | `face_ball` | 0.622 | 0.835 |
+  | `shadow_space` | 0.0018 | 0.0026 |
+
+  A non-closest car keeps only the zero-sum opponent-mean part.
+- **Launcher dry run** (`dryR`, `R` overridden, `STEPS=300000 CHUNK=100000 WARM_REL=0`, 8-game evals): widen-team, then 3 chunks with mid evals, then finals, then `TEAM_PROMOTE.json`, then the `TEAM_NO_FOLLOWUP` stop. Everything ran end to end in 3.5 min. `mid.jsonl` gets h2h 2v2/3v3 vs BEST-team, Galactus 2v2/3v3/1v1, Megabyte 2v2, and passes per minute and double commit per mode.
+- **Baseline of the widened 1v1 policy** (Rust evals, 24 games, kickoffs):
+
+  | opponent | 1v1 | 2v2 | 3v3 |
+  |---|---|---|---|
+  | Galactus | 22-2 | **0-24** | 1-23 |
+  | Megabyte | 19-5 | **0-24** | |
+
+  In 2v2, games end in about 17 s (11 s vs Megabyte): both of our cars drive the slow 1v1 kickoff path, a Galactus car wins the kickoff, and both of our cars chase. That is the double-commit / no-rotation failure TM1 is meant to fix. Read it as a baseline, not as an eval bug: the 1v1 games in the same code path are normal.
+
+### Staged files (repo `experiments/`; the launcher reads `C=~/ippo_runs/code_tm/indococo_ppo_bot`)
+
+- `tm1.toml`: `st36.toml` plus flip_reset 10 (1v1 keeps 70), pass 40, double_tap 400, air_double_touch 30, concede_dist 300, double_commit 2, teammate_proximity 0, `[shadow_box] team_last_back`, and the `[team]` spirit schedule, individual list and gates above.
+- `tm1_fr.toml`: phase 2 (flip reset use 30, obtain 0.1, shot bonus 2, goal bonus 8). It is not used by TM1.
+- `train_tm1.toml`:
+  - PPO: γ 0.995, λ 0.95, 1 epoch, policy and critic bf16 off, ENT 0.016, LR 5e-5 cosine (hold 1.5B, decay 1B, min 0.4). TPI 300k, MB 100k, 384 games, 24 threads, 2 pools.
+  - `[team] mode_mix` 0.25 / 0.40 / 0.35 with `obs_shuffle`.
+  - Opponents at chance 0.40: past selves 1.0, plus Galactus 0.5, Megabyte 0.25 and the ST36 / ST25 1v1 finals at 0.15 each (appended by the launcher). Ripple is excluded because it is 1v1 only.
+  - Setters: kickoff 0.05, random 0.10 + 0.10, team_play 0.25, replay 0.15, aerial_defense 0.08, demo_threat 0.05, aerial_pass 0.12, backboard_double_tap 0.07, air_near_ball 0.03.
+- `tm_TM1.env`: STEPS 3B, CHUNK 100M, 20M critic-only warm-up, B0 = the binary above, START_CK as above.
+- `team_launch.sh`:
+  - Fresh start: widen-team into `exp_<RUN>/seed`, then the checkpoint at the start step. `team_best` = the widened seed if none is set.
+  - Per chunk: 200 games of Rust h2h vs BEST-team in 2v2 and 3v3, Galactus 100 games each in 2v2 and 3v3 and 200 games in 1v1, and Megabyte 2v2 100 games.
+  - Guard: 2 chunks in a row under 40% in 2v2 vs BEST-team roll back to the best chunk.
+  - Finals: 500 games per mode vs BEST-team plus Galactus (candidate and BEST-team), 1v1 Galactus, and Megabyte 2v2.
+  - Team gate (recommendation): mean h2h ≥ 0.52 with each mode ≥ 0.48, and Galactus per mode not more than 0.04 under BEST-team.
+  - Follow-ups come from `TEAM_QUEUE`, or `<RUN>r`, with `START_IS_TEAM=1`. Stop with `touch ~/ippo_runs/TEAM_NO_FOLLOWUP`.
+
+Launch (do not start without the owner's go; a new tmux, never `indococo` / `ippo_1v1`):
+
+```sh
+mkdir -p ~/ippo_runs/code_tm/indococo_ppo_bot && cp -r /opt/dlami/nvme/ic_ppo/indococo_ppo_bot/{experiments,config} ~/ippo_runs/code_tm/indococo_ppo_bot/
+tmux new -d -s ippo_team 'cd ~/ippo_runs && RUN=TM1 VARIANT=TM1 bash ~/ippo_runs/code_tm/indococo_ppo_bot/experiments/team_launch.sh 2>&1 | tee -a ~/ippo_runs/team_driver.log'
+```
+
+### Cross-exam note — TM1 (2v2/3v3)
+
+- **Discord research (read-only, the TM1 brief):**
+  - Team spirit is ramped, not fixed: about 0.3 → 0.9, OpenAI Five style; Ripple / Matrix end at full spirit with zero-sum.
+  - Ballchasing is the dominant 2v2/3v3 failure, so approach terms are paid only to the closest car instead of adding a spacing penalty. An archived spacing penalty at weight 12 made 3v3 avoid the ball, so `teammate_proximity` stays 0.
+  - An ungated pass reward of 150 reduced passing. Passes are paid only after the team keeps or scores, and they are capped.
+  - Necto's distance-scaled concede penalty is used for rotation.
+  - The community extended obs is used: per-car relative position and velocity in our frame, presence and demo flags, distance ranks, closest-to-ball and kickoff-taker flags, padded fixed slots. An attention net (Necto style) is out of scope for TM1.
+- **Why 1v1 stays in the mix (25% of experience):** one shared policy should keep 1v1 skill. 1v1 rewards are bit-identical (no spirit, no gates, since the gates pass every car when it is alone on its team), so the 1v1 Galactus number per chunk is the regression check.
+- **Risks and watch items:**
+  - Kickoff duplicate share. Smoke runs start at 0.6–0.8, so both cars go; it should fall.
+  - Double commit ratio, and teammate bumps per game-min (13.6 in 3v3).
+  - Giveaways vs passes: 7–8 giveaways vs 2.7–4.2 passes per game-min at the start.
+  - `air_double_touch` farming through air dribbles (6 per game-min, capped at 2 per sequence; cut the weight first if it climbs).
+  - The flip-reset rate collapsing because flip_reset is 10, not 70 (phase 2 is `tm1_fr.toml`).
+  - The 1v1 Galactus number drifting down.
+  - Throughput: 3v3 ran at ~15.7k sps vs 2v2 ~29k sps at 4 threads.
+- **Success bar for TM1** (vs `team_best` = the widened ST36):
+  - h2h ≥ 52% mean over 2v2 / 3v3.
+  - Galactus 2v2 / 3v3 above the 0% baseline and climbing.
+  - Kickoff duplicate and double commit falling, passes per game-min rising.
+  - 1v1 Galactus no more than 0.05 below the seed's.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.

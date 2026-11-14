@@ -1,0 +1,48 @@
+# TM1 reward config (2v2 / 3v3, one shared policy; see EXPERIMENTS.md
+# "Cross-exam note — TM1"). The ST36 1v1 stack (st36.toml, goal 1200) plus
+# the team terms. Every new term is an experiment term (built only when
+# its weight is non-zero), so 1v1 configs are unchanged.
+extends = "st36.toml"
+
+[weights]
+# Flip resets in team play: per reset small (1v1 keeps 70); phase 2 adds a
+# reset-goal bonus (tm1_fr.toml). Not zero-sum (it never was) and gated off
+# while double committing ([team] no_double_commit_gate).
+flip_reset = 10.0
+# Passes (BallTravel style, paid only after the receiving team kept the ball
+# 1 s or scored within 4 s; capped 3 per possession). Max ~2 x 40 = 80 per
+# party per pass (x1.5 aerial) vs goal 1200. Archive: an UNGATED pass
+# reward of 150 reduced passes.
+pass = 40.0
+# Double tap ~1/3 of a goal; air double touch small and capped per sequence.
+double_tap = 400.0
+air_double_touch = 30.0
+# Necto concede penalty (2.5 of goal 10 -> 300 of goal 1200), per conceding
+# car, -(1 - exp(-d / 2300)).
+concede_dist = 300.0
+# Mild: 2+ teammates within 600 uu of the ball, both closing >= 300 uu/s.
+double_commit = 2.0
+# Archive: spacing at weight 12 made 3v3 avoid the ball. Off.
+teammate_proximity = 0.0
+
+[shadow_box]
+# Only the team's last-back car shadows (no effect in 1v1).
+team_last_back = true
+
+[team]
+# tau 0.3 at the run start -> 0.6 at +1B -> 0.9 at +2B (OpenAI Five style
+# ramp; Discord: 0.5-1.0 common, full spirit + zero-sum in Ripple/Matrix).
+# spirit_origin = the run's start step; team_launch.sh writes it.
+spirit = [[0.0, 0.3], [1_000_000_000.0, 0.6], [2_000_000_000.0, 0.9]]
+spirit_origin = 0.0
+# Movement / tuning terms and the per-player positioning penalties stay individual.
+individual = [
+  "speed_to_ball", "face_ball", "energy", "boost_keep", "boost_change",
+  "aerial_boost", "in_air", "ang_vel", "safe_boost", "overextend",
+  "contact_quality", "recover", "concede_dist", "double_commit",
+]
+# Anti-ballchase: approach terms only for each team's closest car.
+closest_gate = ["speed_to_ball", "face_ball", "shadow_space"]
+# The 1v1 recover shaping only for the last-back car (others are rotating).
+last_back_gate = ["recover"]
+no_double_commit_gate = ["flip_reset"]
