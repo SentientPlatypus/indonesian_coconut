@@ -2371,6 +2371,52 @@ Kickoffs vs Galactus are still a strength. ST34 won 159/200 kickoffs (79.5%; los
 
 Lesson: cutting `face_ball` 1.0 -> 0.1 and taking it off the zero-sum path gave no gain. Head-to-head fell to 47.8, the Galactus demo hole got worse (post-demo 62% -> 70%, demos on us 115 -> 136, 200-game wr 38.5% -> 35.0%), and the bot is still parked on the ground near our goal with ~96 boost as Galactus closes from ~2.5k uu. Drop the `face_ball` reduction; do not carry `st34.toml` into ST36. A later defensive-alignment term has to move that posture, not pay us for sitting even closer to the net.
 
+## ST36 (queued after ST35): PBRS `shadow_box` at Necto scale (2026-11-14)
+
+**Status 2026-11-13 11:30 PM ET:** queued (`~/ippo_runs/ST_QUEUE` = `ST36 ST36`, previous queue was empty, backed up as `ST_QUEUE.bak_pre_st36_20261113_233000`). It starts after ST35's finals (~4-5 AM ET Nov 14). BEST is ST25.
+
+ST36 is the start point's recipe with ONE change, the reward: `experiments/st36.toml` = `st.toml` plus `shadow_box` at weight 30 (full swing 0.025 of a 1200 goal, Necto scale). It is not zero-sum. `face_ball`, `shadow_space` (18) and `recover` (70) stay as in ST25; this file extends `st.toml`, not `st34.toml` (the face_ball cut was not promoted and made the Galactus demo hole worse). League, setters and PPO (1 epoch, policy bf16 off, ENT 0.016, gamma 0.998, lambda 0.95), OPPCH 0.70 and CHUNK 100M follow the start point's template.
+
+`shadow_box` is potential-based (`r = gamma * phi(s') - phi(s)`, gamma 0.998 from toml, the same as PPO). `phi = lateral_box * longitudinal_band * shadow_line * speed` in `[0, 1]`, and is only evaluated when the attack gate is on: the ball is in our half, its velocity toward our net is above 300 uu/s, and the opponent is closer to it. Gate off pays 0 and freezes previous phi, so a clear never takes a 1→0 penalty. A gate-on transition starts from `phi_prev = phi(s)` and pays 0 on that first active step (no free jump). The longitudinal band peaks 800–2400 uu off our goal line (y = ±5120) and is smoothly low in 0–700 uu, the parked band where Galactus keeps demoing us (ST34 median 401 uu). `shadow_line` is closeness to the ball–own-goal-center segment (1 at 0 uu, 0 by 1200 uu). `lateral_box` is 1 inside the goal mouth and fades to 0 over 800 uu past the post. `speed = clip(|v|/800, 0.3, 1)`, so standing still is never the max. `Reward/shadow_box`, `RewardAbs/shadow_box` and `RewardNonzero/shadow_box` are logged by the existing CombinedReward hook.
+
+### Implementation (binary `/opt/dlami/nvme/ippo_bins/indococo-train-st36-1cbe86c`, sha256 `05b8523fa723f6dfa2d316e63d37d3f24af497b262c3de8cecca0de8e0c5b0bb`)
+
+New `src/rewards/shadow_box.rs`, a `shadow_box` weight (default 0) and a `[shadow_box]` params table on `RewardConfig`, and a `build()` arm that is only added when the weight is non-zero (E8B2 parity is unchanged). Built from the ST35 PFSP tree (`eb14965` / `722f142` + this) with `--features torch,ripple`. One binary serves both templates (`[pfsp]` is optional; without the section the old pick path runs).
+
+Tests (`cargo test --release --features torch,ripple`): lib 118/118 (108 previous + 9 `shadow_box` + 1 config) and trainer 8/8. The new tests cover: a moving on-line car in the peak band has phi ≈ 1; the parked band (401 uu) is low vs the peak; standing still (speed factor 0.3) is less than moving; telescoping when gamma = 1 and the gate holds (episode sum = phi_end − phi_start, hovering pays 0); `r = gamma * phi(s') - phi(s)` at gamma 0.998; gate-off freeze and a clear with no penalty; a gate-on transition that pays 0 then a real PBRS delta (no free jump); midfield / own-possession / ball-leaving all off; orange symmetry; the raw term is not zero-sum wrapped. `st36.toml` loads with weight 30, face_ball 1.0, shadow_space 18, recover 70, gamma 0.998, and is absent from `[zero_sum]`; `st.toml` still has weight 0 and does not build the term.
+
+### Smoke runs (`/opt/dlami/nvme/st36_smoke` and `st36_smoke_p`, nice 19, 4 threads / 32 games / 20k-step rollouts, 3 iterations, league bots and Ripple on CPU)
+
+Both runs loaded `exp_ST25/checkpoints/1794413355` (cumulative 20727.5M), ended with rc 0, saved a checkpoint, and had no NaN or Inf in the metrics. `RewardAbs/shadow_box` was 0.017–0.032 per step vs `RewardAbs/goal` 0.97–2.58 (ratio 0.013–0.018). `RewardNonzero/shadow_box` was 2.6–3.4% of car-steps, so the term is not on all the time; the unit tests are what pin "nonzero only during attacks." A full swing of the potential is 30 against a 1200 goal.
+
+- `st36_smoke` (`train_st36.toml`, PFSP off, ST25 mix): no PFSP log lines. Nonzero 2.8%, 2.8%, 3.4%; abs/goal 0.017, 0.018, 0.013.
+- `st36_smoke_p` (`train_st36p.toml`, PFSP on): `PFSP on: self 0.30, past 0.20, league 0.50 over [FR4_final, ST25_final, HUNT_final, ripple, galactus, megabyte] … clamp {"galactus": [0.25, 0.26]}`. Galactus stayed at the 25% floor of all rollouts (no past versions yet, self 0.50). Nonzero 3.3%, 3.2%, 2.6%; abs/goal 0.017, 0.018, 0.017.
+
+### Staged files (launcher tree `~/ippo_runs/code_fr9/indococo_ppo_bot/experiments/` and the repo)
+
+- `st36.toml`: the reward change above.
+- `train_st36.toml`: `train_st25.toml` with `reward_config` -> `st36.toml`. PFSP off. Used when ST35 does not promote, from `exp_ST25/checkpoints/1794413355`, ST25 league (GAL 6.429, MEGA 2.0, Ripple 1.286, ST13–ST16/HUNT 0.816, ST20r 2.0; Galactus ~25.8%).
+- `train_st36p.toml`: `train_st35.toml` with `reward_config` -> `st36.toml`. PFSP on, Galactus clamp [0.25, 0.26]. Used ONLY if ST35 promotes (`BESTF=st35_final`), from ST35's final.
+- `st_ST36.env`: ST35's start-point rule. The template is `train_st36p.toml` iff BESTF=st35_final, else `train_st36.toml`, chosen once and stored in `exp_ST36/TRAIN_TMPL`. League weights follow the template (ST25 mix vs ST35's PFSP prior). Both use the ST36 binary. A dry run in /tmp gave st25_final -> 1794413355 / `train_st36.toml`, and a fake st35_final -> `train_st36p.toml` keeping ST35's checkpoint.
+
+### Cross-exam (Nov 13/14)
+
+- **Discord (read-only):** JPK314 / Kaiyotech (Opti, Aug 2024) found a shadow reward got "far too strong" and rolled it back, so the term has to stay small (Necto scale, not zero-sum, do not raise `shadow_space`). Skully: don't retreat to net; a small defense reward is fine if the concede term is unchanged (ours is). jones_0004: shadowing versus bots gets you air-dribble-bumped. Galactus's dribble bumps are barely dodgable, so a term that parks us on the goal line (ST34's failure) is the wrong shape; the 0–700 uu band is intentionally low.
+- **Research:** Ng, Harada & Russell 1999, potential-based shaping `F = gamma * phi(s') - phi(s)` is policy-invariant for the MDP's optimal policy. Devlin & Kudenko 2012 allow the potential to change with time or a gate if the same difference form is kept; turning the gate off must not inject a 1→0 hit (hence the freeze). Necto-scale dense terms stay around a few percent of a goal; Seer's later write-up is that large dense defense terms push a bot into passivity. This is the "later defensive alignment" that the ST34 research ranked behind the face_ball cut, now that the cut has been tried and declined.
+- **Code:** `shadow_space` (`OpponentPossessionSpace`, weight 18, already not zero-sum) is dense and farmable: it only fires while the opponent is within 380 uu of a low ball, and it pays a per-tick band, not a potential. `recover` (70) is a sprint-back term for when we are already overextended. Neither is this term; ST36 adds `shadow_box` beside them. Existing potential code (`ResetAlign`, `GoalProb`) uses gamma = 1 and is not configurable from toml. ST34 `diag_gal` (200 g): post-demo concedes 91/130 (70%), demos on us 136, 200-game wr 0.350, parked at median 401 uu off the goal line with 96 boost as Galactus closes from ~2.5k uu. That parked band is what `longitudinal_band` downweights, and `speed` keeps a stationary hold from being the maximum.
+
+Success bar (read against ST25, gate as ST34 / ST35, no FR4):
+- h2h vs ST25 ≥ 52%, pool400 and bp5 within 1.0 of ST25's (93.33 / 69.21).
+- Galactus within 0.04 of 40.8, and ideally above it.
+- Watch: time in the 400–600 uu band (should fall vs ST25/ST34), `diag_gal` post-demo concede % (ST25 76/123 = 62%, ST34 91/130 = 70%), goal-side %, wr vs Galactus / pool / BEST, and `RewardAbs/shadow_box` vs `RewardAbs/goal` and `RewardAbs/shadow_space`.
+
+Risks and watch items:
+- A gate-off transition that forgot to freeze would punish a clear. The tests cover that; still watch signed `Reward/shadow_box` just after a ball leaves our half in a mid rollout if anything looks off.
+- Overlap with `shadow_space` (18) and `recover` (70) when the opponent has a low ball in our half.
+- Kaiyo's "far too strong" warning: if the bot starts sitting in the 800–2400 band and giving up the ball, the weight is the first thing to cut.
+- jones_0004's bump warning: aerial bumps against us vs Galactus and the public bots.
+- If ST35 promotes, ST36p carries PFSP plus this term (the start point's recipe plus one change). If it does not, PFSP stays off so this is still a single lever.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
