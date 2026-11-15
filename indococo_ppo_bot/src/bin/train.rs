@@ -17,6 +17,7 @@
 //! indococo-train ripple-h2h <ckpt> <ripple_dir> <games> [threads]  # Rust Ripple h2h (CPU)
 //! indococo-train ripple-dump <ripple_dir> <steps> <out.jsonl>  # Dump Ripple tensors for Python parity
 //! INDOCOCO_OBS_TEAM=1 indococo-train widen-team <1v1_ckpt> <dst_ckpt>  # TM1 warm start (actor+critic)
+//! INDOCOCO_OBS_TEAM=1 INDOCOCO_OBS_PRED=1 indococo-train widen-pred <235_ckpt> <dst_ckpt>  # TM3 warm start
 //! ```
 
 use std::collections::BTreeMap;
@@ -537,7 +538,7 @@ fn train_cfg(cfg: TrainConfig) {
                 "[team] mode_mix mixes team sizes: needs INDOCOCO_OBS_TEAM=1 (fixed-width obs)"
             );
             indococo_bot::env::set_mode_mix(&mix);
-            println!("TEAM mode_mix (experience share) {mix:?}, obs_team {}, shuffle {}", indococo_bot::obs::obs_team(), indococo_bot::obs::obs_shuffle());
+            println!("TEAM mode_mix (experience share) {mix:?}, obs_team {}, obs_pred {}, obs width {}, shuffle {}", indococo_bot::obs::obs_team(), indococo_bot::obs::obs_pred(), obs_size(), indococo_bot::obs::obs_shuffle());
         } else {
             println!("TEAM team_size {}, obs_team {}, shuffle {}", indococo_bot::obs::team_size(), indococo_bot::obs::obs_team(), indococo_bot::obs::obs_shuffle());
         }
@@ -554,6 +555,14 @@ fn train_cfg(cfg: TrainConfig) {
         );
         learner.load();
         learner.learn();
+    }
+    if indococo_bot::obs::obs_pred() {
+        let (n, r, ns) = indococo_bot::obs::pred_stats();
+        println!(
+            "PRED_STATS updates {n} rebuilds {r} ({:.2}%) mean {:.1} us/update",
+            100.0 * r as f64 / n.max(1) as f64,
+            ns as f64 / 1e3 / n.max(1) as f64
+        );
     }
 }
 
@@ -945,6 +954,19 @@ fn load_net_any(path: &Path, kind: NetKind, dev: &Device) -> Result<Net, String>
     if width == obs_size() {
         return pick(new_model(dev)).try_load_file(path).map_err(|e| format!("{e:?}"));
     }
+    // TM3: a 235-wide team-ext net in a prediction process (TM1 / TM2
+    // finals, BEST-team, warm starts): zero rows for the 35 prediction
+    // inputs appended after its columns.
+    if indococo_bot::obs::obs_pred() && width == indococo_bot::obs::TEAM_OBS_SIZE {
+        let legacy = pick(model_with_input(width, dev)).try_load_file(path).map_err(|e| format!("{e:?}"))?;
+        let mut st = SafetensorsStore::from_bytes(None);
+        legacy.save_into(&mut st).map_err(|e| format!("{e:?}"))?;
+        let bytes = widen_safetensors(&st.get_bytes().map_err(|e| format!("{e:?}"))?, width, obs_size());
+        let mut st = SafetensorsStore::from_bytes(Some(bytes));
+        let mut net = pick(new_model(dev));
+        net.load_from(&mut st).map_err(|e| format!("{e:?}"))?;
+        return Ok(net);
+    }
     // TM1: a 106-wide 1v1 net in a team-ext process (league opponents,
     // warm starts): columns mapped onto the team layout, zero elsewhere.
     let one = indococo_bot::obs::ext_obs_size_for(1);
@@ -1134,6 +1156,117 @@ fn widen_team(src: &Path, dst: &Path) {
     }
     report.insert("dst".into(), serde_json::json!(dst));
     println!("WIDEN_TEAM {}", serde_json::Value::Object(report));
+}
+
+/// `widen-pred <src_ck> <dst_ck>` (INDOCOCO_OBS_TEAM=1 INDOCOCO_OBS_PRED=1):
+/// a TM3 checkpoint (270 inputs) from a 235-wide team-ext one. Actor AND
+/// critic first layers get 35 zero rows at the end (the prediction columns),
+/// every other tensor is copied, stats.toml copied. A source that is already
+/// 270-wide is copied as is. Verifies on 1v1 / 2v2 / 3v3 env obs that the
+/// first-layer weights are the source's bit for bit with exact zeros after
+/// them, and reports the max |logit| / |value| difference between the widened
+/// nets on the 270 obs and the source nets on its first 235 columns (zero
+/// rows only change the float summation order).
+fn widen_pred(src: &Path, dst: &Path) {
+    use indococo_bot::obs::{PRED_OBS_SIZE, TEAM_OBS_SIZE, obs_pred, obs_team};
+    assert!(obs_team() && obs_pred(), "widen-pred needs INDOCOCO_OBS_TEAM=1 INDOCOCO_OBS_PRED=1");
+    assert_eq!(obs_size(), PRED_OBS_SIZE);
+    init_from_default(true).expect("load collision meshes");
+    let dev = Device::flex();
+    std::fs::create_dir_all(dst).expect("create dst");
+    let width = bpk_input_width(&src.join("actor.bpk")).expect("actor width");
+    let cwidth = bpk_input_width(&src.join("critic.bpk")).expect("critic width");
+    assert_eq!(width, cwidth, "actor / critic input widths differ");
+    if width == PRED_OBS_SIZE {
+        for f in ["actor.bpk", "critic.bpk", "stats.toml"] {
+            std::fs::copy(src.join(f), dst.join(f)).expect("copy");
+        }
+        println!("WIDEN_PRED {}", serde_json::json!({"already": PRED_OBS_SIZE, "dst": dst}));
+        return;
+    }
+    assert_eq!(width, TEAM_OBS_SIZE, "widen-pred needs a {TEAM_OBS_SIZE}-wide source, got {width}");
+    let actor = load_net_any(&src.join("actor.bpk"), NetKind::Actor, &dev).expect("actor");
+    let critic = load_net_any(&src.join("critic.bpk"), NetKind::Critic, &dev).expect("critic");
+    actor.clone().save_file(dst.join("actor.bpk")).expect("save actor");
+    critic.clone().save_file(dst.join("critic.bpk")).expect("save critic");
+    std::fs::copy(src.join("stats.toml"), dst.join("stats.toml")).expect("copy stats");
+    let base_actor = model_with_input(width, &dev).actor.try_load_file(src.join("actor.bpk")).expect("src actor");
+    let base_critic = model_with_input(width, &dev).critic.try_load_file(src.join("critic.bpk")).expect("src critic");
+    let re_actor = load_net_any(&dst.join("actor.bpk"), NetKind::Actor, &dev).expect("reload actor");
+    let re_critic = load_net_any(&dst.join("critic.bpk"), NetKind::Critic, &dev).expect("reload critic");
+    let mut report = serde_json::Map::new();
+    report.insert("actor_first_layer_exact".into(), serde_json::json!(first_layer_extends(&base_actor, &re_actor, width)));
+    report.insert("critic_first_layer_exact".into(), serde_json::json!(first_layer_extends(&base_critic, &re_critic, width)));
+    for per_team in 1..=3usize {
+        let mut env = indococo_bot::env::create_env_sized(&RewardConfig::default(), &default_mix(), per_team);
+        let mut rng = SmallRng::seed_from_u64(31 + per_team as u64);
+        let (mut state, mut obs, _) = env.reset();
+        let (mut rows, mut base_rows) = (Vec::new(), Vec::new());
+        for _ in 0..256 {
+            for o in &obs {
+                rows.extend_from_slice(o);
+                base_rows.extend_from_slice(&o[..width]);
+            }
+            let actions: Vec<usize> = obs.iter().map(|_| rng.random_range(0..N_ACTIONS)).collect();
+            let res = env.step(&state, &actions);
+            (state, obs) = (res.state, res.obs);
+            if res.is_terminal || res.truncated {
+                let (s, o, _) = env.reset();
+                (state, obs) = (s, o);
+            }
+        }
+        let n = rows.len() / obs_size();
+        let x = Tensor::<2>::from_data(TensorData::new(rows, [n, obs_size()]), &dev);
+        let xb = Tensor::<2>::from_data(TensorData::new(base_rows, [n, width]), &dev);
+        let maxdiff = |a: Tensor<2>, b: Tensor<2>| -> f32 {
+            (a - b).abs().max().into_data().try_to_vec::<f32>().expect("diff")[0]
+        };
+        report.insert(
+            format!("{per_team}v{per_team}"),
+            serde_json::json!({
+                "rows": n,
+                "actor_max_abs_logit_diff": maxdiff(actor.forward(x.clone()), base_actor.forward(xb.clone())),
+                "reloaded_actor_max_abs_logit_diff": maxdiff(re_actor.forward(x.clone()), base_actor.forward(xb.clone())),
+                "critic_max_abs_value_diff": maxdiff(critic.forward(x), base_critic.forward(xb)),
+            }),
+        );
+    }
+    report.insert("dst".into(), serde_json::json!(dst));
+    println!("WIDEN_PRED {}", serde_json::Value::Object(report));
+}
+
+/// True if `wide`'s first-layer weight (`[in, out]`) is `narrow`'s rows bit
+/// for bit followed by exact zero rows, and every other tensor is identical.
+fn first_layer_extends(narrow: &Net, wide: &Net, from: usize) -> bool {
+    let tensors = |m: &Net| -> BTreeMap<String, (Vec<usize>, Vec<u32>)> {
+        let mut st = SafetensorsStore::from_bytes(None);
+        m.clone().save_into(&mut st).expect("save");
+        let bytes = st.get_bytes().expect("bytes");
+        let n = u64::from_le_bytes(bytes[..8].try_into().expect("len")) as usize;
+        let header: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&bytes[8..8 + n]).expect("header");
+        let data = &bytes[8 + n..];
+        header
+            .into_iter()
+            .filter(|(k, _)| k != "__metadata__")
+            .map(|(k, v)| {
+                let (a, b) = (v["data_offsets"][0].as_u64().unwrap() as usize, v["data_offsets"][1].as_u64().unwrap() as usize);
+                let shape = v["shape"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect();
+                let bits = data[a..b].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+                (k, (shape, bits))
+            })
+            .collect()
+    };
+    let (a, b) = (tensors(narrow), tensors(wide));
+    a.len() == b.len()
+        && a.iter().all(|(k, (sa, va))| {
+            let Some((sb, vb)) = b.get(k) else { return false };
+            if k == "linear_layers.0.weight" {
+                let keep = from * sa[1];
+                sa[0] == from && sb[0] > from && sa[1] == sb[1] && vb[..keep] == va[..] && vb[keep..].iter().all(|&x| x == 0)
+            } else {
+                sa == sb && va == vb
+            }
+        })
 }
 
 /// `widen <src_ck> <dst_ck>`: an FR8 (extended obs) checkpoint from a
@@ -1397,6 +1530,7 @@ fn main() {
         "import" => import(Path::new(arg(1)), Path::new(arg(2))),
         "widen" => widen(Path::new(arg(1)), Path::new(arg(2))),
         "widen-team" => widen_team(Path::new(arg(1)), Path::new(arg(2))),
+        "widen-pred" => widen_pred(Path::new(arg(1)), Path::new(arg(2))),
         "export" => export(Path::new(arg(1)), Path::new(arg(2))),
         "record" => record(
             Path::new(arg(1)),
@@ -1883,6 +2017,49 @@ fn bench_infer(ckpt: &Path, rows: usize, iters: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TM3 `widen-pred` / `load_net_any` 235 -> 270: first layers of actor
+    /// AND critic keep their rows bit for bit with exact zero rows after
+    /// them, everything else is identical, and the widened nets give the
+    /// source's outputs whatever the 35 new inputs hold.
+    #[test]
+    fn widen_pred_zero_rows_keep_the_function() {
+        let dev = Device::flex();
+        let (from, to) = (indococo_bot::obs::TEAM_OBS_SIZE, indococo_bot::obs::PRED_OBS_SIZE);
+        assert_eq!((from, to), (235, 270));
+        let (n, w) = (model_with_input(from, &dev), model_with_input(to, &dev));
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut vals = |len: usize| -> Vec<f32> {
+            (0..len)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed >> 40) as f32 / (1u64 << 24) as f32 * 4.0 - 2.0
+                })
+                .collect()
+        };
+        let rows = 64;
+        let x = vals(rows * from);
+        let extra = vals(rows * (to - from));
+        let mut xw = Vec::with_capacity(rows * to);
+        for r in 0..rows {
+            xw.extend_from_slice(&x[r * from..(r + 1) * from]);
+            xw.extend_from_slice(&extra[r * (to - from)..(r + 1) * (to - from)]);
+        }
+        for (narrow, mut wide) in [(n.actor, w.actor), (n.critic, w.critic)] {
+            let mut st = SafetensorsStore::from_bytes(None);
+            narrow.clone().save_into(&mut st).expect("save");
+            let bytes = widen_safetensors(&st.get_bytes().expect("bytes"), from, to);
+            let mut st = SafetensorsStore::from_bytes(Some(bytes));
+            wide.load_from(&mut st).expect("load widened");
+            assert!(first_layer_extends(&narrow, &wide, from), "zero rows / identical tensors");
+            let a = narrow.forward(Tensor::<2>::from_data(TensorData::new(x.clone(), [rows, from]), &dev));
+            let b = wide.forward(Tensor::<2>::from_data(TensorData::new(xw.clone(), [rows, to]), &dev));
+            let d = (a - b).abs().max().into_data().try_to_vec::<f32>().expect("diff")[0];
+            assert!(d < 1e-4, "max |output diff| {d}");
+        }
+    }
 
     fn cfg(warmup: u64, iterations: u64) -> TrainConfig {
         let text = include_str!("../../config/train.toml");

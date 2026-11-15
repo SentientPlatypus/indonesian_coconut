@@ -123,9 +123,13 @@ fn actor_input_width() -> usize {
 fn main() {
     let width = actor_input_width();
     let n = obs::team_size();
-    // TM1 team-ext nets (235 inputs) serve 1v1, 2v2 and 3v3.
-    let team = width == obs::TEAM_OBS_SIZE;
+    // TM1 team-ext nets (235 inputs) serve 1v1, 2v2 and 3v3; TM3 nets (270)
+    // add the ball prediction + nearest big pad, rolled out at runtime on a
+    // ball-only arena from the embedded meshes.
+    let pred = width == obs::PRED_OBS_SIZE;
+    let team = pred || width == obs::TEAM_OBS_SIZE;
     assert!(obs::set_obs_team(team), "obs team mode already fixed");
+    assert!(obs::set_obs_pred(pred), "obs prediction mode already fixed");
     let ext = if team || width == obs::ext_obs_size_for(n) {
         true
     } else if width == obs::obs_size_for(n) {
@@ -134,7 +138,7 @@ fn main() {
         panic!("actor input width {width} fits neither obs ({} or {})", obs::obs_size_for(n), obs::ext_obs_size_for(n));
     };
     assert!(obs::set_obs_ext(ext), "obs mode already fixed");
-    eprintln!("indococo-rlbot: actor input {width}, extended obs {ext}, team obs {team}");
+    eprintln!("indococo-rlbot: actor input {width}, extended obs {ext}, team obs {team}, prediction obs {pred}");
     let meshes = FxHashMap::from_iter([(
         GameMode::Soccar,
         SOCCAR_MESHES.iter().map(|m| m.to_vec()).collect::<Vec<_>>(),

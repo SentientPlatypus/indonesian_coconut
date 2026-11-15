@@ -14,11 +14,15 @@
 //! terms are computed from the base obs itself, so Rust training, the RLBot
 //! bot, the Python pool eval and the BC tools share one formula.
 //!
+//! TM1 team-ext obs (`INDOCOCO_OBS_TEAM=1`, 235) and the TM3 prediction
+//! extension on top of it (`INDOCOCO_OBS_PRED=1`, 270): see the sections
+//! below.
+//!
 //! `air_time_since_jump` is clamped to 1.25 s as in
 //! `v4_env._obs_builder(clamp_air_time=True)`: RLBot's compat layer freezes
 //! it there, RocketSim keeps counting, so the clamp keeps training and
 //! deployment inputs identical.
-use rlgymppo_utils::rlgym::rocketsim::{CarState, Team, Vec3A};
+use rlgymppo_utils::rlgym::rocketsim::{Arena, ArenaEvent, BallState, CarState, GameMode, Team, Vec3A};
 use rlgymppo_utils::rlgym::{FullObs, GameState, Obs};
 
 pub const POS_COEF: [f32; 3] = [1.0 / 4096.0, 1.0 / 6000.0, 1.0 / 2044.0]; // SIDE_WALL_X, BACK_NET_Y, CEILING_Z
@@ -274,7 +278,12 @@ pub fn prev_action(c: &CarState) -> [f32; 8] {
 #[must_use]
 pub fn build_full(state: &GameState, i: usize, order: &[usize]) -> Vec<f32> {
     if obs_team() {
-        return build_team(state, i, order, None);
+        let mut o = build_team(state, i, order, None);
+        if obs_pred() {
+            let pred = ball_prediction_uncached(&state.ball);
+            o.extend(pred_features(state, i, &pred));
+        }
+        return o;
     }
     let mut o = build_one(state, i, order);
     if obs_ext() {
@@ -345,6 +354,283 @@ pub fn obs_team() -> bool {
 /// Fixes the team obs mode before first use. False if already fixed otherwise.
 pub fn set_obs_team(on: bool) -> bool {
     OBS_TEAM.set(on).is_ok() || obs_team() == on
+}
+
+// ---------------------------------------------------------------------------
+// TM3 prediction extension (`INDOCOCO_OBS_PRED=1`, on top of the team-ext
+// obs; EXPERIMENTS.md "TM3"). [`PRED_LEN`] = 35 floats appended after the
+// 235 team-ext floats (width [`PRED_OBS_SIZE`] = 270):
+//
+//   [235, 265)  5 no-car ball-prediction slices at +32/64/120/240/480 ticks
+//               ([`PRED_TICKS`]): position (POS_COEF) and velocity
+//               (LIN_VEL_COEF), mirrored for orange like the live ball.
+//               A ball-only RocketSim arena (`Arena::new(Soccar)`, the
+//               training config: quantized, ball rotation on) rolls the
+//               ball forward; once it crosses a goal line the crossing row
+//               repeats to the end of the horizon.
+//   [265, 270)  nearest active big pad: its position relative to our car in
+//               our car frame (forward, forward x up, up; / 4096), distance
+//               / 2300, active flag. With no big pad active: the pad that
+//               respawns soonest, flag 0. Car-frame terms are mirror
+//               invariant.
+//
+// The env obs builder caches the rollout per arena ([`PredCache`], which
+// owns its ball-only arena like Ripple's forecast arena): rows every 8 ticks
+// out to +480. While the live ball matches cached row 1 (1 uu / 0.1 rad/s,
+// Ripple's tolerance), exactly 8 ticks passed and no car touched the ball,
+// the rows shift and the arena keeps stepping 8 more ticks (never re-seeded
+// mid-rollout, so the cached horizon is the continuous rollout). A touch, a goal, a kickoff, an episode reset (setters,
+// teleports) or any tolerance / tick-gap mismatch rebuilds all 480 ticks.
+// Stateless callers ([`build_full`]) use the uncached rollout.
+//
+// A 235-wide net maps onto this layout as is (new columns at the end), so
+// with zero weights on the 35 new columns it computes what it computed.
+// ---------------------------------------------------------------------------
+
+/// Prediction horizons in physics ticks (0.27 / 0.53 / 1 / 2 / 4 s).
+pub const PRED_TICKS: [usize; 5] = [32, 64, 120, 240, 480];
+/// Cache row spacing (= the env tick skip).
+pub const PRED_STRIDE: usize = 8;
+/// Cache rows: the live ball plus one row per 8 ticks to +480.
+pub const PRED_ROWS: usize = 1 + 480 / PRED_STRIDE;
+/// Ball-prediction floats (5 slices x pos + vel).
+pub const PRED_BALL_LEN: usize = 6 * PRED_TICKS.len();
+/// Nearest-big-pad floats.
+pub const PRED_PAD_LEN: usize = 5;
+/// Floats appended by the prediction extension.
+pub const PRED_LEN: usize = PRED_BALL_LEN + PRED_PAD_LEN;
+/// First prediction column (= the team-ext width).
+pub const PRED_AT: usize = TEAM_OBS_SIZE;
+/// Team-ext + prediction obs width (270).
+pub const PRED_OBS_SIZE: usize = TEAM_OBS_SIZE + PRED_LEN;
+/// Ball |y| past which a goal is in (Ripple's GOAL_Y).
+pub const PRED_GOAL_Y: f32 = 5215.5;
+/// Scale of the pad distance.
+pub const PAD_DIST_COEF: f32 = 1.0 / 2300.0;
+const PRED_TOL_LIN: f32 = 1.0;
+const PRED_TOL_ANG: f32 = 0.1;
+
+static OBS_PRED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether this process appends the TM3 prediction extension:
+/// `INDOCOCO_OBS_PRED=1` unless [`set_obs_pred`] ran first. Needs the
+/// team-ext obs.
+#[must_use]
+pub fn obs_pred() -> bool {
+    *OBS_PRED.get_or_init(|| std::env::var("INDOCOCO_OBS_PRED").is_ok_and(|v| v == "1"))
+}
+
+/// Fixes the prediction mode before first use. False if already fixed otherwise.
+pub fn set_obs_pred(on: bool) -> bool {
+    OBS_PRED.set(on).is_ok() || obs_pred() == on
+}
+
+/// One cache row: ball position, velocity, angular velocity (world frame).
+type PredRow = [f32; 9];
+
+fn pred_row(b: &BallState) -> PredRow {
+    let (p, v, w) = (b.phys.pos, b.phys.vel, b.phys.ang_vel);
+    [p.x, p.y, p.z, v.x, v.y, v.z, w.x, w.y, w.z]
+}
+
+fn pred_row_matches(pred: &PredRow, actual: &PredRow) -> bool {
+    pred.iter().zip(actual).enumerate().all(|(i, (&p, &a))| {
+        let tol = if i < 6 { PRED_TOL_LIN } else { PRED_TOL_ANG };
+        (p - a).abs() < tol
+    })
+}
+
+std::thread_local! {
+    /// Ball-only arena for uncached (stateless) predictions, one per thread.
+    static PRED_ARENA: std::cell::RefCell<Option<Arena>> = const { std::cell::RefCell::new(None) };
+}
+
+fn with_pred_arena<R>(f: impl FnOnce(&mut Arena) -> R) -> R {
+    PRED_ARENA.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        f(slot.get_or_insert_with(|| Arena::new(GameMode::Soccar)))
+    })
+}
+
+static PRED_STATS: [std::sync::atomic::AtomicU64; 3] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 3];
+
+/// Process totals of the cached prediction: (updates, full rebuilds,
+/// nanoseconds spent in [`PredCache::update`]). The trainer prints them.
+#[must_use]
+pub fn pred_stats() -> (u64, u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (PRED_STATS[0].load(Relaxed), PRED_STATS[1].load(Relaxed), PRED_STATS[2].load(Relaxed))
+}
+
+/// Ball prediction samples: (position, velocity) per [`PRED_TICKS`] entry,
+/// world frame.
+pub type PredSamples = [[f32; 6]; 5];
+
+/// Rolling no-car ball prediction for one arena (see the section comment).
+#[derive(Default)]
+pub struct PredCache {
+    rows: Vec<PredRow>,
+    /// Own ball-only arena, left at the end of the horizon.
+    arena: Option<Box<Arena>>,
+    /// A rollout is in `rows` / `arena`.
+    valid: bool,
+    frozen: bool,
+    last_tick: Option<u64>,
+    last_kickoff: bool,
+    /// Full 480-tick rollouts and 8-tick extensions so far.
+    pub rebuilds: u64,
+    pub extends: u64,
+}
+
+impl PredCache {
+    /// Drops the cache (episode reset): the next update rebuilds.
+    pub fn clear(&mut self) {
+        self.valid = false;
+        self.last_tick = None;
+        self.last_kickoff = false;
+    }
+
+    fn roll(rows: &mut Vec<PredRow>, a: &mut Arena, ball: &BallState) -> bool {
+        rows.resize(PRED_ROWS, [0.0; 9]);
+        let mut seed = BallState::default();
+        seed.phys.pos = ball.phys.pos;
+        seed.phys.vel = ball.phys.vel;
+        seed.phys.ang_vel = ball.phys.ang_vel;
+        a.set_ball_state(seed);
+        let mut frozen = false;
+        for n in 1..PRED_ROWS {
+            if frozen {
+                rows[n] = rows[n - 1];
+                continue;
+            }
+            for _ in 0..PRED_STRIDE {
+                a.step_tick();
+            }
+            rows[n] = pred_row(a.get_ball_state());
+            frozen = rows[n][1].abs() >= PRED_GOAL_Y;
+        }
+        frozen
+    }
+
+    fn rebuild(&mut self, ball: &BallState) {
+        let a = self.arena.get_or_insert_with(|| Box::new(Arena::new(GameMode::Soccar)));
+        self.frozen = Self::roll(&mut self.rows, a, ball);
+        self.valid = true;
+        self.rebuilds += 1;
+    }
+
+    fn extend(&mut self) {
+        self.rows.copy_within(1.., 0);
+        let last = PRED_ROWS - 1;
+        if self.frozen {
+            self.rows[last] = self.rows[last - 1];
+        } else if let Some(a) = self.arena.as_mut() {
+            for _ in 0..PRED_STRIDE {
+                a.step_tick();
+            }
+            let row = pred_row(a.get_ball_state());
+            self.rows[last] = row;
+            self.frozen = row[1].abs() >= PRED_GOAL_Y;
+        }
+        self.extends += 1;
+    }
+
+    /// Advances the cache to `state` and returns its samples.
+    pub fn update(&mut self, state: &GameState) -> PredSamples {
+        use std::sync::atomic::Ordering::Relaxed;
+        let t0 = std::time::Instant::now();
+        let rebuilds = self.rebuilds;
+        let out = self.update_inner(state);
+        PRED_STATS[0].fetch_add(1, Relaxed);
+        PRED_STATS[1].fetch_add(self.rebuilds - rebuilds, Relaxed);
+        PRED_STATS[2].fetch_add(t0.elapsed().as_nanos() as u64, Relaxed);
+        out
+    }
+
+    fn update_inner(&mut self, state: &GameState) -> PredSamples {
+        let actual = pred_row(&state.ball);
+        let touched = state.events.iter().any(|e| matches!(e, ArenaEvent::CarHitBall(_)));
+        let kickoff = kickoff_pending(state);
+        let on_phase = self
+            .last_tick
+            .is_some_and(|t| state.tick_count.wrapping_sub(t) == PRED_STRIDE as u64);
+        let keep = self.valid
+            && self.rows.len() == PRED_ROWS
+            && on_phase
+            && !touched
+            && !(kickoff && !self.last_kickoff)
+            && state.ball.phys.pos.y.abs() < PRED_GOAL_Y
+            && pred_row_matches(&self.rows[1], &actual);
+        self.last_tick = Some(state.tick_count);
+        self.last_kickoff = kickoff;
+        if keep {
+            self.extend();
+        } else {
+            self.rebuild(&state.ball);
+        }
+        self.rows[0] = actual;
+        self.samples()
+    }
+
+    fn samples(&self) -> PredSamples {
+        let mut out = [[0.0; 6]; 5];
+        for (k, &t) in PRED_TICKS.iter().enumerate() {
+            out[k].copy_from_slice(&self.rows[t / PRED_STRIDE][..6]);
+        }
+        out
+    }
+}
+
+/// Uncached ball prediction (stateless callers, tests).
+#[must_use]
+pub fn ball_prediction_uncached(ball: &BallState) -> PredSamples {
+    let mut c = PredCache::default();
+    c.frozen = with_pred_arena(|a| PredCache::roll(&mut c.rows, a, ball));
+    c.samples()
+}
+
+/// The 35 prediction-extension floats of car `i` (see the section comment).
+#[must_use]
+pub fn pred_features(state: &GameState, i: usize, pred: &PredSamples) -> [f32; PRED_LEN] {
+    let (info, car) = &state.cars[i];
+    let invert = info.team == Team::Orange;
+    let mut o = Vec::with_capacity(PRED_LEN);
+    for s in pred {
+        push_pos(&mut o, inv(Vec3A::new(s[0], s[1], s[2]), invert));
+        push_scaled(&mut o, inv(Vec3A::new(s[3], s[4], s[5]), invert), LIN_VEL_COEF);
+    }
+    // Nearest active big pad, else the soonest to respawn (flag 0).
+    let me = car.phys.pos;
+    let big = || state.boost_pads.iter().filter(|(cfg, _)| cfg.is_big);
+    let active = big()
+        .filter(|(_, st)| st.cooldown <= 0.0)
+        .min_by(|a, b| a.0.pos.distance_squared(me).total_cmp(&b.0.pos.distance_squared(me)))
+        .map(|(cfg, _)| (cfg.pos, 1.0f32));
+    let pick = active.or_else(|| {
+        big()
+            .min_by(|a, b| a.1.cooldown.total_cmp(&b.1.cooldown))
+            .map(|(cfg, _)| (cfg.pos, 0.0))
+    });
+    match pick {
+        Some((pos, flag)) => {
+            let fwd = car.phys.rot_mat.x_axis;
+            let up = car.phys.rot_mat.z_axis;
+            let side = fwd.cross(up);
+            let dp = pos - me;
+            o.extend([
+                dp.dot(fwd) * REL_POS_COEF,
+                dp.dot(side) * REL_POS_COEF,
+                dp.dot(up) * REL_POS_COEF,
+                dp.length() * PAD_DIST_COEF,
+                flag,
+            ]);
+        }
+        None => o.extend([0.0; PRED_PAD_LEN]),
+    }
+    let mut out = [0.0; PRED_LEN];
+    out.copy_from_slice(&o);
+    out
 }
 
 static OBS_SHUFFLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -457,6 +743,8 @@ pub fn build_team(state: &GameState, i: usize, order: &[usize], perm: Option<&[u
 pub struct V2DefaultObs {
     perm: Vec<usize>,
     rng: rand::rngs::SmallRng,
+    /// TM3: this arena's rolling ball prediction.
+    pred: PredCache,
 }
 
 impl Default for V2DefaultObs {
@@ -465,6 +753,7 @@ impl Default for V2DefaultObs {
         Self {
             perm: Vec::new(),
             rng: rand::rngs::SmallRng::seed_from_u64(rand::rng().next_u64()),
+            pred: PredCache::default(),
         }
     }
 }
@@ -503,8 +792,9 @@ pub const fn ext_obs_size_for(n: usize) -> usize {
 #[must_use]
 pub fn obs_size() -> usize {
     if obs_team() {
-        return TEAM_OBS_SIZE;
+        return if obs_pred() { PRED_OBS_SIZE } else { TEAM_OBS_SIZE };
     }
+    assert!(!obs_pred(), "INDOCOCO_OBS_PRED=1 needs INDOCOCO_OBS_TEAM=1");
     if obs_ext() {
         ext_obs_size_for(team_size())
     } else {
@@ -524,6 +814,7 @@ impl<SI> Obs<SI> for V2DefaultObs {
     }
     fn reset(&mut self, s: &GameState, _si: &mut SI) {
         self.perm.clear();
+        self.pred.clear();
         if obs_team() && obs_shuffle() {
             use rand::seq::SliceRandom;
             self.perm = (0..s.cars.len()).collect();
@@ -534,8 +825,15 @@ impl<SI> Obs<SI> for V2DefaultObs {
         let order = pad_order(state);
         if obs_team() {
             let perm = (self.perm.len() == state.cars.len()).then_some(self.perm.as_slice());
+            let pred = obs_pred().then(|| self.pred.update(state));
             return (0..state.cars.len())
-                .map(|i| build_team(state, i, &order, perm))
+                .map(|i| {
+                    let mut o = build_team(state, i, &order, perm);
+                    if let Some(p) = &pred {
+                        o.extend(pred_features(state, i, p));
+                    }
+                    o
+                })
                 .collect();
         }
         (0..state.cars.len())

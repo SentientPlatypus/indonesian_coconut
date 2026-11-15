@@ -6,7 +6,9 @@
 #   RUN=TM1 VARIANT=TM1 bash team_launch.sh      (resumes; run in its own tmux)
 # Fresh start: `widen-team` turns START_CK (a 106-wide 1v1 checkpoint) into a
 # 235-wide team-ext seed (actor + critic, new columns zero); follow-ups start
-# from the previous final as is (START_IS_TEAM=1). Chunks of CHUNK
+# from the previous final as is (START_IS_TEAM=1). TM3+ (OBS_PRED=1 in the
+# variant env): INDOCOCO_OBS_PRED=1 for the run and every eval, and the
+# 235-wide start is widened to 270 with `widen-pred`. Chunks of CHUNK
 # steps; after each: Rust h2h vs BEST-team in 2v2 and 3v3 (MID_GAMES each,
 # kickoffs, both sides) with team metrics, Galactus in 2v2 / 3v3 / 1v1 and
 # Megabyte 2v2 -> logs/mid.jsonl. Guard: 2 chunks in a row < 40% in 2v2 vs
@@ -30,6 +32,8 @@ mkdir -p $X/logs $X/checkpoints $X/opponents
 log() { echo "$(date '+%F %T %Z') $*" | tee -a $X/logs/train.log; }
 die() { log "FATAL: $*"; exit 1; }
 source $C/experiments/tm_$VARIANT.env || die "no tm_$VARIANT.env"
+# TM3: the prediction obs is per variant (explicit, so a re-exec never inherits it).
+export INDOCOCO_OBS_PRED=${OBS_PRED:-0}
 steps_in() { sed -nE 's/^cumulative_timesteps = ([0-9]+)/\1/p' $1/stats.toml; }
 latest() { ls $X/checkpoints | grep -E '^[0-9]+$' | sort -n | tail -1; }
 jget() { $PYT -c "import json,sys
@@ -44,7 +48,10 @@ if ! ls $X/checkpoints 2>/dev/null | grep -qE '^[0-9]+$'; then
   INIT=$(basename "$START_CK"); [[ "$INIT" =~ ^[0-9]+$ ]] && (( INIT < $(date +%s) )) || INIT=$(( $(date +%s) - 60 ))
   mkdir -p $X/cfg; cp -r $C/experiments $C/config $X/cfg/; cp $B0 $X/indococo-train
   log "$RUN ($VARIANT) start from $START_CK ($START), team seed (widen-team unless START_IS_TEAM=1)"
-  if [[ "${START_IS_TEAM:-0}" == 1 ]]; then   # follow-up: already 235-wide
+  if [[ "${START_IS_TEAM:-0}" == 1 && "$INDOCOCO_OBS_PRED" == 1 ]]; then   # TM3: 235 -> 270 (or copy if 270)
+    ( cd /home/ubuntu/indonesian_coconut && nice -n 19 $X/indococo-train widen-pred $START_CK $X/seed ) > $X/logs/widen.log 2>&1 || die "widen-pred failed"
+    grep WIDEN_PRED $X/logs/widen.log | tee -a $X/logs/train.log
+  elif [[ "${START_IS_TEAM:-0}" == 1 ]]; then   # follow-up: already team-ext
     mkdir -p $X/seed; cp $START_CK/actor.bpk $START_CK/critic.bpk $START_CK/stats.toml $X/seed/
   else
     ( cd /home/ubuntu/indonesian_coconut && nice -n 19 $X/indococo-train widen-team $START_CK $X/seed ) > $X/logs/widen.log 2>&1 || die "widen-team failed"
