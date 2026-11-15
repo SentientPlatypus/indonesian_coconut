@@ -2645,6 +2645,48 @@ All of items a–f made it:
   - Galactus 2v2/3v3 above 0.
   - Double commit and kickoff duplicates not rising.
 
+## TM1 results: team training from ST36, team BEST = TM1 final (2026-11-15)
+
+Final checkpoint `exp_TM1/checkpoints/1794725270` (24275M steps), exported as
+`checkpoints_to_test/tm1_24275M`. Team gate (`tm1_final/TEAM_PROMOTE.json`,
+recommendation only) said promote. The user approved it, and `team_best/FINAL_CKPT`
+switched to the TM1 final when TM2 started (the previous value, `team_best/seed_TM1`,
+is kept in `team_best/HISTORY`). Finals are in `~/ippo_runs/tm1_final/`. The binary
+is `indococo-train-tm1-fada713` and all games are decisive (0 draws).
+
+| Eval | TM1 final | Old team BEST (`seed_TM1`, widened 1v1) |
+|---|---|---|
+| h2h 2v2 vs old BEST (504 games) | **85.7%** (432-72) | - |
+| h2h 3v3 vs old BEST (504 games) | **88.5%** (446-58) | - |
+| Galactus 2v2 (256) | 5.9% (15-241) | 2.3% (6-250) |
+| Galactus 3v3 (256) | 2.0% (5-251) | 0.4% (1-255) |
+| Galactus 1v1 (504) | 60.9% (307-197) | - |
+| Megabyte 2v2 (256) | 8.2% (21-235) | - |
+| Megabyte 3v3 (256, run Nov 15) | 3.5% (9-247) | - |
+| 1v1 vs ST25 (500, run Nov 15) | **46.8%** (234-266) | - |
+
+Team stats from the h2h finals (TM1 final vs old BEST):
+
+- 2v2: passes/min 1.27 vs 0.95, aerial passes/min 0.64 vs 0.26, last man back 0.91 vs 0.71, double commit 2.9% vs 7.3%.
+- 3v3: passes/min 2.16 vs 1.39, aerial passes/min 0.94 vs 0.44, last man back 0.96 vs 0.76, double commit 5.1% vs 10.9%.
+- Kickoff duplicate share: 17% vs 27% in 2v2, but 39% vs 21% in 3v3.
+
+The air double touches in these numbers still count one car touching the ball twice
+in a row. TM2 fixed this, so TM2's figures are not comparable.
+
+1v1 vs ST25 (`~/ippo_runs/tm1final_vs_st25/`): rust `h2h` with `INDOCOCO_OBS_TEAM=1
+INDOCOCO_OBS_EXT=1 INDOCOCO_TEAM_SIZE=1`, 500 games, 10 threads, nice 19. ST25
+(106-wide) is loaded through `team_col_of_1v1` with zero new columns, so its 1v1
+logits are unchanged. Flip resets were 5 for TM1 and 2 for ST25. Demos against
+TM1 were 139 and against ST25 109. Mid-run (22421M), TM1 scored 43.8% (219-281).
+TM1 is still below the 1v1 BEST, which is why TM2 raised the 1v1 share of the
+mode mix to 35%. ST25 stays the 1v1 BEST and the RLBot 1v1 bot.
+
+Megabyte 3v3 was missing from the finals (the TM1 launcher only ran 2v2). It was
+added with `megabyte-h2h`, team size 3, 250 games, 8 threads, saved as
+`tm1_final/mega_3v3.json`. Both external team bots still beat TM1 in team modes,
+and Galactus most of all. Galactus stays the main target.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
