@@ -5,14 +5,24 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 ## How to test one
 
 1. Keep a single RLBot bot folder: either [`rlbot_indococo_ppo/`](../rlbot_indococo_ppo/) on this branch, or the folder from the [adb-832m release](https://github.com/SentientPlatypus/indonesian_coconut/releases/tag/adb-832m).
-2. Copy the `.bpk` you want over `<bot>/weights/actor.bpk`, e.g. `cp checkpoints_to_test/adb_832M.bpk rlbot_indococo_ppo/weights/actor.bpk`.
+2. In `rlbot_indococo_ppo/`, copy the `.bpk` you want to `weights/<name>/actor.bpk` and run the bot with `--1v1 <name>` (1v1) or `--team <name>` (2v2/3v3); see [its README](../rlbot_indococo_ppo/README.md#choosing-the-model-st25-or-tm2-in-1v1). ST25 (`weights/st25`) and TM2 (`weights/tm2`) are already there: `bot.toml` plays ST25 in 1v1, `tm2.bot.toml` plays TM2 in 1v1, both play TM2 in 2v2/3v3. For the adb-832m release folder, copy over `<bot>/weights/actor.bpk` instead.
 3. Restart the bot (or the match). Weights load only at startup.
 
-**Compatibility:** a `.bpk` only works with binaries built for the same obs, action and network layout. Every file here uses `V2DefaultObs`, the indococo action set and the current actor network. The `indococo-rlbot`/`.exe` binaries in `rlbot_indococo_ppo/` and in the release are byte-identical and run all of them. If the obs, actions or network change, rebuild the binaries and say so here.
+**Compatibility:** a `.bpk` only works with binaries built for the same obs, action and network layout. Every file here uses `V2DefaultObs`, the indococo action set and the current actor network. The `indococo-rlbot`/`.exe` binaries in `rlbot_indococo_ppo/` pick the obs from the actor's input width (92, 106, team-ext 235, team-ext + prediction 270), so they run all of them; `tm*` files are team models that also play 1v1. If the obs, actions or network change, rebuild the binaries and say so here.
 
 ## Checkpoints
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
+
+### tm2_26089M.bpk
+
+| | |
+|---|---|
+| Lineage | TM2 (team mode: musty / flip-reset-use / double-tap / air double touch rewards, reset_shot and musty_setup setters, `tm2.toml`, binary `indococo-train-tm2-620e718`), continued from TM1 24275M, checkpoint `exp_TM2/checkpoints/1794756839` (26088.8M steps). Taken mid-run (TM2 still training); not the TM2 final. 235-input team-ext obs (`INDOCOCO_OBS_TEAM=1`), plays 1v1, 2v2 and 3v3. In the RLBot pack as `weights/tm2`. |
+| H2H (mid-run eval at this checkpoint) | 2v2 **58.0%** vs TM1 (116-84), 3v3 **56.5%** vs TM1 (113-87), 1v1 **49.0%** vs ST25 (98-102), 200 games each |
+| Galactus (mid-run eval, not the 500-game panel) | 1v1 **62.5%** (125-75, 200 games); 2v2 9.6% (10-94), 3v3 4.8% (5-99) |
+| Megabyte | 2v2 6.7% (7-97) |
+| sha256 | `f76f1867a8d3090a8346ff59042995c59cf3efa9d641550aba621db0393c82e4` |
 
 ### st36_21349M.bpk
 
