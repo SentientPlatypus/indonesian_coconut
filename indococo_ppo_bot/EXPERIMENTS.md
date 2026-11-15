@@ -2555,6 +2555,96 @@ tmux new -d -s ippo_team 'cd ~/ippo_runs && RUN=TM1 VARIANT=TM1 bash ~/ippo_runs
   - Kickoff duplicate and double commit falling, passes per game-min rising.
   - 1v1 Galactus no more than 0.05 below the seed's.
 
+## TM2 (queued, not started): team mechanics on top of TM1 (2026-11-14)
+
+**Status 2026-11-14 ~10:50 PM ET:** queued. `~/ippo_runs/TEAM_QUEUE` = `TM2 TM2`, so the team launcher starts TM2 by itself once TM1's finals finish (TM1 training ends ~2:10 AM ET, finals/handoff ~2:20–2:25 AM ET). Commit `620e718` adds the code. The binary is `/opt/dlami/nvme/ippo_bins/indococo-train-tm2-620e718` (sha256 `d966ab8feafe88bdde2deb38db7aebc0cc25e03410d185d65f97eb6e14dccd18`, features `torch,ripple`, built at nice 19).
+
+### team_best becomes TM1's final (user-approved, automatic)
+
+- `experiments/tm_TM2.env` runs a pre-TM2 hook each time the launcher sources it. The hook fires only when `$R/tm1_final/DONE` exists and TM1's final checkpoint (`TM1F`) is set and differs from the current `team_best/FINAL_CKPT`.
+- When it fires, it appends the old value to `team_best/HISTORY`, then writes `team_best/FINAL_CKPT = TM1F` atomically (tmp + `mv -f`). So TM2's guard, its h2h mids and the TEAM_PROMOTE gate all compare against the TM1 final.
+- `TM1F` comes from `tm1_final/FINAL_CKPT`. If that is missing, it falls back to the best chunk in `exp_TM1/mid.jsonl`.
+- TM2 also warm-starts from `TM1F` (`START_CK`, `START_IS_TEAM=1`, so no re-widening), and TM1's final joins the league as an extra opponent (`TM1_final` 0.3).
+- This is the only automatic write to `team_best`. TEAM_PROMOTE is still a recommendation only.
+
+### What changed vs TM1 (`tm2.toml` extends `tm1_fr.toml`; `train_tm2.toml`; `tm_TM2.env`)
+
+All of items a–f made it:
+
+- **a) `flip_reset_use.goal_requires_use = true`.**
+  - The shot and goal bonuses now pay only if the held reset was actually used: the use payout must be > 0. Before this, any goal scored while holding a reset paid, which leaked credit.
+  - goal_bonus 13.3 × weight 30 ≈ 400.
+  - Obtain is paid once per flight (`max_obtains_per_flight 1`, `flip_reset.obtain_decay 0`).
+  - New test: `goal_requires_use_gates_shot_and_goal`.
+- **b) `reset_shot` setter, share 0.05.** It reuses AirNearBall with `attack_y` [2000, 4300] and a goalward carry. When the new fields are unset, the RNG order is unchanged.
+- **c) Double tap backboard helper.**
+  - `[team.double_tap] backboard_helper 0.05` × weight 400 = 20.
+  - It pays once per ground-free sequence, only for a hit on the opponent backboard at z > 600 after our touch.
+  - Double-tap goal stays 400, assister share 0.5.
+- **d) `air_double_touch` needs a different car** (`l.car != rec.car`), weight 20. **Metric change:** the Team "Air double touches" number no longer counts same-car air dribbles, so TM2 values are not comparable with TM1's.
+- **e) New `musty` reward, weight 40.**
+  - It is individual (no spirit blend), not zero-sum, and under the no-double-commit gate.
+  - It arms on a backflip dodge start (ang_vel·right ≤ −3 rad/s; sign verified in RocketSim) while airborne. The car must have ≥ 0.25 s since its jump or a reset this flight, and the ball must be above the roof.
+  - On a touch within 0.35 s it pays min(1, goalward Δv / 2500) if Δv ≥ 900, plus goal_bonus 3 if the team scores within 3 s.
+  - A ground backflip pays 0; there is a test for this, because ground musty was farmed in V2.
+  - Also adds a `musty_setup` setter at 0.03.
+- **f) `airdribble` and `airdribble_seq` cut 30%**, from 50 to 35 each.
+- **Team settings:**
+  - Spirit is held at 0.9 (`[[0.0, 0.9]]`). This fixes the bug where a follow-up run restarted the TM1 ramp at tau 0.3, because `spirit_origin` is the run start.
+  - `individual` and `no_double_commit_gate` now include flip_reset, flip_reset_use and musty.
+- **Setters:** kickoff .05, random .08, random_ground .08, team_play .20, replay .12, aerial_defense .08, demo_threat .05, aerial_pass .12, backboard_double_tap .10, reset_shot .05, musty_setup .03, air_near_ball .02, air_reset .02. The mechanic share is 0.22.
+- **Mix and length:**
+  - mode_mix 1v1/2v2/3v3 = 0.35/0.40/0.25.
+  - STEPS 3B, chunk 100M, LR 5e-5 (hold 1.5B, decay 1B, min 0.4×).
+  - League: Galactus 0.8, Megabyte 0.25, ST25 1v1 0.25, TM1_final 0.3.
+- **New eval:** every mid and the finals also run a 1v1 h2h vs ST25 (`h2h_1v1_st25` in mid.jsonl and TEAM_PROMOTE.json). This is the regression check against the 1v1 BEST.
+- **Not in TM2:** ball-prediction obs. That is a TM3 candidate (see below).
+
+### Tests and validation
+
+- `cargo test` with CUDA hidden passed:
+  - lib 143
+  - trainer bin 9
+  - integration: expert_sim 1, flip_reset_sim 4, obs_ext 1, reset_curriculum_sim 2, reward_parity 33, team_obs 1
+- The new tests cover:
+  - the musty reward (5, including the ground backflip)
+  - goal_requires_use
+  - the different-car air double touch
+  - building tm2.toml
+  - the reset_shot / musty_setup setters
+  - parsing `train_tm2.toml`
+- **Dry run** with the TM2 binary through `team_launch.sh` (`/opt/dlami/nvme/tm2_smoke`, nice 19, 4 threads / 16 games, minibatch 10k to stay small next to TM1 on the GPU):
+  - It started from the TM1 best chunk with mode_mix 0.35/0.40/0.25 and finished a chunk.
+  - The full mid eval ran, including 1v1 vs ST25.
+  - musty, musty_setup, flip_reset_use, double_tap and air_double_touch all show up in the metrics.
+  - An earlier dry run with the default 100k minibatch hit a CUDA OOM next to TM1 (TM1 was not affected). Don't dry-run at full size while a team run trains.
+- **Safety net:** before the new binary existed, a config-only TM2 on `tm1-fada713` was installed and checked. To fall back, set `B0=/opt/dlami/nvme/ippo_bins/indococo-train-tm1-fada713` and drop the new keys (musty, `goal_requires_use`, `[team.double_tap]`, reset_shot / musty_setup).
+
+### Cross-exam note — TM2
+
+- **Discord (read-only):**
+  - Galactus devs value a double tap at about 1/3 of a goal, which is why it stays 400 with assist 0.5.
+  - Mechanical rewards are run at spirit about 0.5 elsewhere. We keep them `individual`, so they skip the blend, with spirit 0.9 for the rest.
+  - Ground musty was farmed in V2, which is why musty is air / post-reset only.
+  - Mode-mix experiments in the community were mixed, so the 1v1 share stays high (0.35).
+- **Research:**
+  - Opti pays a reset goal at about 0.5× a normal goal.
+  - Flicks are best scored by ball exit velocity (goalward Δv), not by touching.
+  - A 35/40/25-ish mode mix.
+  - About 700 uu teammate spacing as the reference.
+- **Code review:**
+  - Spirit-reset bug: fixed by a constant 0.9.
+  - flip_reset_use credit leak: fixed by goal_requires_use.
+  - airdribble overweighted vs team play: cut 30%.
+  - Same-car air double touch: fixed (item d).
+- **Ball-prediction bench:** a 6 s RocketSim ball prediction per step costs about 5–6% throughput uncached, vs about 1% cached (recompute only on touch or bounce). It goes to TM3 with a cache.
+- **Watch items for TM2:**
+  - Musty and reset-shot rates (farming shows as high pay with no goals).
+  - h2h vs team_best (= TM1 final) ≥ 52%.
+  - 1v1 vs ST25 not collapsing.
+  - Galactus 2v2/3v3 above 0.
+  - Double commit and kickoff duplicates not rising.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
