@@ -2805,6 +2805,109 @@ and TM2's rewards, setters, mode mix (35/40/25) and PPO settings stay as they ar
   - Double taps, aerial passes and backboard reads (double taps per game-minute, Aerial Goals).
   - Rebuild share in `PRED_STATS`. It is printed at the end of each training chunk in `exp_TM3/logs/train.log`.
 
+## TM4-pre: Nexto / Necto in Rust, team baselines, the Galactus harness gap (2026-11-15)
+
+Not a run. Code, evals and a launcher copy for a TM4 with Nexto and Necto in the league. TM2 (tmux `ippo_team`) and the queued TM3 were not touched: same `TEAM_QUEUE`, binaries and `team_launch.sh`.
+
+### Code (commit 664faf7, binary `/opt/dlami/nvme/ippo_bins/indococo-train-tm4pre-664faf7`)
+
+- sha256 `dcda5b1f06399672808c44a747ed72c1f6489c4d7d88ecce2675f58f6acfcd0e`. Built from 664faf7 in a separate target dir (`/opt/dlami/nvme/tm4pre/target`) at nice 19.
+- `src/nectofam.rs`: Nexto and Necto from their own TorchScript files (`~/eval_bots/{nexto,necto}`) on LibTorch.
+  - **CPU only by default.** The released files keep CPU constants inside `forward`, and Nexto fails on CUDA ("mat1 is on cpu"). `NF_DEVICE=cuda` opts in. Both nets are small, so no GPU is used.
+  - Obs builders are ports of `nexto_obs.py` / `necto_obs.py` in f64, including Necto's demo saw-tooth and pad timers and Nexto's rotation into the car frame. Pads use rlgym `BOOST_LOCATIONS` order.
+  - Actions: Nexto's 90-row table; Necto's 5 heads (pitch = throttle, yaw/roll from steer and handbrake).
+  - `NfBot` replays `bot.py` tick by tick. The obs is built 1 tick after each 8-tick boundary, and the controls apply **6 ticks later for Nexto and 7 for Necto** (`ticks >= 7` / `>= 8` in `bot.py`). There is no 1-tick delay.
+  - The kickoff taker plays the scripted speedflip (Left goes), and Nexto samples at beta 0.5 during kickoffs.
+  - The taker tolerance is 180 uu instead of `bot.py`'s 10. Jittered spawns differ by up to about 170 uu, and the real spawns are at least about 570 uu apart, so this picks the same taker as the real game.
+- `nexto-h2h` / `necto-h2h <ckpt> <bot dir> [games] [threads] [dump.jsonl]`:
+  - The team size comes from `INDOCOCO_TEAM_SIZE`. Any checkpoint width works with the usual `INDOCOCO_OBS_*` flags (106 / 235, or 270 with `INDOCOCO_OBS_PRED=1`, widened on load).
+  - Games start from kickoffs, both sides, first goal wins; 300 s or 30 s without a touch is a draw.
+  - The learner plays greedy.
+  - `NF_STOCHASTIC=<p>` is the share of games in which the bot samples every decision. `NF_KICKOFF=0` turns the kickoff script off.
+- **Kickoff spawn jitter.** Each car moves up to 60 uu and turns up to 4°, as in `tools/pool_eval`. It is on by default for `nexto-h2h` / `necto-h2h`. `H2H_JITTER=1` turns it on for `galactus-h2h` / `megabyte-h2h`, where it stays off by default so old numbers remain comparable.
+- **League.** `[[opponents.external]] kind = "nexto" | "necto"`, `path = <bot dir>`, `weight`, and an optional `stochastic` (the share of episodes the bot samples).
+  - Action delay is 6 / 7. Necto's timers are kept per game and car, keyed by the collector's game state.
+  - There is no scripted kickoff in training: the collector asks once per 8-tick interval, so the nets play their own kickoffs.
+  - **Per-mode weights are not possible without collector work.** One opponent is drawn per rollout for all arenas, and the arenas mix 1v1 / 2v2 / 3v3.
+- `tools/nectofam/parity.py` replays a decision dump through the bots' own Python obs code and TorchScript. Each (game, car) is replayed in order from a fresh builder.
+
+### Parity (Rust vs the bots' Python, 1000–3000 dumped decisions per row)
+
+| bot | mode | max \|obs diff\| | max rel. logit diff (py obs / rust obs) | greedy argmax |
+|---|---|---|---|---|
+| Nexto | 1v1 | 6.5e-6 | 6.7e-5 / 5.4e-5 | 1463/1463 |
+| Nexto | 2v2 | 3.5e-6 | 1.2e-4 / 3.7e-5 | 2126/2126 |
+| Nexto | 3v3 | 2.6e-6 | 6.2e-5 / 3.6e-5 | 1428/1428 |
+| Necto | 1v1 | 2.3e-7 | 1.3e-5 / 1.3e-5 | 1456/1456 |
+| Necto | 2v2 | 2.4e-7 | 8.8e-6 / 8.8e-6 | 2726/2726 |
+| Necto | 3v3 | 2.4e-7 | 8.6e-6 / 8.6e-6 | 2103/2103 |
+
+- Logit diffs are relative to max(1, |logit|). The second number is TorchScript on the Rust obs vs the Rust logits, so it is the LibTorch vs PyTorch floor. Nexto 2v2's 1.2e-4 comes from f32 vs f64 obs rounding.
+- Sampled decisions (Nexto kickoffs, `NF_STOCHASTIC` games) are left out of the argmax count.
+- Tests: lib 146, trainer bin 10, and integration (expert_sim 1, flip_reset_sim 4, obs_ext 1, pred_obs 1, reset_curriculum_sim 2, reward_parity 33, team_obs 1) all pass with CUDA hidden.
+- League smoke (`/opt/dlami/nvme/tm4pre/league_smoke`, TM2 checkpoint, chance 1.0, 4 threads / 32 games / 20k-step iterations): both kinds load and train ("Training against external opponent nexto / necto") with no panics.
+
+### Baselines (nice 19, CPU bots, 4 threads, jittered kickoffs, greedy both sides; decisive win rate, ±3.5 pts at 200 games)
+
+TM1 final is `exp_TM1/checkpoints/1794725270`. "TM2 now" is `exp_TM2/checkpoints/1794762140` (26389.4M). Both are 235-wide; the 1v1 rows run them at team size 1.
+
+| policy | Nexto 1v1 | Nexto 2v2 | Nexto 3v3 | Necto 1v1 | Necto 2v2 | Necto 3v3 |
+|---|---|---|---|---|---|---|
+| TM1 final | 83.5 (167-33) | **30.0** (60-140) | **16.5** (33-167) | 99.0 | 69.5 (139-61) | 62.5 (125-75) |
+| TM2 now | 82.5 (165-35) | **37.5** (75-125) | **16.5** (33-167) | 92.5 | 80.5 (161-39) | 72.5 (145-55) |
+| ST25 (1v1) | 90.5 (181-19) | – | – | 96.5 | – | – |
+
+- TM2 with `INDOCOCO_OBS_PRED=1` (widened to 270 on load) vs Nexto 2v2 scored 44-56 over 100 games, the same function within noise.
+- ST25 vs Nexto 1v1 without jitter: 89.5%.
+- The 1v1 numbers match the Python pool (ST25: Nexto 92.5, Necto 99.25).
+- **Nexto is the team bot we lose to: about 1 in 6 games in 3v3, 1 in 3 in 2v2, and TM2 did not move 3v3.** Necto is weaker than us in sim in every mode.
+- The user's real-game report has TM2 losing badly to Necto in 2v2/3v3 as well. The sim says otherwise, so real-game Necto (RLBot timing, its real kickoff phase, our bot's own latency there) needs a check before weighting the league on it.
+
+### Galactus harness gap (TM1 60.9% in team galactus-h2h at size 1, ST25 40.8% in the Python pool, yet ST25 beat TM1 53-47)
+
+400 games each, Rust `galactus-h2h`, greedy:
+
+| run | result |
+|---|---|
+| ST25, plain 1v1 env (TM3 binary) | 66.0% |
+| ST25, team-ext env at size 1 | 67.5% |
+| ST25, team env with spawn jitter (tm4pre) | 65.5% |
+| ST25 on the Nov 4 binary (`code_fr9/bin/indococo-train-gal`) | 65.5% |
+| ST25 on `indococo-train-gal4` | 70.25% |
+| ST2 final (TM3 binary; Nov 4: 16.25% Rust, 20.8% Python) | 14.25% |
+| TM1 at size 1, no jitter / jitter | 63.5% / 58.5% |
+
+- **The two numbers come from different harnesses.** On the Rust harness ST25 scores 66% and TM1 61–63.5%, so ST25 is ahead there too, consistent with the 53-47 h2h. The contradiction only appears when TM1's Rust number is set against ST25's Python number (40.8; the botpack5 Galactus 40.25 agrees with Python).
+- **What it is not:**
+  - The team env (66.0 vs 67.5).
+  - A change in the Rust port: ST2 still scores 14–16%, and ST25 scores 65.5% on the Nov 4 binary.
+  - Deterministic replays: the Python pool jitters spawns because two greedy bots would otherwise replay 10 games, but jitter leaves ST25 at 65.5%.
+- **Most likely:** policies trained against the Rust Galactus port, which has been about 20–26% of the 1v1 league since ST4, exploit behaviour specific to the port. The two harnesses agreed for ST2, before that training (16 vs 21). They now differ by about 25 points for ST25.
+- **Consequence:** Rust Galactus win rates overstate strength against the real bot for every ST/TM policy. Use them only to compare policies within one harness.
+- Next check (not run): ST25 and TM1 through the Python Galactus with jitter off, and a Rust-vs-Python Galactus action diff on a dumped ST25 game (`galactus-h2h ... dump`), to find what is being exploited.
+
+### Launcher copy and how to switch (not installed)
+
+`experiments/team_launch_tm4pre.sh` is `team_launch.sh` plus:
+
+- `NEXTO_WEIGHT` / `NECTO_WEIGHT` (and `NEXTO_STOCH` / `NECTO_STOCH`) league entries.
+- Nexto and Necto 2v2 / 3v3 at every mid (`NF_MID_GAMES`, default 150) and at finals (`NF_FIN_GAMES`, default 500), for both the candidate and BEST-team.
+- These evals run on `EVAL_BIN`, by default the run's own binary, so B0 has to be tm4pre or later.
+- Galactus / Megabyte with `GAL_JITTER=1` (0 restores the old protocol).
+- **Candidate score** = 0.5 × mean(h2h 2v2, h2h 3v3 vs BEST-team) + 0.5 × the mean of the external team rates present (Nexto, Necto, Galactus in 2v2 / 3v3).
+- The gate also requires that external mean to be no more than 0.04 below BEST-team's. TEAM_PROMOTE stays a recommendation.
+
+`experiments/tm_TM4draft.env` is a draft of the proposed league: TM3 final start, OBS_PRED=1, past selves 1.0, Nexto 0.8 (20% of its episodes sampled), Necto 0.4, Galactus 0.6, Megabyte 0.25, ST25 0.15, TM2 final 0.3, OPPCH 0.50, 9B steps, B0 = tm4pre. It is not queued.
+
+To switch, between runs only and never under a running trainer:
+
+1. Wait until the current run is in its finals or has stopped.
+2. In `~/ippo_runs/code_tm/indococo_ppo_bot/experiments/`, copy the two files in with an atomic `cp` to `.tmp` then `mv`.
+3. Queue `TM4 TM4draft`.
+4. Start the next run with `RUN=TM4 VARIANT=TM4draft bash team_launch_tm4pre.sh` in its own tmux.
+
+The live `team_launch.sh` re-execs itself at follow-up, so it never picks up the copy on its own.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
