@@ -2687,6 +2687,124 @@ added with `megabyte-h2h`, team size 3, 250 games, 8 threads, saved as
 `tm1_final/mega_3v3.json`. Both external team bots still beat TM1 in team modes,
 and Galactus most of all. Galactus stays the main target.
 
+## TM3 (queued after TM2): ball prediction + nearest big pad, obs-only change (2026-11-15)
+
+TM3 is TM2 with a wider observation and nothing else. It starts from TM2's final,
+and TM2's rewards, setters, mode mix (35/40/25) and PPO settings stay as they are
+(`REWARD_TMPL=tm2.toml`, `TRAIN_TMPL=train_tm2.toml`). It runs for 3B steps.
+
+- Queue: `~/ippo_runs/TEAM_QUEUE` = `TM3 TM3`.
+- Binary: `/opt/dlami/nvme/ippo_bins/indococo-train-tm3-36c7497`, sha256 `118154d8a1dc27fbe22f7d610c1a60c1470311280a566a11a9218f9361382569`.
+- Code: commit `36c7497`.
+
+### Obs layout (`INDOCOCO_OBS_PRED=1`, needs `INDOCOCO_OBS_TEAM=1`): 235 → 270
+
+- `[235, 265)`: 5 ball-prediction slices at +32/64/120/240/480 ticks (0.27/0.53/1/2/4 s).
+  - Each slice is position (`POS_COEF`) and velocity (`LIN_VEL_COEF`), with no angular velocity.
+  - Orange sees them mirrored like the live ball.
+  - The rollout uses a ball-only RocketSim arena built with `Arena::new(Soccar)`, the training config (quantized, ball rotation on). It has no cars.
+  - After the ball crosses a goal line, the crossing row repeats to the end of the horizon.
+- `[265, 270)`: the nearest active big pad (of the 6).
+  - Its position relative to our car in our car frame (/4096), its distance (/2300), and an active flag.
+  - If no big pad is active, it uses the pad that respawns soonest, with flag 0.
+- **Cache (`obs::PredCache`, one per env obs builder):**
+  - It owns its ball-only arena, like Ripple's forecast arena, and keeps rows every 8 ticks out to +480.
+  - It extends by 8 ticks per step when all of these hold: the live ball matches cached row 1 within 1 uu and 0.1 rad/s, the tick gap is exactly 8, there is no `CarHitBall` event, no new kickoff and no goal.
+  - Otherwise it rebuilds all 480 ticks. That covers a touch, goal, kickoff, an episode reset (setters, teleports) and any mismatch.
+  - Stateless callers (`build_full`) use the uncached rollout through a thread-local arena.
+- **Other code:**
+  - `load_net_any` has a new 235-wide branch: `widen_safetensors(235, 270)`, which adds zero rows at the end.
+  - The 106-wide 1v1 remap now targets 270, still with zeros past column 235.
+  - `rlbot.rs` detects width 270 and turns on team and prediction obs. This is code only; the RLBot pack was not rebuilt or touched. The bot would run the same rollout at runtime from its embedded meshes. Its `cargo check --features rlbot` passes.
+- **Normalization:** there is none over the obs vector. stats.toml holds only return stats.
+
+### Warm start, league, evals
+
+- **Warm start:** `widen-pred` adds 35 zero first-layer rows to both actor and critic, and copies everything else. A source that is already 270-wide is copied as is.
+  - The launcher runs it when `OBS_PRED=1` and `START_IS_TEAM=1`.
+  - Adam starts fresh (only the bpks are copied), and the critic warm-up is 20M (`WARM_REL`).
+  - `exp_TM3/policy_versions` starts empty, so every past self is 270-wide. Past-version loading in rlgymppo has no width adaptation.
+- **League:** TM2's league plus the TM2 final.
+  - Past selves 1.0, Galactus 0.8, Megabyte 0.25, all at chance 0.40.
+  - Fixed opponents: ST25 0.25 (106-wide), TM1 final 0.3 and TM2 final 0.3 (235-wide). All three are widened on load.
+- **Evals:**
+  - The launcher exports `INDOCOCO_OBS_PRED=${OBS_PRED:-0}` for every variant, so a re-exec never inherits it.
+  - Every TM3 mid, final and cross eval runs on the TM3 binary.
+  - A 235-wide or 106-wide checkpoint can be loaded by the TM3 binary, but a TM3 checkpoint cannot be loaded by older binaries.
+  - BEST-team stays `team_best/FINAL_CKPT`, which is the TM1 final unless changed by hand.
+- **Rewards check:** TM2's metrics at queue time (about 24.48B steps) show no backboard-helper farming. The double-tap reward is flat at about 0.02, and double taps per game-minute track goals per minute. So `backboard_helper` stays 0.05 and there is no tm3.toml.
+
+### Tests and validation (CUDA hidden, nice 19)
+
+- **Suite:**
+  - lib 143
+  - trainer bin 10, including the new `widen_pred_zero_rows_keep_the_function`
+  - integration: expert_sim 1, flip_reset_sim 4, obs_ext 1, `pred_obs` 1 (new), reset_curriculum_sim 2, reward_parity 33, team_obs 1
+- **`pred_obs` covers:**
+  - Width 270 in 1v1, 2v2 and 3v3, with the head identical to `build_team`.
+  - The env obs equals a fresh builder or `PredCache` fed the same states.
+  - Orange mirroring.
+  - The uncached rollout equals a direct free-ball arena tick for tick.
+  - The goal freeze.
+  - With no active big pad: flag 0, using the pad that respawns soonest.
+  - The cache both extends and rebuilds.
+  - Cached (continuous) vs re-seeded rollouts agree closely in position. Velocity can differ by up to about 100 uu/s around wall or corner contacts.
+- **`widen-pred` on TM2's checkpoint at 24385M (real env obs, 1v1/2v2/3v3):**
+  - Actor and critic first layers are exact: source rows bit for bit, then exact zeros.
+  - Max |logit diff| and |value diff| are 0.0.
+- **Dry run through `team_launch.sh`** (`/opt/dlami/nvme/tm3_smoke/dryR`, RUN=TM3DRY2, 4 threads, 16 games, minibatch 10k):
+  - `widen-pred` seed, then train with the obs reported as `obs_pred true, obs width 270`.
+  - Fixed opponents ST25 (106), TM1 final and TM2 final (235) all load.
+  - Two chunks with full mid evals: h2h vs the 235-wide BEST-team, Galactus 1v1/2v2/3v3, Megabyte 2v2 and 1v1 vs ST25.
+  - Finals, including export, all ran.
+  - A first dry run with the default 20M critic warm-up stays in warm-up past `iterations`, as designed. It was stopped by PID and rerun with `WARM_REL=0`.
+
+### Measured cost (smoke, next to TM2, nice 19)
+
+- **Prediction cost:** 21–23 µs per env step with the real policy (`PRED_STATS`). The cache rebuilds on 9.2–9.8% of steps, about the ball-touch rate.
+  - One 480-tick rollout costs 160–320 µs. An 8-tick extension costs about 4–5 µs.
+  - In the microbench with random actions, the live `env.step` was 43/70/98 µs per step in 1v1/2v2/3v3.
+- **Small-config A/B:** 8 threads, 64 games, 100k-step iterations, 3 alternating pairs, medians of 15 iterations each.
+  - Env step time went from 0.776 to 0.940 s (+21%).
+  - Collection wall time went from 2.60 to 3.44 s.
+  - Overall sps went from 28.2k to 23.2k (−18%). The first A/B pass was noisier, at about −35%.
+- **Why the A/B overstates it:**
+  - This config is env-bound, unlike production.
+  - The smoke threads ran at nice 19 against TM2's 24 threads, which inflates any CPU cost.
+  - "Collect/inference time" includes the delayed env phase, so it rises too.
+- **Production estimate** (24 threads, 384 games):
+  - TM2 spends about 1.0 s of a 4.5 s iteration stepping envs.
+  - About 120k env steps per iteration × 21 µs over 24 threads is about 0.1 s of extra wall time.
+  - That works out to a few percent of overall sps, possibly more if the contention seen in the smoke carries over.
+  - **This is above the ~1% from the TM2 bench.** TM3's real cost will show as its `Throughput/overall` vs TM2's 70–80k.
+  - If it is too high, the 480-tick slice is the lever: a 240-tick tail halves the rebuild cost.
+
+### Cross-exam note — TM3
+
+- **Code:**
+  - The design is above, with new columns at the end so every older checkpoint maps on with zeros.
+  - Risks:
+    - Past selves load without width adaptation, so policy_versions must start empty.
+    - Older binaries can't load TM3 checkpoints, so all cross evals use the TM3 binary.
+    - The RLBot pack would need a rebuilt bot that runs the rollout at runtime.
+  - Cost: estimated at about 1% before this run, now measured as above.
+- **Research:**
+  - Ripple uses RocketSim no-car ball slices (Ripple goes to 5 s; RLBot's ball prediction to 6 s).
+  - There is no public ablation showing ball prediction helps.
+  - Zero-initialized new input columns preserve the function exactly.
+  - The longer horizon (+480 ticks instead of Galactus's +240) is meant to help reads on backboards and double taps.
+- **Discord (read-only):**
+  - Galactus V1.2 added ball prediction, and V1.4 trimmed the slices.
+  - SoldierDoge considered 0.25/0.5/0.75/1/2/3 s and was unsure whether ball prediction helped.
+  - SoldierDoge found relative boost locations helped somewhat. Kaiyotech removed pad distances as noise. So TM3 keeps a single nearest big pad rather than all pads.
+  - On widening, people zero the new columns and reset Adam, which is what TM3 does.
+- **Watch items for TM3:**
+  - Throughput vs TM2.
+  - h2h vs BEST-team ≥ 52%, and 1v1 vs ST25 not dropping.
+  - Galactus 2v2/3v3.
+  - Double taps, aerial passes and backboard reads (double taps per game-minute, Aerial Goals).
+  - Rebuild share in `PRED_STATS`. It is printed at the end of each training chunk in `exp_TM3/logs/train.log`.
+
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
 Not a new ST variant. ST22 and ST23 tomls do not set these keys, so a rebuild of those configs keeps the sequential loop. Obs stays 106, the flip-reset reward stays 70, the setter mix including `air_dribble_wall_challenge` is unchanged, and the PPO loss is unchanged. Policy bf16 stays off. ST22's existing `critic_bf16 = true` is unchanged; this work does not turn bf16 on. An earlier bf16 policy trial raised KL and is not revisited here.
