@@ -1,0 +1,19 @@
+#:schema https://rlbot.org/schemas/agent.json
+[settings]
+name = "Indonesian Coconut TM2"
+loadout_file = "loadout.toml"
+root_dir = ""
+# TM2 team model in every mode, 1v1 included (weights/tm2).
+run_command = "indococo-rlbot.exe --1v1 tm2 --team tm2"
+run_command_linux = "./indococo-rlbot --1v1 tm2 --team tm2"
+agent_id = "indonesian_coconut/indococo_ppo_tm2"
+
+[details]
+description = """
+TM2 team model (26.1B steps, team-ext obs) in 1v1, 2v2 and 3v3.
+Same binary as bot.toml; only the 1v1 model differs. See README.md.
+"""
+source_link = "https://github.com/SentientPlatypus/indonesian_coconut/tree/indococo-ppo"
+developer = "SentientPlatypus"
+language = "Rust"
+tags = ["1v1", "teamplay"]

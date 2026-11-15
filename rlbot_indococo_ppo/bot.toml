@@ -3,16 +3,20 @@
 name = "Indonesian Coconut (indococo-ppo)"
 loadout_file = "loadout.toml"
 root_dir = ""
-run_command = "indococo-rlbot.exe"
-run_command_linux = "./indococo-rlbot"
+# 1v1 plays ST25 (weights/st25), 2v2/3v3 play TM2 (weights/tm2).
+# To play TM2 in 1v1 too, pick "Indonesian Coconut TM2" (tm2.bot.toml)
+# or add "--1v1 tm2" here.
+run_command = "indococo-rlbot.exe --1v1 st25 --team tm2"
+run_command_linux = "./indococo-rlbot --1v1 st25 --team tm2"
 agent_id = "indonesian_coconut/indococo_ppo"
 
 [details]
 description = """
-1v1 PPO bot on the indococo-ppo Rust framework (RocketSim + Burn).
-Native binary with Burn CPU inference; no Python. Weights in weights/actor.bpk.
+PPO bot on the indococo-ppo Rust framework (RocketSim + Burn).
+1v1: ST25 (20.7B steps). 2v2/3v3: TM2 team model (26.1B steps).
+Native binary with Burn CPU inference; no Python. See README.md for the model flags.
 """
 source_link = "https://github.com/SentientPlatypus/indonesian_coconut/tree/indococo-ppo"
 developer = "SentientPlatypus"
 language = "Rust"
-tags = ["1v1"]
+tags = ["1v1", "teamplay"]
