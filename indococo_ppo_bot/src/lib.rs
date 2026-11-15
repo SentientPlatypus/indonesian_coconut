@@ -20,6 +20,8 @@ pub mod galactus;
 mod league_stream;
 #[cfg(feature = "train")]
 pub mod megabyte;
+#[cfg(feature = "torch")]
+pub mod nectofam;
 #[cfg(feature = "train")]
 pub mod ripple;
 pub mod math;

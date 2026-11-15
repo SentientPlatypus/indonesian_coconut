@@ -16,6 +16,8 @@
 //! indococo-train megabyte-logits <megabyte_dir> <obs.jsonl>    # Rust Megabyte logits for parity check
 //! indococo-train ripple-h2h <ckpt> <ripple_dir> <games> [threads]  # Rust Ripple h2h (CPU)
 //! indococo-train ripple-dump <ripple_dir> <steps> <out.jsonl>  # Dump Ripple tensors for Python parity
+//! indococo-train nexto-h2h <ckpt> <nexto_dir> <games> [threads] [dump.jsonl]  # Nexto (TorchScript), team size from INDOCOCO_TEAM_SIZE
+//! indococo-train necto-h2h <ckpt> <necto_dir> <games> [threads] [dump.jsonl]  # Necto (TorchScript), same
 //! INDOCOCO_OBS_TEAM=1 indococo-train widen-team <1v1_ckpt> <dst_ckpt>  # TM1 warm start (actor+critic)
 //! INDOCOCO_OBS_TEAM=1 INDOCOCO_OBS_PRED=1 indococo-train widen-pred <235_ckpt> <dst_ckpt>  # TM3 warm start
 //! ```
@@ -209,6 +211,10 @@ struct ExternalOpponentConfig {
     kind: String,
     path: PathBuf,
     weight: f32,
+    /// Nexto / Necto only: share of episodes in which the bot samples
+    /// (beta 0.5) instead of playing greedily. Default 0.
+    #[serde(default)]
+    stochastic: f32,
 }
 
 /// `RIPPLE_WEIGHT` overrides a toml `kind = "ripple"` entry. A positive value
@@ -239,6 +245,7 @@ fn ripple_external_specs(cfg: &OpponentsConfig) -> Vec<ExternalOpponentConfig> {
                 kind: "ripple".into(),
                 path: PathBuf::from(path),
                 weight,
+                stochastic: 0.0,
             });
         }
     }
@@ -277,6 +284,18 @@ fn load_external_opponents(
                     indococo_bot::ripple::RipplePolicy::load(&o.path)
                         .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name)),
                 ),
+                // TM4: Nexto / Necto (TorchScript on LibTorch, path = bot dir).
+                k @ ("nexto" | "necto") => {
+                    let kind = indococo_bot::nectofam::Kind::parse(k).expect("kind");
+                    let tch_dev = match league {
+                        LeagueBotsDevice::Cpu => tch::Device::Cpu,
+                        LeagueBotsDevice::Default | LeagueBotsDevice::Cuda => indococo_bot::nectofam::NfModel::default_device(),
+                    };
+                    let policy = indococo_bot::nectofam::NfPolicy::load(kind, &o.path, tch_dev, o.stochastic)
+                        .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name));
+                    println!("LEAGUE {} ({k}): delay {}, stochastic {}, device {:?}", o.name, policy.model.kind.delay(), policy.stochastic, tch_dev);
+                    std::sync::Arc::new(policy)
+                }
                 other => panic!("opponent {}: unknown external kind {other:?}", o.name),
             };
             ExternalOpponent { name: o.name.clone(), policy, weight: o.weight }
@@ -1590,6 +1609,14 @@ fn main() {
             arg(2).parse().expect("steps"),
             Path::new(arg(3)),
         ),
+        k @ ("nexto-h2h" | "necto-h2h") => nf_h2h(
+            indococo_bot::nectofam::Kind::parse(k.trim_end_matches("-h2h")).expect("kind"),
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3).parse().expect("games"),
+            args.get(4).map_or(8, |t| t.parse().expect("threads")),
+            args.get(5).map(Path::new),
+        ),
         "speed-bench" => speed_bench(Path::new(arg(1)), arg(2).parse().expect("iters")),
         other => panic!("unknown mode {other:?}"),
     }
@@ -1629,13 +1656,46 @@ fn galactus_h2h(ckpt: &Path, gdir: &Path, games: usize, threads: usize, dump: Op
     let out = serde_json::json!({
         "a": ckpt, "b": "galactus(rust)", "games": w + l + d, "wins": w, "losses": l, "draws": d,
         "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
-        "steps": steps, "seconds": t0.elapsed().as_secs_f64(),
+        "steps": steps, "jitter": h2h_jitter(false), "seconds": t0.elapsed().as_secs_f64(),
     });
     println!("{out}");
 }
 
 fn v3(v: rlgymppo::rlgym::rocketsim::Vec3A) -> [f32; 3] {
     [v.x, v.y, v.z]
+}
+
+/// Kickoff spawn jitter for the scripted-opponent harnesses, matching
+/// `tools/pool_eval/poolkit/match.py`: every car moves by up to 60 uu in x and
+/// y and turns by up to 4 degrees, the ball stays at the center. Without it a
+/// greedy learner against a deterministic bot only ever plays one game per
+/// kickoff spawn (10 distinct 1v1 games), so a 400-game score is really a
+/// score over those few lines. On by default for `nexto-h2h`/`necto-h2h`;
+/// `H2H_JITTER=1` turns it on for `galactus-h2h`/`megabyte-h2h` (off there by
+/// default so old numbers stay comparable), `H2H_JITTER=0` turns it off.
+fn h2h_jitter(default: bool) -> bool {
+    std::env::var("H2H_JITTER").map(|v| v != "0").unwrap_or(default)
+}
+
+fn jittered_reset(env: &mut BotEnv, rng: Option<&mut SmallRng>) -> (GameState, Vec<Vec<f32>>) {
+    use rlgymppo::rlgym::{Obs as _, SharedInfoProvider as _};
+    let (state, obs, _) = env.reset();
+    let Some(rng) = rng else { return (state, obs) };
+    const UU: f32 = 60.0;
+    let yaw = 4.0f32.to_radians();
+    for i in 0..state.cars.len() {
+        let mut car = env.arena.get_car_state(i).clone();
+        car.phys.pos.x += rng.random_range(-UU..UU);
+        car.phys.pos.y += rng.random_range(-UU..UU);
+        let a = rng.random_range(-yaw..yaw);
+        car.phys.rot_mat = rlgymppo::rlgym::rocketsim::Mat3A::from_rotation_z(a) * car.phys.rot_mat;
+        env.arena.set_car_state(i, car.core());
+    }
+    let state = env.current_state();
+    env.shared_info.reset(&state);
+    env.observations.reset(&state, &mut env.shared_info);
+    let obs = env.observations.build_obs(&state, &mut env.shared_info);
+    (state, obs)
 }
 
 fn galactus_worker(
@@ -1663,9 +1723,10 @@ fn galactus_worker(
         a_team: u8,
         live: bool,
     }
+    let mut jrng = h2h_jitter(false).then(|| SmallRng::seed_from_u64(rand::rng().next_u64()));
     let mut new_game = |k: usize, started: &mut usize| -> G {
         let mut env = create_env(&RewardConfig::default(), mix);
-        let (state, obs, _) = env.reset();
+        let (state, obs) = jittered_reset(&mut env, jrng.as_mut());
         let live = *started < games;
         *started += 1;
         G { env, state, obs, a_team: (k % 2) as u8, live }
@@ -1755,6 +1816,248 @@ fn galactus_worker(
     }
     out
 }
+
+/// `nexto-h2h` / `necto-h2h`: the candidate checkpoint (greedy, CPU) against
+/// Nexto or Necto (their TorchScript nets on LibTorch, CPU, one intra-op
+/// thread per worker) in this process's team mode (`INDOCOCO_TEAM_SIZE`, both
+/// sides, kickoff starts, first goal wins, 300 s / 30 s no-touch = draw).
+/// The bots are replayed tick by tick as their RLBot `bot.py` runs them
+/// ([`indococo_bot::nectofam::NfBot`]): own obs builder, decision 1 tick
+/// after each 8-tick boundary, controls 6 (Nexto) / 7 (Necto) ticks later,
+/// the scripted speedflip for the kickoff taker (`NF_KICKOFF=0` turns it
+/// off), Nexto sampling during kickoffs. `NF_STOCHASTIC=<p>`: share of games
+/// in which the bot samples (beta 0.5) every decision; default 0 (greedy, as
+/// in RLBot). Works with any checkpoint width the process can load
+/// (106 / 235 / 270 with the matching INDOCOCO_OBS_* flags). With `dump`,
+/// worker 0 writes its first 3000 bot decisions (state, Rust obs, logits)
+/// for `tools/nectofam/parity.py`. Kickoff spawns are jittered as in the
+/// Python pool eval (see [`h2h_jitter`]; `H2H_JITTER=0` turns it off).
+fn nf_h2h(kind: indococo_bot::nectofam::Kind, ckpt: &Path, dir: &Path, games: usize, threads: usize, dump: Option<&Path>) {
+    if std::env::var("INDOCOCO_OBS_EXT").is_err() {
+        // SAFETY: before any thread is spawned.
+        unsafe { std::env::set_var("INDOCOCO_OBS_EXT", "1") };
+    }
+    tch::set_num_threads(1);
+    init_from_default(true).expect("load collision meshes");
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let stochastic: f32 = std::env::var("NF_STOCHASTIC").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let script = std::env::var("NF_KICKOFF").map_or(true, |v| v != "0");
+    let per = games.div_ceil(threads);
+    let t0 = std::time::Instant::now();
+    let res: Vec<[u64; 6]> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..threads)
+            .map(|t| {
+                let mix = &mix;
+                let dump = if t == 0 { dump } else { None };
+                s.spawn(move || nf_worker(kind, mix, ckpt, dir, per, 9100 + t as u64, stochastic, script, dump))
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().expect("worker")).collect()
+    });
+    let mut tot = [0u64; 6];
+    for r in &res {
+        for i in 0..6 {
+            tot[i] += r[i];
+        }
+    }
+    let [w, l, d, steps, decisions, scripted] = tot;
+    let out = serde_json::json!({
+        "a": ckpt, "b": format!("{}(torchscript)", kind.name()), "team_size": indococo_bot::obs::team_size(),
+        "games": w + l + d, "wins": w, "losses": l, "draws": d,
+        "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
+        "steps": steps, "bot_decisions": decisions, "scripted_kickoffs": scripted,
+        "delay": kind.delay(), "stochastic": stochastic, "kickoff_script": script,
+        "jitter": h2h_jitter(true),
+        "device": format!("{:?}", indococo_bot::nectofam::NfModel::default_device()),
+        "seconds": t0.elapsed().as_secs_f64(),
+    });
+    println!("{out}");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nf_worker(
+    kind: indococo_bot::nectofam::Kind,
+    mix: &[WeightedSetter],
+    ckpt: &Path,
+    dir: &Path,
+    games: usize,
+    seed: u64,
+    stochastic: f32,
+    script: bool,
+    dump: Option<&Path>,
+) -> [u64; 6] {
+    use indococo_bot::nectofam as nf;
+    use std::collections::HashMap;
+    use std::io::Write;
+    const ENVS: usize = 8;
+    const DUMP_MAX: usize = 3000;
+    let dev = Device::flex();
+    let jitter = h2h_jitter(true);
+    let na = load_actor(ckpt, &dev);
+    let model = nf::NfModel::load(kind, dir, nf::NfModel::default_device()).unwrap_or_else(|e| panic!("{e}"));
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut dump = dump.map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("dump")));
+    let mut dumped = 0usize;
+    let mut out = [0u64; 6];
+    let mut started = 0usize;
+    struct G {
+        env: BotEnv,
+        state: GameState,
+        obs: Vec<Vec<f32>>,
+        a_team: u8,
+        bots: Vec<Option<nf::NfBot>>,
+        seq: Vec<u32>,
+        uid: usize,
+        live: bool,
+    }
+    let mut new_game = |k: usize, started: &mut usize, rng: &mut SmallRng| -> G {
+        let mut env = create_env(&RewardConfig::default(), mix);
+        let (state, obs) = jittered_reset(&mut env, jitter.then_some(&mut *rng));
+        let a_team = (k % 2) as u8;
+        let stoch = stochastic > 0.0 && rng.random::<f32>() < stochastic;
+        let bots = state
+            .cars
+            .iter()
+            .map(|(info, _)| (info.team as u8 != a_team).then(|| nf::NfBot::new(kind, stoch, script)))
+            .collect();
+        let n = state.cars.len();
+        let live = *started < games;
+        let uid = *started;
+        *started += 1;
+        G { env, state, obs, a_team, bots, seq: vec![0; n], uid, live }
+    };
+    let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started, &mut rng)).collect();
+    let lpr = match kind {
+        nf::Kind::Nexto => 90,
+        nf::Kind::Necto => 12,
+    };
+    while gs.iter().any(|g| g.live) {
+        let mut oa = Vec::new();
+        for g in gs.iter().filter(|g| g.live) {
+            for (i, (info, _)) in g.state.cars.iter().enumerate() {
+                if info.team as u8 == g.a_team {
+                    oa.push(&g.obs[i]);
+                }
+            }
+        }
+        let aa = argmax_actions(&na, &oa, &dev);
+        let mut ia = 0;
+        for g in gs.iter_mut().filter(|g| g.live) {
+            let acts: Vec<usize> = g
+                .state
+                .cars
+                .iter()
+                .map(|(info, _)| {
+                    if info.team as u8 == g.a_team {
+                        ia += 1;
+                        aa[ia - 1]
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            g.env.pre_step(&g.state, &acts);
+        }
+        for tick in 0..TICK_SKIP_NF {
+            let cur: Vec<Option<GameState>> = gs
+                .iter()
+                .map(|g| g.live.then(|| if tick == 0 { g.state.clone() } else { g.env.current_state() }))
+                .collect();
+            // Decisions due on this tick, batched per entity count.
+            let mut reqs: Vec<(usize, usize, nf::NfObs, bool)> = Vec::new();
+            for (k, g) in gs.iter_mut().enumerate() {
+                let Some(st) = &cur[k] else { continue };
+                for (i, b) in g.bots.iter_mut().enumerate() {
+                    if let Some((o, s)) = b.as_mut().and_then(|bot| bot.begin_tick(st, i)) {
+                        reqs.push((k, i, o, s));
+                    }
+                }
+            }
+            let mut decided: HashMap<(usize, usize), usize> = HashMap::new();
+            let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+            for (r, q) in reqs.iter().enumerate() {
+                groups.entry(q.2.ents).or_default().push(r);
+            }
+            for (ents, idx) in groups {
+                let (mut q, mut kv, mut mk) = (Vec::new(), Vec::new(), Vec::new());
+                for &r in &idx {
+                    q.extend_from_slice(&reqs[r].2.q);
+                    kv.extend_from_slice(&reqs[r].2.kv);
+                    mk.extend_from_slice(&reqs[r].2.mask);
+                }
+                let logits = model.logits(ents, &q, &kv, &mk, idx.len());
+                for (j, &r) in idx.iter().enumerate() {
+                    let (k, i, ref o, s) = reqs[r];
+                    let l = &logits[j * lpr..(j + 1) * lpr];
+                    let a = nf::pick(kind, l, s, &mut rng);
+                    decided.insert((k, i), a);
+                    out[4] += 1;
+                    if let Some(f) = dump.as_mut().filter(|_| dumped < DUMP_MAX) {
+                        let st = cur[k].as_ref().expect("live");
+                        let cars: Vec<_> = st.cars.iter().map(|(ci, c)| {
+                            let fl = indococo_bot::obs::flags(c);
+                            serde_json::json!({
+                                "team": ci.team as u8, "pos": v3(c.phys.pos), "vel": v3(c.phys.vel), "ang_vel": v3(c.phys.ang_vel),
+                                "rot": [v3(c.phys.rot_mat.x_axis), v3(c.phys.rot_mat.y_axis), v3(c.phys.rot_mat.z_axis)],
+                                "boost": c.boost, "on_ground": fl.on_ground, "has_flipped": c.has_flipped,
+                                "has_double_jumped": c.has_double_jumped, "air_time_since_jump": c.air_time_since_jump,
+                                "has_jumped": c.has_jumped, "is_demoed": c.is_demoed,
+                            })
+                        }).collect();
+                        let line = serde_json::json!({
+                            "kind": kind.name(), "uid": gs[k].uid, "car": i, "seq": gs[k].seq[i], "tick": st.tick_count,
+                            "cars": cars,
+                            "ball": {"pos": v3(st.ball.phys.pos), "vel": v3(st.ball.phys.vel), "ang_vel": v3(st.ball.phys.ang_vel)},
+                            "pads_active": nf::pads_active(st).to_vec(), "kickoff": nf::kickoff_phase(st), "stochastic": s,
+                            "ents": o.ents, "q": o.q.to_vec(), "kv": o.kv, "mask": o.mask, "logits": l, "action": a,
+                        });
+                        writeln!(f, "{line}").expect("dump write");
+                        dumped += 1;
+                    }
+                    gs[k].seq[i] += 1;
+                }
+            }
+            for (k, g) in gs.iter_mut().enumerate() {
+                let Some(st) = &cur[k] else { continue };
+                for i in 0..g.bots.len() {
+                    if let Some(bot) = g.bots[i].as_mut() {
+                        let ko = bot.script && nf::kickoff_phase(st) && tick == 0;
+                        let c = bot.end_tick(decided.get(&(k, i)).copied(), st, i);
+                        if ko && c == nf::kickoff_rows()[0] && g.seq[i] <= 1 {
+                            out[5] += 1;
+                        }
+                        g.env.arena.set_car_controls(i, nf::to_controls(&c));
+                    }
+                }
+                g.env.step_physics(1);
+            }
+        }
+        for k in 0..ENVS {
+            if !gs[k].live {
+                continue;
+            }
+            let res = gs[k].env.post_step();
+            out[3] += 1;
+            if res.is_terminal || res.truncated {
+                let view = gs[k].env.get_shared_info().view(&res.state);
+                match view.scoring_team() {
+                    Some(t) if t == gs[k].a_team => out[0] += 1,
+                    Some(_) => out[1] += 1,
+                    None => out[2] += 1,
+                }
+                gs[k] = new_game(k, &mut started, &mut rng);
+            } else {
+                (gs[k].state, gs[k].obs) = (res.state, res.obs);
+            }
+        }
+    }
+    if let Some(mut f) = dump {
+        f.flush().expect("dump flush");
+    }
+    out
+}
+
+const TICK_SKIP_NF: u32 = indococo_bot::nectofam::TICK_SKIP;
 
 /// `megabyte-obs`: dump Megabyte obs for various states.
 /// Generates states and runs them for some time to deplete pads, creating non-kickoff obs.
@@ -1890,9 +2193,10 @@ fn megabyte_worker(mix: &[WeightedSetter], ckpt: &Path, mdir: &Path, games: usiz
     let mut out = [0u64; 4];
     let mut started = 0usize;
     struct G { env: BotEnv, state: GameState, obs: Vec<Vec<f32>>, a_team: u8, live: bool }
+    let mut jrng = h2h_jitter(false).then(|| SmallRng::seed_from_u64(rand::rng().next_u64()));
     let mut new_game = |k: usize, started: &mut usize| -> G {
         let mut env = create_env(&RewardConfig::default(), mix);
-        let (state, obs, _) = env.reset();
+        let (state, obs) = jittered_reset(&mut env, jrng.as_mut());
         let live = *started < games;
         *started += 1;
         G { env, state, obs, a_team: (k % 2) as u8, live }
