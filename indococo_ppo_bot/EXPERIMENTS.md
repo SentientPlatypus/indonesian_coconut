@@ -2687,6 +2687,37 @@ added with `megabyte-h2h`, team size 3, 250 games, 8 threads, saved as
 `tm1_final/mega_3v3.json`. Both external team bots still beat TM1 in team modes,
 and Galactus most of all. Galactus stays the main target.
 
+## TM2 results: team mechanics on top of TM1, team BEST = TM2 final (2026-11-15)
+
+Final checkpoint `exp_TM2/checkpoints/1794776924` (27275M steps), exported as
+`checkpoints_to_test/tm2_27275M`. Team gate (`tm2_final/TEAM_PROMOTE.json`,
+recommendation only) said promote. The user approved it on 2026-11-15 5:18 PM ET,
+and `team_best/FINAL_CKPT` was switched by hand to the TM2 final (the previous
+value, `exp_TM1/checkpoints/1794725270`, is kept in `team_best/HISTORY`). Finals
+are in `~/ippo_runs/tm2_final/`. The binary is `indococo-train-tm2-620e718` and
+all games are decisive (0 draws).
+
+| Eval | TM2 final | Old team BEST (TM1 final) |
+|---|---|---|
+| h2h 2v2 vs old BEST (504 games) | **61.1%** (308-196) | - |
+| h2h 3v3 vs old BEST (504 games) | **60.9%** (307-197) | - |
+| Galactus 2v2 (256) | 8.6% (22-234) | 5.5% (14-242) |
+| Galactus 3v3 (256) | 3.1% (8-248) | 2.3% (6-250) |
+| Galactus 1v1 (504) | 55.2% (278-226) | - |
+| Megabyte 2v2 (256) | 10.5% (27-229) | - |
+| 1v1 vs ST25 (504) | 51.2% (258-246) | - |
+
+Team stats from the h2h finals (TM2 final vs TM1 final):
+
+- 2v2: passes/min 1.26 vs 1.13, aerial passes/min 0.54 vs 0.53, last man back 0.91 vs 0.85, double commit 2.9% vs 4.0%, kickoff duplicate share 6.3% vs 12.9%, double taps 8 vs 2. Flip resets still about zero.
+- 3v3: passes/min 1.92 vs 1.45, aerial passes/min 1.05 vs 0.77, last man back 0.95 vs 0.90, double commit 4.1% vs 5.2%, kickoff duplicate share 11.3% vs 30.4%, double taps 11 vs 6.
+
+TM3 was already running when this switch happened. `team_launch.sh` reads
+`team_best/FINAL_CKPT` once into `$BT` at the start of a run, so TM3's remaining
+mids, the 2-chunk guard and TM3 finals still compare against the TM1 final. The
+next follow-up (TM4) will pick up the TM2 final as BEST-team without a restart.
+ST25 stays the 1v1 BEST.
+
 ## TM3 (queued after TM2): ball prediction + nearest big pad, obs-only change (2026-11-15)
 
 TM3 is TM2 with a wider observation and nothing else. It starts from TM2's final,
@@ -2731,7 +2762,7 @@ and TM2's rewards, setters, mode mix (35/40/25) and PPO settings stay as they ar
   - The launcher exports `INDOCOCO_OBS_PRED=${OBS_PRED:-0}` for every variant, so a re-exec never inherits it.
   - Every TM3 mid, final and cross eval runs on the TM3 binary.
   - A 235-wide or 106-wide checkpoint can be loaded by the TM3 binary, but a TM3 checkpoint cannot be loaded by older binaries.
-  - BEST-team stays `team_best/FINAL_CKPT`, which is the TM1 final unless changed by hand.
+  - BEST-team stays `team_best/FINAL_CKPT`. It was the TM1 final when TM3 started; on 2026-11-15 5:21 PM ET it was changed by hand to the TM2 final. TM3's in-memory `$BT` is still the TM1 final (see TM2 results).
 - **Rewards check:** TM2's metrics at queue time (about 24.48B steps) show no backboard-helper farming. The double-tap reward is flat at about 0.02, and double taps per game-minute track goals per minute. So `backboard_helper` stays 0.05 and there is no tm3.toml.
 
 ### Tests and validation (CUDA hidden, nice 19)
