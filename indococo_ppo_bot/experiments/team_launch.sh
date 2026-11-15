@@ -24,6 +24,8 @@ export LD_LIBRARY_PATH=$R/e8b2_1v1/bin/sp/torch/lib TORCH_ALLOW_TF32_CUBLAS_OVER
 unset RIPPLE_WEIGHT   # Ripple is a 1v1 bot: never in the team league
 PYT=/home/ubuntu/coco-venv/bin/python; SNAP=$R/fr7_snap
 GAL_DIR=${GAL_DIR:-/home/ubuntu/eval_bots/galactus/rust}; MEGA_DIR=${MEGA_DIR:-/home/ubuntu/eval_bots/megabyte}
+# TM2: 1v1 h2h vs the 1v1 BEST (ST25, 106-wide, remapped on load) at every mid eval.
+ST25_CK=${ST25_CK:-$R/exp_ST25/checkpoints/1794413355}
 mkdir -p $X/logs $X/checkpoints $X/opponents
 log() { echo "$(date '+%F %T %Z') $*" | tee -a $X/logs/train.log; }
 die() { log "FATAL: $*"; exit 1; }
@@ -87,13 +89,14 @@ while :; do
   h2h_mode 2 $ck $BT $MID_GAMES > $W/h2h_2v2.json; h2h_mode 3 $ck $BT $MID_GAMES > $W/h2h_3v3.json
   gal_mode 2 $ck $GAL_GAMES > $W/gal_2v2.json; gal_mode 3 $ck $GAL_GAMES > $W/gal_3v3.json; gal_mode 1 $ck $((2 * GAL_GAMES)) > $W/gal_1v1.json
   mega_mode 2 $ck $GAL_GAMES > $W/mega_2v2.json
+  if [[ -s $ST25_CK/actor.bpk ]]; then h2h_mode 1 $ck $ST25_CK $MID_GAMES > $W/h2h_1v1_st25.json; else echo "{}" > $W/h2h_1v1_st25.json; fi
   w2=$(jget win_rate_decisive < $W/h2h_2v2.json); w3=$(jget win_rate_decisive < $W/h2h_3v3.json)
   g2=$(jget win_rate_decisive < $W/gal_2v2.json); g3=$(jget win_rate_decisive < $W/gal_3v3.json); g1=$(jget win_rate_decisive < $W/gal_1v1.json)
-  m2=$(jget win_rate_decisive < $W/mega_2v2.json)
+  m2=$(jget win_rate_decisive < $W/mega_2v2.json); s1=$(jget win_rate_decisive < $W/h2h_1v1_st25.json)
   p2=$(jget team.a.passes_per_min < $W/h2h_2v2.json); p3=$(jget team.a.passes_per_min < $W/h2h_3v3.json)
   d2=$(jget team.a.double_commit_ratio < $W/h2h_2v2.json); d3=$(jget team.a.double_commit_ratio < $W/h2h_3v3.json)
-  echo "{\"steps\":$now,\"ckpt\":\"$ck\",\"h2h_2v2\":$w2,\"h2h_3v3\":$w3,\"gal_2v2\":$g2,\"gal_3v3\":$g3,\"gal_1v1\":$g1,\"mega_2v2\":$m2,\"passes_min_2v2\":$p2,\"passes_min_3v3\":$p3,\"double_commit_2v2\":$d2,\"double_commit_3v3\":$d3}" >> $X/logs/mid.jsonl
-  log "$RUN chunk done at $now: vs BEST-team 2v2 $w2 3v3 $w3 | Galactus 2v2 $g2 3v3 $g3 1v1 $g1 | Megabyte 2v2 $m2 | passes/min $p2 / $p3, double commit $d2 / $d3"
+  echo "{\"steps\":$now,\"ckpt\":\"$ck\",\"h2h_2v2\":$w2,\"h2h_3v3\":$w3,\"gal_2v2\":$g2,\"gal_3v3\":$g3,\"gal_1v1\":$g1,\"mega_2v2\":$m2,\"h2h_1v1_st25\":$s1,\"passes_min_2v2\":$p2,\"passes_min_3v3\":$p3,\"double_commit_2v2\":$d2,\"double_commit_3v3\":$d3}" >> $X/logs/mid.jsonl
+  log "$RUN chunk done at $now: vs BEST-team 2v2 $w2 3v3 $w3 | Galactus 2v2 $g2 3v3 $g3 1v1 $g1 | Megabyte 2v2 $m2 | 1v1 vs ST25 $s1 | passes/min $p2 / $p3, double commit $d2 / $d3"
   if [[ "$w2" != null ]] && $PYT -c "import sys;sys.exit(0 if $w2 < 0.40 else 1)"; then LOW=$((LOW + 1)); else LOW=0; fi
   if (( LOW >= 2 )); then
     src=$($PYT - $X/logs/mid.jsonl <<'PY'
@@ -132,6 +135,7 @@ for n in 2 3; do
   gal_mode $n $BT $((FIN_GAMES / 2)) > $F/gal_${n}v${n}_best.json
 done
 gal_mode 1 $bestck $FIN_GAMES > $F/gal_1v1.json; mega_mode 2 $bestck $((FIN_GAMES / 2)) > $F/mega_2v2.json
+[[ -s $ST25_CK/actor.bpk ]] && h2h_mode 1 $bestck $ST25_CK $FIN_GAMES > $F/h2h_1v1_st25.json
 # Team gate (recommendation only): mean h2h >= 0.52 with each mode >= 0.48, and
 # Galactus per mode not below BEST-team's by more than 0.04.
 $PYT - $F > $F/TEAM_PROMOTE.json <<'PY'
@@ -144,7 +148,7 @@ h2,h3=wr("h2h_2v2.json"),wr("h2h_3v3.json"); g2,g3=wr("gal_2v2.json"),wr("gal_3v
 ok=None not in (h2,h3) and (h2+h3)/2>=0.52 and min(h2,h3)>=0.48
 for g,b in ((g2,b2),(g3,b3)):
     if g is not None and b is not None and g < b-0.04: ok=False
-print(json.dumps({"promote_team":bool(ok),"h2h_2v2":h2,"h2h_3v3":h3,"gal_2v2":g2,"gal_3v3":g3,"best_gal_2v2":b2,"best_gal_3v3":b3,"gal_1v1":wr("gal_1v1.json"),"mega_2v2":wr("mega_2v2.json"),"note":"recommendation only; team_best/FINAL_CKPT is changed by hand"}))
+print(json.dumps({"promote_team":bool(ok),"h2h_2v2":h2,"h2h_3v3":h3,"gal_2v2":g2,"gal_3v3":g3,"best_gal_2v2":b2,"best_gal_3v3":b3,"gal_1v1":wr("gal_1v1.json"),"mega_2v2":wr("mega_2v2.json"),"h2h_1v1_st25":wr("h2h_1v1_st25.json"),"note":"recommendation only; team_best/FINAL_CKPT is changed by hand"}))
 PY
 touch $F/DONE; log "$RUN finals: $(cat $F/TEAM_PROMOTE.json)"
 if [[ ! -f $R/TEAM_NO_FOLLOWUP ]]; then

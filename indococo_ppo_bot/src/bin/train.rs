@@ -1892,6 +1892,39 @@ mod tests {
         c
     }
 
+    /// TM2 template with the launcher placeholders filled: parses, mode mix
+    /// 35/40/25, setter mix sums to 1 with mechanic drills <= 22%.
+    #[test]
+    fn tm2_train_template_parses() {
+        let mut text = include_str!("../../experiments/train_tm2.toml").to_string();
+        for (k, v) in [
+            ("@RUN@", "/tmp/tm2"), ("@ITERATIONS@", "1"), ("@WARM@", "0"), ("@HOLD@", "0"),
+            ("@SNAP@", "/tmp/snap.f32"), ("@TPI@", "300_000"), ("@MB@", "100_000"), ("@LR@", "5e-5"),
+            ("@ENT@", "0.016"), ("@GAMMA@", "0.995"), ("@OPPCH@", "0.40"), ("@PASTW@", "1.0"),
+            ("@DECAY@", "1_000_000_000"), ("@MINLR@", "0.4"),
+        ] {
+            text = text.replace(k, v);
+        }
+        assert!(!text.contains('@'), "unfilled placeholder");
+        let c: TrainConfig = toml::from_str(&text).expect("train_tm2.toml");
+        let mix = &c.team.as_ref().expect("[team]").mode_mix;
+        assert_eq!((mix["1"], mix["2"], mix["3"]), (0.35, 0.40, 0.25));
+        let total: f32 = c.state_setters.iter().map(|s| s.weight).sum();
+        assert!((total - 1.0).abs() < 1e-5, "{total}");
+        let mech: f32 = c
+            .state_setters
+            .iter()
+            .filter(|s| {
+                ["backboard_double_tap", "reset_shot", "musty_setup", "air_near_ball", "air_reset"]
+                    .contains(&s.kind.label())
+            })
+            .map(|s| s.weight)
+            .sum();
+        assert!(mech <= 0.2201, "{mech}");
+        let labels: Vec<_> = c.state_setters.iter().map(|s| s.kind.label()).collect();
+        assert!(labels.contains(&"reset_shot") && labels.contains(&"musty_setup"));
+    }
+
     #[test]
     fn st35_pfsp_section_parses_and_is_off_by_default() {
         assert!(cfg(0, 0).pfsp.is_none());

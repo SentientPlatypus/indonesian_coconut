@@ -27,6 +27,7 @@ use super::flick::Flick;
 use super::flip_reset::{FlipReset, FlipResetParams};
 use super::flip_reset_gated::{FlipResetGated, FlipResetGatedParams};
 use super::flip_reset_use::{FlipResetUse, FlipResetUseParams};
+use super::musty::{Musty, MustyParams};
 use super::goal::Goal;
 use super::goal_dist::GoalDist;
 use super::goal_prob::GoalProb;
@@ -45,7 +46,7 @@ use super::touch::Touch;
 use super::velocity_ball_to_goal::VelocityBallToGoal;
 use super::wall_pop_setup::WallPopSetup;
 use super::team_rewards::{
-    AirDoubleTouch, ConcedeDist, DoubleCommit, DoubleTap, GateKind, Pass, PassParams, TeamGate,
+    AirDoubleTouch, ConcedeDist, DoubleCommit, DoubleTap, DoubleTapParams, GateKind, Pass, PassParams, TeamGate,
     TeammateProximity,
 };
 use super::zero_sum::ZeroSum;
@@ -139,6 +140,8 @@ pub struct RewardWeights {
     pub concede_dist: f64,
     pub double_commit: f64,
     pub teammate_proximity: f64,
+    /// TM2: air / post-reset musty flick (experiment term).
+    pub musty: f64,
 }
 
 /// `[team]`: TM1 team-mode settings. All empty / unused by default, so
@@ -165,6 +168,7 @@ pub struct TeamRewardConfig {
     pub last_back_gate: Vec<String>,
     pub touch: TouchParams,
     pub pass: PassParams,
+    pub double_tap: DoubleTapParams,
     pub double_commit: DoubleCommitParams,
     /// `concede_dist` length scale (Necto 2300).
     pub concede_scale: f64,
@@ -183,6 +187,7 @@ impl Default for TeamRewardConfig {
             last_back_gate: Vec::new(),
             touch: TouchParams::default(),
             pass: PassParams::default(),
+            double_tap: DoubleTapParams::default(),
             double_commit: DoubleCommitParams::default(),
             concede_scale: 2300.0,
             proximity_radius: 800.0,
@@ -260,6 +265,7 @@ pub struct RewardConfig {
     pub flip_reset_use: FlipResetUseParams,
     pub reset_align: ResetAlignParams,
     pub shadow_box: ShadowBoxParams,
+    pub musty: MustyParams,
     /// TM1 team settings (team spirit, gates, pass / double-touch params).
     pub team: TeamRewardConfig,
     /// `{setter kind: {term: scale}}`: term weights multiplied by `scale` in
@@ -453,7 +459,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 12] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 13] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -492,7 +498,11 @@ impl RewardConfig {
                 w.pass,
                 Box::new(Pass::new(tm.touch.clone(), tm.pass.clone())),
             ),
-            ("double_tap", w.double_tap, Box::new(DoubleTap::new(tm.touch.clone()))),
+            (
+                "double_tap",
+                w.double_tap,
+                Box::new(DoubleTap::new(tm.touch.clone(), tm.double_tap.clone())),
+            ),
             (
                 "air_double_touch",
                 w.air_double_touch,
@@ -509,6 +519,7 @@ impl RewardConfig {
                 w.teammate_proximity,
                 Box::new(TeammateProximity::new(tm.proximity_radius)),
             ),
+            ("musty", w.musty, Box::new(Musty::new(self.musty.clone()))),
         ];
         terms.extend(
             experiment
@@ -752,6 +763,32 @@ mod extends_tests {
         let fr = RewardConfig::from_file(&dir.join("tm1_fr.toml")).unwrap();
         assert_eq!(fr.weights.flip_reset_use, 30.0);
         assert_eq!(fr.flip_reset_use.goal_bonus, 8.0);
+    }
+
+    #[test]
+    fn tm2_config_builds_with_the_tm2_terms() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm2.toml")).unwrap();
+        assert_eq!(c.team.spirit, vec![[0.0, 0.9]]);
+        assert_eq!(c.weights.musty, 40.0);
+        assert_eq!(c.weights.air_double_touch, 20.0);
+        assert_eq!((c.weights.airdribble, c.weights.airdribble_seq), (35.0, 35.0));
+        assert_eq!(c.weights.flip_reset_use, 30.0);
+        assert!(c.flip_reset_use.goal_requires_use);
+        assert_eq!(c.flip_reset_use.max_obtains_per_flight, 1);
+        assert!((c.weights.flip_reset_use * c.flip_reset_use.goal_bonus - 400.0).abs() < 2.0);
+        assert_eq!(c.flip_reset.obtain_decay, 0.0);
+        assert_eq!(c.team.double_tap.backboard_helper, 0.05);
+        assert_eq!(c.weights.double_tap, 400.0);
+        assert!(c.team.individual.iter().any(|k| k == "musty"));
+        let names: Vec<_> = c.build().terms.iter().map(|t| t.name).collect();
+        for t in ["musty", "flip_reset_use", "double_tap", "air_double_touch", "pass"] {
+            assert!(names.contains(&t), "{t} missing from tm2");
+        }
+        // TM1 configs are unchanged: no musty term, FR goal rule.
+        let tm1 = RewardConfig::from_file(&dir.join("tm1_fr.toml")).unwrap();
+        assert!(!tm1.flip_reset_use.goal_requires_use);
+        assert!(!tm1.build().terms.iter().any(|t| t.name == "musty"));
     }
 
     #[test]

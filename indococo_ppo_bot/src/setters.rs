@@ -137,6 +137,13 @@ pub enum SetterKind {
     /// TM1: backboard double-tap setup: ball flying at the opponent
     /// backboard, an attacker airborne behind it.
     BackboardDoubleTap(crate::team_setters::BackboardDoubleTap),
+    /// TM2: [`AirNearBall`] in the flier's attacking third with the ball and
+    /// car carried toward the opponent goal (a reset that can score). Unset
+    /// `attack_y` / `goalward_carry` default to `[2000, 4300]` / true.
+    ResetShot(AirNearBall),
+    /// TM2: a car in the air with its flip and the ball on its roof, moving
+    /// toward the opponent goal (air musty starts).
+    MustySetup(MustySetup),
 }
 
 impl SetterKind {
@@ -158,6 +165,8 @@ impl SetterKind {
             Self::TeamPlay(_) => "team_play",
             Self::AerialPass(_) => "aerial_pass",
             Self::BackboardDoubleTap(_) => "backboard_double_tap",
+            Self::ResetShot(_) => "reset_shot",
+            Self::MustySetup(_) => "musty_setup",
         }
     }
 
@@ -365,6 +374,8 @@ impl SetterKind {
             Self::TeamPlay(ref s) => Box::new(s.clone()),
             Self::AerialPass(ref s) => Box::new(s.clone()),
             Self::BackboardDoubleTap(ref s) => Box::new(s.clone()),
+            Self::ResetShot(ref s) => Box::new(s.clone().as_reset_shot()),
+            Self::MustySetup(ref s) => Box::new(s.clone()),
         }
     }
 }
@@ -384,6 +395,12 @@ pub struct AirNearBall {
     /// Shared velocity of ball and car (random horizontal direction).
     pub carry_speed: [f32; 2],
     pub boost: [f32; 2],
+    /// TM2 (`reset_shot`): ball `|y|` range in the flier's attacking half
+    /// (`None` = anywhere, the FR behaviour and RNG order).
+    pub attack_y: Option<[f32; 2]>,
+    /// TM2 (`reset_shot`): carry toward the flier's target goal instead of
+    /// a random horizontal direction.
+    pub goalward_carry: bool,
 }
 
 impl Default for AirNearBall {
@@ -395,24 +412,54 @@ impl Default for AirNearBall {
             approach_speed: [100.0, 500.0],
             carry_speed: [0.0, 800.0],
             boost: [30.0, 100.0],
+            attack_y: None,
+            goalward_carry: false,
         }
     }
+}
+
+impl AirNearBall {
+    /// The `reset_shot` defaults for unset fields.
+    #[must_use]
+    pub fn as_reset_shot(mut self) -> Self {
+        if self.attack_y.is_none() {
+            self.attack_y = Some([2000.0, 4300.0]);
+            self.goalward_carry = true;
+        }
+        self
+    }
+}
+
+/// `+1` for car `idx` on blue (even index, attacks +y), `-1` for orange.
+fn idx_attack_sign(idx: usize) -> f32 {
+    if idx % 2 == 0 { 1.0 } else { -1.0 }
 }
 
 impl<SI: SharedInfoRng> StateSetter<SI> for AirNearBall {
     fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
         arena.reset_to_random_kickoff(None);
+        let n_cars = arena.num_cars();
         let rng = shared_info.rng();
-        let ball_pos = Vec3A::new(
-            rng.random_range(-3000.0..3000.0),
-            rng.random_range(-3800.0..3800.0),
-            range(rng, self.ball_height),
-        );
-        let carry = horizontal(rng) * range(rng, self.carry_speed);
+        // reset_shot draws the flier first (its side sets the attacking half).
+        let pre = self.attack_y.map(|_| rng.random_range(0..n_cars));
+        let s = pre.map_or(1.0, idx_attack_sign);
+        let x = rng.random_range(-3000.0..3000.0);
+        let y = match self.attack_y {
+            Some(ay) => s * range(rng, ay),
+            None => rng.random_range(-3800.0..3800.0),
+        };
+        let ball_pos = Vec3A::new(x, y, range(rng, self.ball_height));
+        let dir = if self.goalward_carry {
+            let d = Vec3A::new(-ball_pos.x, s * BACK_WALL_Y - ball_pos.y, 0.0);
+            d.normalize_or_zero()
+        } else {
+            horizontal(rng)
+        };
+        let carry = dir * range(rng, self.carry_speed);
         let to_ball = tilted_up(rng, self.max_tilt_deg.to_radians());
         arena.set_ball_state(ball_at(ball_pos, carry));
 
-        let flier = rng.random_range(0..arena.num_cars());
+        let flier = pre.unwrap_or_else(|| rng.random_range(0..n_cars));
         for idx in 0..arena.num_cars() {
             let rng = shared_info.rng();
             let mut car = if idx == flier {
@@ -424,6 +471,82 @@ impl<SI: SharedInfoRng> StateSetter<SI> for AirNearBall {
                 car.has_jumped = true;
                 car.has_flipped = true;
                 car.air_time_since_jump = 2.0;
+                car
+            } else {
+                ground_car(rng)
+            };
+            car.boost = range(shared_info.rng(), self.boost);
+            arena.set_car_state(idx, car.core());
+        }
+    }
+}
+
+/// TM2 musty start: one car (random team) airborne `car_height` up in its
+/// attacking `attack_y` range, upright, heading at the opponent goal (yaw
+/// jitter `max_yaw`), `speed` forward, jumped `air_time` s ago with its flip
+/// unused (a dodge is available: `air_time < 1.25`, and `>= 0.25` so the
+/// musty reward can pay), the ball on its roof (`roof` uu above the car's
+/// center, `forward_offset` along its nose) moving with it. Others on the
+/// ground.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MustySetup {
+    pub attack_y: [f32; 2],
+    pub car_height: [f32; 2],
+    pub speed: [f32; 2],
+    pub max_yaw: f32,
+    pub air_time: [f32; 2],
+    pub roof: [f32; 2],
+    pub forward_offset: [f32; 2],
+    pub boost: [f32; 2],
+}
+
+impl Default for MustySetup {
+    fn default() -> Self {
+        Self {
+            attack_y: [-500.0, 3200.0],
+            car_height: [300.0, 900.0],
+            speed: [400.0, 1300.0],
+            max_yaw: 0.4,
+            air_time: [0.3, 0.8],
+            roof: [110.0, 135.0],
+            forward_offset: [-40.0, 30.0],
+            boost: [20.0, 100.0],
+        }
+    }
+}
+
+impl<SI: SharedInfoRng> StateSetter<SI> for MustySetup {
+    fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
+        arena.reset_to_random_kickoff(None);
+        let n_cars = arena.num_cars();
+        let rng = shared_info.rng();
+        let flier = rng.random_range(0..n_cars);
+        let s = idx_attack_sign(flier);
+        let pos = Vec3A::new(
+            rng.random_range(-2500.0..2500.0),
+            s * range(rng, self.attack_y),
+            range(rng, self.car_height),
+        );
+        let to_goal = Vec3A::new(-pos.x, s * BACK_WALL_Y - pos.y, 0.0).normalize_or_zero();
+        let yaw = rng.random_range(-self.max_yaw..=self.max_yaw);
+        let (sn, cs) = yaw.sin_cos();
+        let fwd = Vec3A::new(to_goal.x * cs - to_goal.y * sn, to_goal.x * sn + to_goal.y * cs, 0.0);
+        let up = Vec3A::Z;
+        let vel = fwd * range(rng, self.speed) + Vec3A::Z * rng.random_range(-150.0..250.0);
+        let ball = pos + up * range(rng, self.roof) + fwd * range(rng, self.forward_offset);
+        arena.set_ball_state(ball_at(ball, vel));
+        for idx in 0..n_cars {
+            let rng = shared_info.rng();
+            let mut car = if idx == flier {
+                let mut car = CarState::DEFAULT;
+                car.phys.pos = pos;
+                car.phys.vel = vel;
+                car.phys.rot_mat = Mat3A::from_cols(fwd, up.cross(fwd), up);
+                car.has_jumped = true;
+                car.has_flipped = false;
+                car.has_double_jumped = false;
+                car.air_time_since_jump = range(rng, self.air_time);
                 car
             } else {
                 ground_car(rng)
@@ -1461,6 +1584,79 @@ mod tests {
     use rlgymppo_utils::shared_info::SharedInfoRng;
 
     use super::*;
+
+    struct TmSi(SmallRng);
+    impl SharedInfoRng for TmSi {
+        type Rng = SmallRng;
+        fn rng(&mut self) -> &mut SmallRng {
+            &mut self.0
+        }
+    }
+
+    fn tm_arena(per_team: usize) -> Arena {
+        use rlgymppo_utils::rlgym::rocketsim::{CarBodyConfig, GameMode, Team, init_from_default};
+        init_from_default(true).unwrap();
+        let mut a = Arena::new(GameMode::Soccar);
+        for _ in 0..per_team {
+            a.add_car(Team::Blue, CarBodyConfig::OCTANE);
+            a.add_car(Team::Orange, CarBodyConfig::OCTANE);
+        }
+        a
+    }
+
+    #[test]
+    fn tm2_reset_shot_and_musty_setup() {
+        #[derive(Deserialize)]
+        struct Cfg {
+            state_setters: Vec<WeightedSetter>,
+        }
+        let cfg: Cfg = toml::from_str(
+            r#"
+            [[state_setters]]
+            kind = "reset_shot"
+            weight = 0.05
+            [[state_setters]]
+            kind = "musty_setup"
+            weight = 0.03
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.state_setters[0].kind.label(), "reset_shot");
+        assert_eq!(cfg.state_setters[1].kind.label(), "musty_setup");
+        let SetterKind::ResetShot(rs) = &cfg.state_setters[0].kind else { panic!() };
+        let mut rs = rs.clone().as_reset_shot();
+        assert_eq!(rs.attack_y, Some([2000.0, 4300.0]));
+        let mut ms = MustySetup::default();
+        let mut si = TmSi(SmallRng::seed_from_u64(11));
+        for per_team in 1..=3 {
+            let mut a = tm_arena(per_team);
+            for _ in 0..200 {
+                rs.apply(&mut a, &mut si);
+                let ball = a.get_ball_state().phys;
+                let flier = (0..a.num_cars()).find(|&i| a.get_car_state(i).phys.pos.z > 100.0).expect("flier");
+                let sgn = idx_attack_sign(flier);
+                assert!(sgn * ball.pos.y >= 2000.0 - 1e-3, "attacking third: {:?}", ball.pos);
+                let goal = Vec3A::new(0.0, sgn * BACK_WALL_Y, 0.0) - ball.pos;
+                assert!(ball.vel.x * goal.x + ball.vel.y * goal.y >= 0.0, "carry toward goal");
+
+                ms.apply(&mut a, &mut si);
+                let ball = a.get_ball_state().phys;
+                let flier = (0..a.num_cars()).find(|&i| a.get_car_state(i).phys.pos.z > 100.0).expect("flier");
+                let c = a.get_car_state(flier);
+                assert!(c.has_jumped && !c.has_flipped && !c.has_double_jumped);
+                assert!(c.air_time_since_jump >= 0.25 && c.air_time_since_jump < 1.25);
+                let up = c.phys.rot_mat.z_axis;
+                let d = ball.pos - c.phys.pos;
+                assert!(d.dot(up) >= 100.0 && d.length() < 200.0, "ball on the roof: {d:?}");
+                let sgn = idx_attack_sign(flier);
+                assert!(c.phys.vel.y * sgn > 0.0, "moving toward the opponent goal");
+                for i in 0..a.num_cars() {
+                    let p = a.get_car_state(i).phys.pos;
+                    assert!(p.x.abs() <= SIDE_WALL_X && p.y.abs() <= BACK_WALL_Y, "{p:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn mix_parses_from_toml_with_defaults() {

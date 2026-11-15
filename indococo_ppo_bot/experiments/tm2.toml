@@ -1,0 +1,52 @@
+# TM2 reward config (EXPERIMENTS.md "Cross-exam note — TM2"): TM1 phase 2
+# (tm1_fr.toml: flip_reset_use on) plus the TM2 changes. Follow-up of TM1
+# from the TM1 final (235-wide, START_IS_TEAM=1). Goal 1200.
+extends = "tm1_fr.toml"
+
+[weights]
+# TM2 fix: different car only (the same car again is an air dribble).
+air_double_touch = 20.0
+# Air dribble terms were ~half the TM1 step reward with cars airborne 48%:
+# -30% (aud.toml 50 / 50).
+airdribble = 35.0
+airdribble_seq = 35.0
+# Air / post-reset musty, conservative (Discord: a sloppy musty reward got
+# farmed in V2 / hurt play). Flick up to 40, +120 if the team scores in 3 s.
+musty = 40.0
+
+[musty]
+goal_bonus = 3.0
+
+[flip_reset]
+# Pay the raw reset once per flight (0.55^n chains -> 1, 0, 0, ...).
+obtain_decay = 0.0
+
+[flip_reset_use]
+# Raw reset small (3, once per flight); the reset that scores pays ~1/3 of a
+# goal (30 x 13.3 = 400; Galactus double tap ratio, Opti 0.33-0.5), and only
+# after a paid use (no "teammate scored near my reset" pay).
+obtain = 0.1
+max_obtains_per_flight = 1
+shot_bonus = 2.0
+goal_bonus = 13.3
+goal_requires_use = true
+
+[team.double_tap]
+# Goal-conditioned double tap stays 400 (+0.5 for a team double's first
+# toucher); a small first-backboard helper, 0.05 x 400 = 20, once per
+# ground-free sequence (own aerial touch into the opponent backboard, z > 600).
+assist_share = 0.5
+backboard_helper = 0.05
+
+[team]
+# The TM1 schedule is relative to the run start (spirit_origin): TM2 would
+# restart at tau 0.3. TM1 ended at 0.9: stay there.
+spirit = [[0.0, 0.9]]
+# Mechanic terms stay with the car that did them (not team-shared).
+individual = [
+  "speed_to_ball", "face_ball", "energy", "boost_keep", "boost_change",
+  "aerial_boost", "in_air", "ang_vel", "safe_boost", "overextend",
+  "contact_quality", "recover", "concede_dist", "double_commit",
+  "flip_reset", "flip_reset_use", "air_double_touch", "musty",
+]
+no_double_commit_gate = ["flip_reset", "flip_reset_use", "musty"]

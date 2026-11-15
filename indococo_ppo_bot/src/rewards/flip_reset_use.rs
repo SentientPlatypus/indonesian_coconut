@@ -48,6 +48,10 @@ pub struct FlipResetUseParams {
     /// `dodge_aim * cos` for cos > 0.5 within `dodge_aim_dist`. 0 = off.
     pub dodge_aim: f64,
     pub dodge_aim_dist: f64,
+    /// TM2: the shot and goal bonuses need a paid use first (the car dodged
+    /// into the ball toward goal after the reset). Off = FR behaviour: any
+    /// team goal within `follow_s` of a reset pays the resetting car.
+    pub goal_requires_use: bool,
 }
 
 impl Default for FlipResetUseParams {
@@ -69,6 +73,7 @@ impl Default for FlipResetUseParams {
             goal_bonus: 1.0,
             dodge_aim: 0.0,
             dodge_aim_dist: 500.0,
+            goal_requires_use: false,
         }
     }
 }
@@ -83,6 +88,8 @@ struct Held {
     usable: bool,
     shot_paid: bool,
     goal_paid: bool,
+    /// A use paid (> 0) for this reset.
+    used: bool,
 }
 
 pub struct FlipResetUse {
@@ -187,7 +194,9 @@ impl FlipResetUse {
                         // Dodged into the ball within one step (the usual
                         // reset use at contact range): the touch is in this
                         // step, so pay it now instead of waiting for another.
-                        pay += Self::use_pay(p, car, state);
+                        let u = Self::use_pay(p, car, state);
+                        pay += u;
+                        held.used |= u > 0.0;
                         held.dodge_tick = Some(now);
                         held.usable = false;
                     } else {
@@ -198,13 +207,15 @@ impl FlipResetUse {
                 None if since_reset > ticks(p.dodge_window_s) => held.usable = false,
                 Some(t) if now - t > ticks(p.touch_window_s) => held.usable = false,
                 Some(_) if car.ball_touches > 0 => {
-                    pay += Self::use_pay(p, car, state);
+                    let u = Self::use_pay(p, car, state);
+                    pay += u;
+                    held.used |= u > 0.0;
                     held.usable = false;
                 }
                 _ => {}
             }
         }
-        if now - held.reset_tick <= ticks(p.follow_s) {
+        if now - held.reset_tick <= ticks(p.follow_s) && (held.used || !p.goal_requires_use) {
             if !held.shot_paid && on_target(car, state, p.min_shot_speed) {
                 held.shot_paid = true;
                 pay += p.shot_bonus;
@@ -256,6 +267,7 @@ impl StepReward for FlipResetUse {
                     // credited to the previous one.
                     shot_paid: keep.is_some_and(|h| h.shot_paid),
                     goal_paid: keep.is_some_and(|h| h.goal_paid),
+                    used: false,
                 });
                 continue;
             }
@@ -476,6 +488,36 @@ mod tests {
         let _ = s;
         assert_eq!(paid[3], 0.0);
         assert!((paid[0] - 0.1).abs() < 1e-9 && (paid[1] - 0.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn goal_requires_use_gates_shot_and_goal() {
+        let p = FlipResetUseParams { goal_requires_use: true, ..FlipResetUseParams::default() };
+        // No use: a shot / goal after the reset pays nothing.
+        let mut r = FlipResetUse::new(p.clone());
+        r.reset(&state(0));
+        let s1 = reset_step(120);
+        r.get_rewards(&s1);
+        let mut shot = at(&s1, 160);
+        shot.ball.pos = DVec3::new(0.0, 3000.0, 400.0);
+        shot.ball.vel = DVec3::new(0.0, 2000.0, 0.0);
+        assert_eq!(r.get_rewards(&shot)[0], 0.0, "shot without a use");
+        let mut goal = at(&shot, 176);
+        goal.ball.pos = DVec3::new(0.0, 5300.0, 300.0);
+        assert_eq!(r.get_rewards(&goal)[0], 0.0, "goal without a use");
+        // Use first, then the goal pays.
+        let mut r = FlipResetUse::new(p);
+        r.reset(&state(0));
+        r.get_rewards(&s1);
+        let d = dodge(&s1, 136);
+        r.get_rewards(&d);
+        let used = r.get_rewards(&goalward_touch(&d, 144))[0];
+        assert!((used - 1.0).abs() < 1e-9, "{used}");
+        let mut goal = at(&d, 176);
+        goal.ball.pos = DVec3::new(0.0, 5300.0, 300.0);
+        goal.ball.vel = DVec3::new(0.0, 2000.0, 0.0);
+        let paid = r.get_rewards(&goal)[0];
+        assert!(paid >= 1.0 - 1e-9, "goal after a use: {paid}");
     }
 
     #[test]

@@ -255,6 +255,9 @@ pub struct TouchEvents {
     /// -> second touch by the same team with no ground bounce. A "team
     /// double" when the two differ.
     pub double_tap: Option<(usize, usize)>,
+    /// TM2: the car whose aerial touch just sent the ball into the opponent
+    /// backboard (above `backboard_z`), at most once per ground-free sequence.
+    pub backboard_hit: Option<usize>,
     /// Team with 2+ cars within 1000 uu of the ball at the first kickoff touch.
     pub kickoff_duplicate: Option<u8>,
     /// This step had the first touch of a kickoff.
@@ -278,6 +281,8 @@ pub struct TouchTracker {
     /// Team whose aerial touch hit the opponent backboard, while the ball
     /// has not touched the ground since.
     backboard: Option<(u8, usize)>,
+    /// A backboard hit was already reported in this ground-free sequence.
+    backboard_hit_seq: bool,
     /// `(team, first car, second car)` after the second touch.
     double_tap_armed: Option<(u8, usize, usize)>,
     kickoff: bool,
@@ -332,6 +337,7 @@ impl TouchTracker {
             self.air_doubles_this_seq = 0;
             self.backboard = None;
             self.double_tap_armed = None;
+            self.backboard_hit_seq = false;
         }
         // Backboard bounce after this team's aerial touch.
         if let Some(l) = self.last {
@@ -345,6 +351,10 @@ impl TouchTracker {
                 && attack * ball.vel.y < 0.0
             {
                 self.backboard = Some((l.team, l.car));
+                if !self.backboard_hit_seq {
+                    self.backboard_hit_seq = true;
+                    ev.backboard_hit = Some(l.car);
+                }
             }
         }
         if let Some(i) = Self::toucher(cur) {
@@ -391,9 +401,11 @@ impl TouchTracker {
                     // Lost possession before the keep window: unpaid.
                     self.pending.retain(|pp| pp.team == rec.team);
                 }
-                // Air double touch: same team, no ground bounce in between,
-                // first touch airborne, ball high at this touch.
+                // Air double touch: same team, a different car (TM2: the
+                // same car again is an air dribble, paid by airdribble*), no
+                // ground bounce in between, first touch airborne, ball high.
                 if l.team == rec.team
+                    && l.car != rec.car
                     && !self.grounded_since_touch
                     && l.car_airborne
                     && ball.pos.z > self.p.air_double_z
@@ -605,15 +617,23 @@ mod tests {
     #[test]
     fn air_double_touch_and_cap() {
         let mut t = TouchTracker::new(TouchParams::default());
-        let cars = || vec![car(0, 0.0, 0.0, 600.0), car(1, 0.0, 4000.0, 17.0)];
+        let cars = || vec![car(0, 0.0, 0.0, 600.0), car(1, 0.0, 4000.0, 17.0), car(0, 0.0, 400.0, 600.0)];
         t.reset(&st(0, DVec3::new(0.0, 0.0, 700.0), DVec3::ZERO, cars()));
+        // The same car touching again (an air dribble) is not a double touch.
         let mut n = 0;
-        for k in 0..5u64 {
+        for k in 0..3u64 {
             let mut c = cars();
             c[0].ball_touches = 1;
             n += t.step(&st(8 * (k + 1), DVec3::new(0.0, 0.0, 700.0), DVec3::ZERO, c)).air_doubles.len();
         }
-        assert_eq!(n, 2, "first touch starts, then capped at max_air_doubles");
+        assert_eq!(n, 0, "same car");
+        // Teammates alternating: capped at max_air_doubles.
+        for k in 3..8u64 {
+            let mut c = cars();
+            c[if k % 2 == 0 { 0 } else { 2 }].ball_touches = 1;
+            n += t.step(&st(8 * (k + 1), DVec3::new(0.0, 0.0, 700.0), DVec3::ZERO, c)).air_doubles.len();
+        }
+        assert_eq!(n, 2, "teammate touches, capped at max_air_doubles");
         // Ball lands: the sequence resets.
         t.step(&st(100, DVec3::new(0.0, 0.0, 93.0), DVec3::ZERO, cars()));
         let mut c = cars();
@@ -632,6 +652,7 @@ mod tests {
         t.step(&st(16, DVec3::new(0.0, 4950.0, 900.0), DVec3::new(0.0, 2000.0, 0.0), cars()));
         let e = t.step(&st(24, DVec3::new(0.0, 4980.0, 900.0), DVec3::new(0.0, -1500.0, 0.0), cars()));
         assert!(e.double_tap.is_none());
+        assert_eq!(e.backboard_hit, Some(0), "own aerial touch into the opponent backboard");
         let mut c = cars();
         c[0].ball_touches = 1;
         t.step(&st(32, DVec3::new(0.0, 4500.0, 700.0), DVec3::new(0.0, -1000.0, 0.0), c));

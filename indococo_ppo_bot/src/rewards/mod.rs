@@ -38,6 +38,7 @@ pub mod goal_dist;
 pub mod goal_prob;
 pub mod in_air;
 pub mod mech;
+pub mod musty;
 pub mod no_boost_overextend;
 pub mod one_v_one_recover;
 pub mod opponent_possession_space;

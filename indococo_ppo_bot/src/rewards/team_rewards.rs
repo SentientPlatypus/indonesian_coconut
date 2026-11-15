@@ -95,18 +95,38 @@ impl StepReward for Pass {
     }
 }
 
+/// [`DoubleTap`] payout parameters (relative to the term weight).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DoubleTapParams {
+    /// Share for the first (aerial) toucher on a team double.
+    pub assist_share: f64,
+    /// TM2: paid to the car whose aerial touch sends the ball into the
+    /// opponent backboard above `touch.backboard_z`, once per ground-free
+    /// sequence, goal or not (a small first-backboard helper). 0 = off.
+    pub backboard_helper: f64,
+}
+
+impl Default for DoubleTapParams {
+    fn default() -> Self {
+        Self {
+            assist_share: 0.5,
+            backboard_helper: 0.0,
+        }
+    }
+}
+
 pub struct DoubleTap {
     t: TouchTracker,
-    /// Share for the first (aerial) toucher on a team double.
-    assist_share: f64,
+    p: DoubleTapParams,
 }
 
 impl DoubleTap {
     #[must_use]
-    pub fn new(touch: TouchParams) -> Self {
+    pub fn new(touch: TouchParams, p: DoubleTapParams) -> Self {
         Self {
             t: TouchTracker::new(touch),
-            assist_share: 0.5,
+            p,
         }
     }
 }
@@ -118,11 +138,15 @@ impl StepReward for DoubleTap {
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let mut r = vec![0.0; state.cars.len()];
-        if let Some((scorer, first)) = self.t.step(state).double_tap {
+        let ev = self.t.step(state);
+        if let Some(car) = ev.backboard_hit {
+            r[car] += self.p.backboard_helper;
+        }
+        if let Some((scorer, first)) = ev.double_tap {
             r[scorer] += 1.0;
             if first != scorer {
                 // Team double: the aerial toucher that hit the backboard.
-                r[first] += self.assist_share;
+                r[first] += self.p.assist_share;
             }
         }
         r
