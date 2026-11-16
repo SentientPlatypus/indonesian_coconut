@@ -2999,3 +2999,16 @@ cd /home/ubuntu/indonesian_coconut
 ```
 
 `train_st.toml` is the filled file `st_launch.sh` writes each chunk (`experiments/train_st22.toml` still contains `@TPI@` and will not parse). `3` iterations. Six variants print `VARIANT` then one `SPEED` line per iteration: `off`, `async`, `league_cuda`, `league_cpu`, `both` (async + cuda), `both_cpu`. `overlap_s` on iteration 1 is 0. On later iterations it is the part of that rollout's collection that ran during the previous update, and `wall_s = collect_s + update_s - overlap_s`. `sps` is `steps / wall_s`. The same line is printed for a normal `train` run when `INDOCOCO_SPEED` is set. The bench sets it, and points `INDOCOCO_METRICS` at the temp dir so it does not append to the live jsonl.
+
+## TM3 results: team BEST = TM3 final (2026-11-16)
+
+On 2026-11-16 at 9:35 AM ET the user approved switching `team_best/FINAL_CKPT` by hand to the TM3 final, `exp_TM3/checkpoints/1794807177` (28998.5M, 270-wide pred obs, bpk `checkpoints_to_test/tm3_28999M.bpk` @ 50bc116). The previous value, the TM2 final `exp_TM2/checkpoints/1794776924`, is kept in `team_best/HISTORY`.
+
+| Eval (200 games) | 2v2 | 3v3 |
+|---|---|---|
+| vs TM2 final | 0.595 | 0.495 |
+| vs Nexto | 0.400 (TM2 0.375) | 0.195 (TM2 0.165) |
+| vs Necto | 0.820 (TM2 0.805) | 0.735 (TM2 0.725) |
+| vs TM1 final (finals) | 0.637 | 0.647 |
+
+1v1 vs ST25 0.494. TM4 was already running and read `$BT` (the TM2 final) at its start, so TM4's BEST-team mids and finals are still measured against the TM2 final. The switch applies from TM5. The TM3 final is 270-wide and is not in the RLBot pack (the pack's team weights stay TM2).
