@@ -3046,3 +3046,15 @@ All new terms are self-only (`individual`, never moved by team spirit) and ramp 
 - Working: pair800 falls toward Nexto (0.06 / 0.13), near2 toward 0.12 / 0.21, and dcw falls, without a drop in h2h vs BEST-team or in Nexto / Necto rates.
 - Passive-play alarm (Kaiyotech): any of these over 2 chunks in a row: passes/min below 70% of TM4's (2v2 1.1-1.4, 3v3 1.8-1.9); deep above Nexto's (0.56 2v2 / 0.73 3v3) while h2h vs BEST-team is below 0.48; Nexto rate below TM4's by more than 0.05. If it fires, halve last_man_goalside / support_band first, then teammate_spacing.
 - Over-penalty: teammate_spacing should be learned fast (HappyBavarian: under 50M). If pair800 hasn't moved by +500M, the weight is too low. If touches per minute collapse, it is too high.
+
+## TM4 results: team BEST = TM4 cut checkpoint (2026-11-16)
+
+TM4 was cut at 30411.5M for TM5 (marker `exp_TM4/CUT_FOR_TM5`); full finals were skipped and abbreviated evals ran instead (`~/ippo_runs/tm4_cut/`). On 2026-11-16 at 4:53 PM ET the user approved switching `team_best/FINAL_CKPT` by hand to `exp_TM4/checkpoints/1794862892` (bpk `checkpoints_to_test/tm4_30412M.bpk` @ e64e9db). The previous value, the TM3 final `exp_TM3/checkpoints/1794807177`, is kept in `team_best/HISTORY`.
+
+| Eval | 2v2 | 3v3 |
+|---|---|---|
+| vs TM3 final (400 games) | 0.525 | 0.545 |
+| vs Nexto (300 games) | 0.510 (TM3 0.400) | 0.297 (TM3 0.195) |
+| vs Necto (300 games) | 0.903 (TM3 0.820) | 0.813 (TM3 0.735) |
+
+TM5 was already running and read `$BT` (the TM3 final) at its start, so TM5's BEST-team mids and finals are measured against the TM3 final. The switch applies from TM5r onward. TM4 is 270-wide and is not in the RLBot pack.
