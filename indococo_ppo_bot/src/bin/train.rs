@@ -1899,6 +1899,7 @@ fn nf_worker(
     let mut dump = dump.map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("dump")));
     let mut dumped = 0usize;
     let mut out = [0u64; 6];
+    let mut traj = traj_writer(kind.name(), seed);
     let mut started = 0usize;
     struct G {
         env: BotEnv,
@@ -2038,6 +2039,10 @@ fn nf_worker(
             }
             let res = gs[k].env.post_step();
             out[3] += 1;
+            {
+                let tv = gs[k].env.get_shared_info().view(&res.state);
+                traj_line(&mut traj, gs[k].uid, gs[k].a_team, &tv, res.is_terminal || res.truncated);
+            }
             if res.is_terminal || res.truncated {
                 let view = gs[k].env.get_shared_info().view(&res.state);
                 match view.scoring_team() {
@@ -2051,6 +2056,10 @@ fn nf_worker(
             }
         }
     }
+    if let Some(f) = traj.as_mut() {
+        use std::io::Write;
+        f.flush().expect("traj flush");
+    }
     if let Some(mut f) = dump {
         f.flush().expect("dump flush");
     }
@@ -2058,6 +2067,31 @@ fn nf_worker(
 }
 
 const TICK_SKIP_NF: u32 = indococo_bot::nectofam::TICK_SKIP;
+
+/// Spacing analysis: with `TRAJ_DUMP=<prefix>`, `h2h` and `nexto-h2h` /
+/// `necto-h2h` workers write one JSON line per policy step (ball, every car:
+/// team, pos, vel, boost, demoed, cumulative ball touches) to
+/// `<prefix>.<tag>.<seed>.jsonl`, read by `tools/team_spacing.py`.
+type TrajW = Option<std::io::BufWriter<std::fs::File>>;
+fn traj_writer(tag: &str, seed: u64) -> TrajW {
+    let p = std::env::var("TRAJ_DUMP").ok()?;
+    Some(std::io::BufWriter::new(std::fs::File::create(format!("{p}.{tag}.{seed}.jsonl")).expect("traj dump")))
+}
+fn traj_line(w: &mut TrajW, gid: usize, a_team: u8, v: &StateView, done: bool) {
+    use std::io::Write;
+    let Some(f) = w.as_mut() else { return };
+    let r = |x: f64| x.round();
+    let cars: Vec<_> = v.cars.iter().map(|c| serde_json::json!([
+        c.team, r(c.pos.x), r(c.pos.y), r(c.pos.z), r(c.vel.x), r(c.vel.y), r(c.vel.z),
+        (c.boost * 100.0).round() / 100.0, u8::from(c.is_demoed()), c.ball_touches,
+    ])).collect();
+    let b = &v.ball;
+    let s = if done { v.scoring_team().map_or(-1, i64::from) } else { -1 };
+    let line = serde_json::json!({"g": gid, "a": a_team, "t": v.tick_count,
+        "b": [r(b.pos.x), r(b.pos.y), r(b.pos.z), r(b.vel.x), r(b.vel.y), r(b.vel.z)],
+        "c": cars, "d": done, "s": s});
+    writeln!(f, "{line}").expect("traj write");
+}
 
 /// `megabyte-obs`: dump Megabyte obs for various states.
 /// Generates states and runs them for some time to deplete pads, creating non-kickoff obs.
@@ -2729,7 +2763,9 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
         uses: FlipResetUse,
         touches: indococo_bot::team::TouchTracker,
         live: bool,
+        gid: usize,
     }
+    let mut traj = traj_writer("h2h", seed);
     let mut new_game = |k: usize, started: &mut usize| -> G {
         let mut env = create_env(&RewardConfig::default(), mix);
         let (state, obs, _) = env.reset();
@@ -2744,8 +2780,9 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
         let mut touches = indococo_bot::team::TouchTracker::default();
         touches.reset(&prev);
         let live = *started < games;
+        let gid = *started;
         *started += 1;
-        G { env, state, obs, prev, a_team: (k % 2) as u8, uses, touches, live }
+        G { env, state, obs, prev, a_team: (k % 2) as u8, uses, touches, live, gid }
     };
     let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
     while gs.iter().any(|g| g.live) {
@@ -2769,6 +2806,7 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
             }).collect();
             let res = g.env.step(&g.state, &acts);
             let view = g.env.get_shared_info().view(&res.state);
+            traj_line(&mut traj, g.gid, g.a_team, &view, res.is_terminal || res.truncated);
             let used = g.uses.get_rewards(&view);
             let events = StepEvents::between(&g.prev, &view);
             for (i, c) in view.cars.iter().enumerate() {
@@ -2824,6 +2862,10 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
                 (g.state, g.obs, g.prev) = (res.state, res.obs, view);
             }
         }
+    }
+    if let Some(f) = traj.as_mut() {
+        use std::io::Write;
+        f.flush().expect("traj flush");
     }
     out
 }
