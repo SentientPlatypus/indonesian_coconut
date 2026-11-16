@@ -3012,3 +3012,37 @@ On 2026-11-16 at 9:35 AM ET the user approved switching `team_best/FINAL_CKPT` b
 | vs TM1 final (finals) | 0.637 | 0.647 |
 
 1v1 vs ST25 0.494. TM4 was already running and read `$BT` (the TM2 final) at its start, so TM4's BEST-team mids and finals are still measured against the TM2 final. The switch applies from TM5. The TM3 final is 270-wide and is not in the RLBot pack (the pack's team weights stay TM2).
+
+## TM5 — Cross-exam note: team spacing / roles (cut over from TM4, 2026-11-16)
+
+Why: the user tested TM3 in RLBot: "really bad spacing between the cars ... not working together". TM4 was cut short (user-approved) at 30411.5M (`exp_TM4/checkpoints/1794862892`, bpk `checkpoints_to_test/tm4_30412M.bpk` @ e64e9db, not promoted; full finals skipped, abbreviated evals in `~/ippo_runs/tm4_cut`). TM5 started at 21:01 UTC (4:01 PM ET) from that checkpoint via `experiments/tm5_cutover.sh` (new window `ippo_team:tm5`, old chain stopped by PID). team_best unchanged (TM3 final).
+
+### Three legs
+
+- Code (c57a215, `docs/TM3_SPACING.md`, `tools/team_spacing.py`, 200 games per cell): TM2 / TM3 / TM4 are the same. A teammate pair is within 800 uu for 19-24% (2v2) / 35-42% (3v3) of live play vs Nexto 6% / 13%. Two or more cars are within 1500 uu of the ball 25-33% / 37-43% vs 12% / 21%. Double commits are about 10x Nexto. The second man sits about 2.7-3.1k uu from the ball vs Nexto's 3.7k (2v2). A deep last man is present 37-46% of the time vs 56% (2v2). Kickoffs and role swaps match Nexto. More steps did not help (TM2 to TM4, +3B: 1-2 points). The obs already tells each car whether it is closest, its rank and whether it is the kickoff taker. Orange is rotated 180 degrees, with no x-mirror. Nothing in tm2 rewarded spacing. `concede_dist` 300 (ball distance on concede, every car) pulls cars to the ball, and Necto, which uses it too, also bunches.
+- Outside: Opti adds a self-only 700 uu spacing term after zero-sum (player_self_rewards). TiZero's grouping penalty is -0.001 vs a +-1 goal, so keep it tiny. Necto's concede-distance pulls cars in. OpenAI Five targets spirit 1.0. Ng et al.: non-potential shaping can change the optimal policy, so keep the new terms small and watch behaviour. Don't gate pass / double-touch rewards.
+- Discord (read-only): Zealan saw no benefit from spirit above 0.9, and his spacing penalty must stay weaker than a real commit's reward. Saturn used 0.9 with possession at 1.0. SRG's Teammate Spacing weight was 0.5. HappyBavarian's small "right next to a teammate" penalty was learned in under 50M steps, and he later removed it and thought the bot improved. Kaiyotech: proximity penalties can make all cars play passive. Juan Diego and Zealan: goalside / behind-ball rewards hurt mechanic exploration (bots spun around the ball). Gate mechanics selectively (flip reset / air-dribble sequence when a teammate is in the play; second-committer touch / possession), never pass, follow-up or double touch. Skully: excessive retreat cedes space. Nexto itself double commits, so it is a reference, not a gold standard.
+
+### Reconciled spec (tm5.toml on tm2.toml; goal 1200, 15 steps/s)
+
+All new terms are self-only (`individual`, never moved by team spirit) and ramp from 20% to 100% over the first 300M steps (`[team.spacing] ramp`, relative to spirit_origin).
+
+| term | formula | weight | full cost / pay per second |
+|---|---|---|---|
+| `teammate_spacing` | -clamp((1400 - d) / 800, 0, 1), d = nearest living teammate; not for the team's closest car, demoed cars, or a pending kickoff | 0.5 | -7.5 / s = 0.6% of a goal |
+| `double_commit` | second committer only (closest exempt), 2+ within 1000 uu closing >= 200 uu/s (`[team.double_commit_term]`) | 2 | -30 / s = 2.5% of a goal |
+| `last_man_goalside` | +1 for the last-back car 1500-4500 uu goalside of the ball (2+ living teammates) | 0.2 | +3 / s |
+| `support_band` | 3v3 only: +1 for the second-closest car 2000-3500 uu from the ball | 0.1 | +1.5 / s |
+| `concede_dist` | dropped (replaced by `last_man_goalside`) | 0 | - |
+
+- `no_second_commit_gate = [touch, possession, range_carry, airdribble, airdribble_seq]` zeroes these terms only for a double-committing car that isn't its team's closest. flip_reset / flip_reset_use / musty keep tm2's `no_double_commit_gate`. Pass, double tap, air double touch and follow-ups are not gated. Gating flip resets and sequences "while a teammate is mid-sequence" is approximated by these gates; there is no sequence tracker.
+- Team spirit stays 0.9 (Zealan, HappyBavarian), with `spirit_full = [goal, possession]` blended at 1.0 (Saturn). This takes the shared-outcome part of OpenAI Five's 1.0 target without blurring which car should do the mechanics.
+- Role-aware challenge / support: the challenge side is the existing closest-only speed_to_ball / face_ball. The support side is `last_man_goalside` + `support_band`, kept small (Juan Diego, Zealan, Skully: the band stops 1500 uu behind the ball, not in the net). The 1500-4500 / 2000-3500 bands are first guesses with no public source.
+- Unchanged from TM4: obs (270-wide pred), mode mix 1v1 0.15 / 2v2 0.35 / 3v3 0.50, setters, PPO (1 epoch, no bf16, LR 5e-5, ENT 0.016, gamma 0.995), CHUNK 100M, and the external league (Nexto 0.30 with 20% stochastic, Necto 0.13, Galactus 0.21, Megabyte 0.10, ST25 0.06). The frozen TM2 final 0.30 became TM3 final 0.20 + TM2 final 0.10. 5B steps, LR hold to 4B then 1B cosine, critic warm-up 20M.
+- Code: 559870f (terms, gate, spirit_full, h2h live-spacing metrics, `team_launch_tm5.sh` with spacing in the mids), 55f47a9 (spirit_full numeric test), cfb9281 (env B0, cut-over scripts). Binary `/opt/dlami/nvme/ippo_bins/indococo-train-tm5-559870f`, sha256 `1762f5acee9d23e4b083413b7730c1233f8bf3e8818c4782602de92a8fa42b0b`. Tests: lib 151 and trainer 11 passed. Smoke: 6 x 100k steps, exit 0, all terms present, concede_dist absent.
+
+### Watch (mid.jsonl: pair800_*, near2_*, dcw_*, deep_* plus win rates)
+
+- Working: pair800 falls toward Nexto (0.06 / 0.13), near2 toward 0.12 / 0.21, and dcw falls, without a drop in h2h vs BEST-team or in Nexto / Necto rates.
+- Passive-play alarm (Kaiyotech): any of these over 2 chunks in a row: passes/min below 70% of TM4's (2v2 1.1-1.4, 3v3 1.8-1.9); deep above Nexto's (0.56 2v2 / 0.73 3v3) while h2h vs BEST-team is below 0.48; Nexto rate below TM4's by more than 0.05. If it fires, halve last_man_goalside / support_band first, then teammate_spacing.
+- Over-penalty: teammate_spacing should be learned fast (HappyBavarian: under 50M). If pair800 hasn't moved by +500M, the weight is too low. If touches per minute collapse, it is too high.
