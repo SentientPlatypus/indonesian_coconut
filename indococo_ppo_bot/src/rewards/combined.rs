@@ -200,6 +200,47 @@ mod tests {
         assert_eq!(r, vec![0.1, 0.7]);
     }
 
+    struct Fixed(Vec<f64>);
+    impl StepReward for Fixed {
+        fn reset(&mut self, _initial: &StateView) {}
+        fn get_rewards(&mut self, _state: &StateView) -> Vec<f64> {
+            self.0.clone()
+        }
+    }
+
+    /// TM5 `spirit_full`: flagged terms blend at tau 1.0, the others at the
+    /// schedule's tau, individual terms not at all.
+    #[test]
+    fn spirit_full_blends_flagged_terms_at_one() {
+        let raw = vec![3.0, 10.0, 1.0, -4.0];
+        let state = StateView {
+            cars: [0u8, 1, 0, 1]
+                .iter()
+                .map(|&t| crate::state::CarView { team: t, ..Default::default() })
+                .collect(),
+            ..Default::default()
+        };
+        let term = |name: &'static str, weight: f64| Term { name, weight, reward: Box::new(Fixed(raw.clone())) };
+        let spirit = TeamSpirit {
+            // Flat 0.5 at any learner step.
+            points: vec![[0.0, 0.5], [1e18, 0.5]],
+            individual: vec![false, false, true],
+            full: vec![false, true, false],
+        };
+        let mut c = CombinedReward::new(vec![term("a", 1.0), term("b", 2.0), term("c", 1.0)]).with_team_spirit(Some(spirit));
+        let r = c.step_view(&state);
+        // a at 0.5: [2.5, 6.5, 1.5, -0.5]; b (x2) at 1.0: [4, 6, 4, 6]; c as is.
+        let want = [2.5 + 4.0 + 3.0, 6.5 + 6.0 + 10.0, 1.5 + 4.0 + 1.0, -0.5 + 6.0 - 4.0];
+        for (x, y) in r.iter().zip(want) {
+            assert!((x - y).abs() < 1e-9, "{r:?} vs {want:?}");
+        }
+        // Without full flags b blends at 0.5 too.
+        let spirit = TeamSpirit { points: vec![[0.0, 0.5], [1e18, 0.5]], individual: vec![false, false, true], full: Vec::new() };
+        let mut c = CombinedReward::new(vec![term("a", 1.0), term("b", 2.0), term("c", 1.0)]).with_team_spirit(Some(spirit));
+        let r = c.step_view(&state);
+        assert!((r[0] - (2.5 + 5.0 + 3.0)).abs() < 1e-9, "{r:?}");
+    }
+
     /// Blending after zero-sum = blending before: the opposing team's mean
     /// is unchanged by a blend within that team.
     #[test]
