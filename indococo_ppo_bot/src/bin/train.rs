@@ -2696,7 +2696,43 @@ fn snapshots(setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize, out
 /// plus demos-for and demos-against.
 /// Prints one JSON line: wins, losses, draws, win_rate_decisive, resets, demos_against.
 /// `h2h` counters: 9 classic + TM1 team counters (see `h2h`).
-const N_H2H: usize = 25;
+/// TM5 live-play metrics: some teammate pair <800; 2+ cars within 1500 of
+/// ball; 2+ within 1000 and closing >=200 uu/s; a living car goalside by
+/// >=1500 uu. None while kickoff pending, a teammate demoed, or team <2.
+fn live_spacing(v: &StateView, team: u8) -> Option<[bool; 4]> {
+    if indococo_bot::team::kickoff_pending(v) { return None; }
+    let cars: Vec<_> = v.cars.iter().filter(|c| c.team == team).collect();
+    if cars.len() < 2 || cars.iter().any(|c| c.is_demoed()) { return None; }
+    let pair = cars.iter().enumerate().any(|(i, c)| cars[i + 1..].iter().any(|o| c.pos.distance(o.pos) < 800.0));
+    let near = cars.iter().filter(|c| c.pos.distance(v.ball.pos) < 1500.0).count() >= 2;
+    let dc = cars.iter().filter(|c| {
+        let d = v.ball.pos - c.pos;
+        let n = d.length();
+        n > 1e-6 && n < 1000.0 && c.vel.dot(d / n) >= 200.0
+    }).count() >= 2;
+    let deep = cars.iter().any(|c| c.attack_sign() * (v.ball.pos.y - c.pos.y) >= 1500.0);
+    Some([pair, near, dc, deep])
+}
+
+#[cfg(test)]
+mod spacing_tests {
+    use super::*;
+    use indococo_bot::state::CarView;
+    #[test]
+    fn live_spacing_matches_definition() {
+        let mut v = StateView::default();
+        v.ball.pos.y = 100.0; // not a pending kickoff
+        let c = |y: f64, vy: f64| CarView { team: 0, pos: glam::DVec3::new(0.0,y,17.0), vel: glam::DVec3::new(0.0,vy,0.0), ..CarView::default() };
+        v.cars = vec![c(-300.0, 1000.0), c(-500.0, 500.0)];
+        assert_eq!(live_spacing(&v, 0), Some([true, true, true, false]));
+        v.cars[1] = c(-2500.0, 0.0);
+        assert_eq!(live_spacing(&v, 0), Some([false, false, false, true]));
+        v.cars[1].demo_respawn_timer = 1.0;
+        assert_eq!(live_spacing(&v, 0), None);
+    }
+}
+
+const N_H2H: usize = 35;
 
 fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
     init_from_default(true).expect("load collision meshes");
@@ -2740,6 +2776,12 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
             "double_commit_ratio": tot[17 + k] as f64 / steps,
             "kickoff_duplicate_share": tot[20 + k] as f64 / tot[22].max(1) as f64,
             "last_man_back_ratio": tot[23 + k] as f64 / steps,
+            // TM5 live-play spacing (skip pending kickoff and demoed teammates).
+            "spacing_steps": tot[33 + k],
+            "pair_lt800_ratio": tot[25 + k] as f64 / tot[33 + k].max(1) as f64,
+            "two_near_ball1500_ratio": tot[27 + k] as f64 / tot[33 + k].max(1) as f64,
+            "double_commit_wide_ratio": tot[29 + k] as f64 / tot[33 + k].max(1) as f64,
+            "deep_last_man_ratio": tot[31 + k] as f64 / tot[33 + k].max(1) as f64,
             "flip_resets_per_game": ([ra, rb][k] as f64) / ((w + l + d).max(1) as f64),
         });
         out["team"] = serde_json::json!({"a": side(0), "b": side(1), "steps": tot[19], "kickoffs": tot[22]});
@@ -2847,6 +2889,13 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
                     out[17 + k] += u64::from(near >= 2);
                     let back = view.cars.iter().any(|c| c.team == team && !c.is_demoed() && c.attack_sign() * (c.pos.y - view.ball.pos.y) < 0.0);
                     out[23 + k] += u64::from(back);
+                    if let Some(m) = live_spacing(&view, team) {
+                        out[33 + k] += 1;
+                        out[25 + k] += u64::from(m[0]);
+                        out[27 + k] += u64::from(m[1]);
+                        out[29 + k] += u64::from(m[2]);
+                        out[31 + k] += u64::from(m[3]);
+                    }
                 }
                 out[19] += 1;
             }

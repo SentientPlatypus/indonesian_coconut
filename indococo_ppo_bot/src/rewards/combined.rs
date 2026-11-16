@@ -25,6 +25,9 @@ pub struct TeamSpirit {
     pub points: Vec<[f64; 2]>,
     /// Per term (term order): stays individual.
     pub individual: Vec<bool>,
+    /// TM5, per term (term order): blended at tau 1.0 (shared outcomes such
+    /// as goal / possession) instead of the schedule. Empty = none.
+    pub full: Vec<bool>,
 }
 
 impl TeamSpirit {
@@ -125,7 +128,8 @@ impl CombinedReward {
             if let (Some(tau), Some(sp)) = (tau, &self.spirit) {
                 if tau > 0.0 && !sp.individual.get(i).copied().unwrap_or(false) {
                     let before = weighted.clone();
-                    blend_team(&mut weighted, &teams, tau);
+                    let t = if sp.full.get(i).copied().unwrap_or(false) { 1.0 } else { tau };
+                    blend_team(&mut weighted, &teams, t);
                     shift += before.iter().zip(&weighted).map(|(a, b)| (a - b).abs()).sum::<f64>();
                 }
             }

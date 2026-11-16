@@ -1,0 +1,69 @@
+# TM5 reward config (docs/TM3_SPACING.md; EXPERIMENTS.md "TM5"): TM2/TM3/TM4
+# rewards (tm2.toml) plus the spacing fixes. The user saw TM3 cars bunch
+# together in RLBot; in sim TM2-TM4 have a teammate pair within 800 uu
+# 19-24% (2v2) / 35-42% (3v3) of live play vs Nexto 6% / 13%, and
+# double-commit 10x Nexto. Every new term is self-only (in `individual`, so
+# team spirit never moves it onto the ball carrier; it is added after the
+# zero-sum / spirit mix) and ramps in over the first 300M steps of the run
+# (`[team.spacing] ramp`, relative to spirit_origin). Goal = 1200; 15 policy steps per second.
+extends = "tm2.toml"
+
+[weights]
+# Banded too-close penalty to the nearest teammate (-1 at <= 600 uu, 0 at
+# 1400), never for the team's closest car to the ball, off during the
+# kickoff. Light (Discord: SRG 0.5; HappyBavarian's small penalty learned in
+# < 50M): full stacking costs 0.5 / step = 7.5 / s = 0.6% of a goal per
+# second (TiZero ~0.1% of a goal per step would be 1.2 / step here).
+teammate_spacing = 0.5
+# Second committer only (team's closest exempt), wider test (1000 uu,
+# closing >= 200 uu/s; [team.double_commit_term]): 2 / step = 30 / s = 2.5%
+# of a goal per second. TM4: 2 / step on both committers, 600 uu / 300 uu/s.
+double_commit = 2.0
+# Last-back car goalside by 1500-4500 uu along y (2+ living teammates):
+# +0.2 / step = 3 / s (0.25% of a goal per second). Small on purpose
+# (Discord: goalside / behind-ball terms hurt mechanic exploration). First
+# guess, no public source: watch for passivity (deep_* / near2 metrics).
+# This is the "support" half of role-aware challenge / support; the
+# "challenge" half is the existing closest-only speed_to_ball / face_ball.
+last_man_goalside = 0.2
+# 3v3 only: second-closest car 2000-3500 uu from the ball: +0.1 / step.
+# First guess, no public source.
+support_band = 0.1
+# Necto's ball-distance-on-concede pulls every car toward the ball (Necto
+# also bunches): dropped; last_man_goalside is the goalside position term.
+concede_dist = 0.0
+
+[team]
+# Spirit stays 0.9 (tm2) for most terms; shared outcomes blend at 1.0
+# (Saturn setup; Discord: 1.0 everywhere slows learning, and high spirit on
+# mechanic terms blurs which car should do them).
+spirit_full = ["goal", "possession"]
+# tm2's list minus concede_dist (off) plus the TM5 terms (self-only).
+individual = [
+  "speed_to_ball", "face_ball", "energy", "boost_keep", "boost_change",
+  "aerial_boost", "in_air", "ang_vel", "safe_boost", "overextend",
+  "contact_quality", "recover", "double_commit",
+  "flip_reset", "flip_reset_use", "air_double_touch", "musty",
+  "teammate_spacing", "last_man_goalside", "support_band",
+]
+# Touch / possession-type terms and the air-dribble sequence are zeroed for
+# the second committer only (the closest car keeps them). flip_reset,
+# flip_reset_use and musty keep tm2's no_double_commit_gate. Pass, double
+# tap, air double touch and follow-up terms are NOT gated.
+no_second_commit_gate = ["touch", "possession", "range_carry", "airdribble", "airdribble_seq"]
+double_commit_second_only = true
+
+[team.double_commit_term]
+radius = 1000.0
+min_approach = 200.0
+
+[team.spacing]
+near = 600.0
+clear = 1400.0
+exempt_closest = true
+last_min = 1500.0
+last_max = 4500.0
+support_min = 2000.0
+support_max = 3500.0
+# 20% at the start, full at +300M (also scales the TM5 double_commit).
+ramp = [[0.0, 0.2], [300_000_000.0, 1.0]]

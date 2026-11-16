@@ -221,12 +221,24 @@ impl StepReward for ConcedeDist {
 
 pub struct DoubleCommit {
     p: DoubleCommitParams,
+    /// TM5: the team's closest car is never charged (only the second committer).
+    exempt_closest: bool,
+    ramp: Vec<[f64; 2]>,
 }
 
 impl DoubleCommit {
     #[must_use]
     pub fn new(p: DoubleCommitParams) -> Self {
-        Self { p }
+        Self { p, exempt_closest: false, ramp: Vec::new() }
+    }
+
+    /// TM5: charge only the non-closest committers, scaled by `ramp`
+    /// (absolute learner steps, empty = 1).
+    #[must_use]
+    pub fn second_only(mut self, exempt_closest: bool, ramp: Vec<[f64; 2]>) -> Self {
+        self.exempt_closest = exempt_closest;
+        self.ramp = ramp;
+        self
     }
 }
 
@@ -234,10 +246,196 @@ impl StepReward for DoubleCommit {
     fn reset(&mut self, _initial: &StateView) {}
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        let closest = if self.exempt_closest { closest_on_team(state) } else { vec![false; state.cars.len()] };
+        let k = ramp_scale(&self.ramp);
         double_committing(state, &self.p)
             .into_iter()
-            .map(|d| if d { -1.0 } else { 0.0 })
+            .zip(closest)
+            .map(|(d, c)| if d && !c { -k } else { 0.0 })
             .collect()
+    }
+}
+
+/// TM5 ramp: `piecewise(points, learner step)`, 1 when `points` is empty.
+#[must_use]
+pub fn ramp_scale(points: &[[f64; 2]]) -> f64 {
+    if points.is_empty() {
+        1.0
+    } else {
+        crate::team::piecewise(points, crate::team::global_step() as f64).clamp(0.0, 1.0)
+    }
+}
+
+/// TM5 spacing / role parameters (`[team.spacing]`). Distances in uu; the
+/// `ramp` points are relative to `spirit_origin` in the config and made
+/// absolute when the reward is built.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SpacingParams {
+    /// `teammate_spacing`: -1 at nearest-teammate distance <= `near`, linear
+    /// to 0 at `clear`.
+    pub near: f64,
+    pub clear: f64,
+    /// The team's closest car to the ball is never charged.
+    pub exempt_closest: bool,
+    /// `last_man_goalside`: +1 for the last-back car while it is goalside of
+    /// the ball by `last_min`..=`last_max` (along y).
+    pub last_min: f64,
+    pub last_max: f64,
+    /// `support_band` (teams of 3+ only): +1 for the second-closest car to
+    /// the ball while its ball distance is in `support_min`..=`support_max`.
+    pub support_min: f64,
+    pub support_max: f64,
+    /// `[[step, scale], ...]` relative to `spirit_origin`; empty = 1.
+    pub ramp: Vec<[f64; 2]>,
+}
+
+impl Default for SpacingParams {
+    fn default() -> Self {
+        Self {
+            near: 600.0,
+            clear: 1400.0,
+            exempt_closest: true,
+            last_min: 1500.0,
+            last_max: 4500.0,
+            support_min: 2000.0,
+            support_max: 3500.0,
+            ramp: Vec::new(),
+        }
+    }
+}
+
+fn alive_team_counts(state: &StateView) -> [usize; 2] {
+    let mut n = [0; 2];
+    for c in state.cars.iter().filter(|c| !c.is_demoed()) {
+        n[usize::from(c.team.min(1))] += 1;
+    }
+    n
+}
+
+/// TM5 `teammate_spacing`: banded too-close penalty to the nearest living
+/// teammate, `-clamp((clear - d) / (clear - near), 0, 1)`; skipped for the
+/// team's closest car (`exempt_closest`), demoed cars, and while the kickoff
+/// is pending. No effect in 1v1. Meant to stay individual (self-only, not
+/// blended by team spirit).
+pub struct TeammateSpacing {
+    p: SpacingParams,
+}
+
+impl TeammateSpacing {
+    #[must_use]
+    pub fn new(p: SpacingParams) -> Self {
+        Self { p }
+    }
+}
+
+impl StepReward for TeammateSpacing {
+    fn reset(&mut self, _initial: &StateView) {}
+
+    fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        let n = state.cars.len();
+        if crate::team::kickoff_pending(state) {
+            return vec![0.0; n];
+        }
+        let closest = closest_on_team(state);
+        let k = ramp_scale(&self.p.ramp);
+        let span = (self.p.clear - self.p.near).max(1.0);
+        (0..n)
+            .map(|i| {
+                let c = &state.cars[i];
+                if c.is_demoed() || (self.p.exempt_closest && closest[i]) {
+                    return 0.0;
+                }
+                let d = state
+                    .cars
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, o)| *j != i && o.team == c.team && !o.is_demoed())
+                    .map(|(_, o)| o.pos.distance(c.pos))
+                    .fold(f64::INFINITY, f64::min);
+                if d.is_finite() { -k * ((self.p.clear - d) / span).clamp(0.0, 1.0) } else { 0.0 }
+            })
+            .collect()
+    }
+}
+
+/// TM5 `last_man_goalside`: +1 for the team's last-back living car while it
+/// is goalside of the ball by `last_min..=last_max` uu along y, only when the
+/// team has 2+ living cars and the kickoff is not pending.
+pub struct LastManGoalside {
+    p: SpacingParams,
+}
+
+impl LastManGoalside {
+    #[must_use]
+    pub fn new(p: SpacingParams) -> Self {
+        Self { p }
+    }
+}
+
+impl StepReward for LastManGoalside {
+    fn reset(&mut self, _initial: &StateView) {}
+
+    fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        let n = state.cars.len();
+        if crate::team::kickoff_pending(state) {
+            return vec![0.0; n];
+        }
+        let alive = alive_team_counts(state);
+        let last = crate::team::last_back_on_team(state);
+        let k = ramp_scale(&self.p.ramp);
+        (0..n)
+            .map(|i| {
+                let c = &state.cars[i];
+                if !last[i] || c.is_demoed() || alive[usize::from(c.team.min(1))] < 2 {
+                    return 0.0;
+                }
+                let behind = c.attack_sign() * (state.ball.pos.y - c.pos.y);
+                if (self.p.last_min..=self.p.last_max).contains(&behind) { k } else { 0.0 }
+            })
+            .collect()
+    }
+}
+
+/// TM5 `support_band`: +1 for the second-closest living car to the ball of
+/// a team with 3+ living cars while its ball distance is in
+/// `support_min..=support_max` (kickoff pending: 0).
+pub struct SupportBand {
+    p: SpacingParams,
+}
+
+impl SupportBand {
+    #[must_use]
+    pub fn new(p: SpacingParams) -> Self {
+        Self { p }
+    }
+}
+
+impl StepReward for SupportBand {
+    fn reset(&mut self, _initial: &StateView) {}
+
+    fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        let n = state.cars.len();
+        let mut r = vec![0.0; n];
+        if crate::team::kickoff_pending(state) {
+            return r;
+        }
+        let k = ramp_scale(&self.p.ramp);
+        for team in [0u8, 1u8] {
+            let mut ids: Vec<(f64, usize)> = (0..n)
+                .filter(|&i| state.cars[i].team == team && !state.cars[i].is_demoed())
+                .map(|i| (state.cars[i].pos.distance(state.ball.pos), i))
+                .collect();
+            if ids.len() < 3 {
+                continue;
+            }
+            ids.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let (d, i) = ids[1];
+            if (self.p.support_min..=self.p.support_max).contains(&d) {
+                r[i] = k;
+            }
+        }
+        r
     }
 }
 
@@ -279,6 +477,9 @@ pub enum GateKind {
     NotDoubleCommit,
     /// Team's last-back car (closest to its own goal line).
     LastBack,
+    /// TM5: zero only for a double-committing car that is NOT its team's
+    /// closest (the second committer); the first man keeps the term.
+    NotSecondCommit,
 }
 
 pub struct TeamGate {
@@ -307,6 +508,11 @@ impl StepReward for TeamGate {
             GateKind::NotDoubleCommit => double_committing(state, &self.dc)
                 .into_iter()
                 .map(|d| !d)
+                .collect(),
+            GateKind::NotSecondCommit => double_committing(state, &self.dc)
+                .into_iter()
+                .zip(closest_on_team(state))
+                .map(|(d, c)| !d || c)
                 .collect(),
         };
         for (x, ok) in r.iter_mut().zip(pass) {
@@ -375,6 +581,72 @@ mod tests {
         assert!(r[0].abs() < 0.05, "{r:?}");
         assert!((r[2] + (1.0 - (-1.0f64).exp())).abs() < 1e-3, "{r:?}");
         assert_eq!(c.get_rewards(&g), vec![0.0; 3], "paid once");
+    }
+
+    fn carp(team: u8, x: f64, y: f64) -> CarView {
+        CarView { pos: DVec3::new(x, y, 17.0), ..car(team, y) }
+    }
+
+    fn not_kickoff(mut s: StateView) -> StateView {
+        s.ball.vel = DVec3::new(0.0, 500.0, 0.0);
+        s.ball.pos.x = 10.0;
+        s
+    }
+
+    #[test]
+    fn tm5_spacing_band_exempts_the_first_man() {
+        // Blue 0 closest to the ball, blue 2 at 400 uu from it, blue 3 at 1000 uu.
+        let s = not_kickoff(st(0.0, vec![carp(0, 0.0, -300.0), carp(1, 0.0, 3000.0), carp(0, 0.0, -700.0)]));
+        let mut t = TeammateSpacing::new(SpacingParams::default());
+        let r = t.get_rewards(&s);
+        assert_eq!(r[0], 0.0, "{r:?}");
+        assert_eq!(r[1], 0.0, "1-car team: {r:?}");
+        assert!((r[2] + 1.0).abs() < 1e-9, "400 uu <= near: {r:?}");
+        let s = not_kickoff(st(0.0, vec![carp(0, 0.0, -300.0), carp(1, 0.0, 3000.0), carp(0, 0.0, -1300.0)]));
+        let r = t.get_rewards(&s);
+        assert!((r[2] + 0.5).abs() < 1e-9, "1000 uu: halfway: {r:?}");
+        let s = not_kickoff(st(0.0, vec![carp(0, 0.0, -300.0), carp(1, 0.0, 3000.0), carp(0, 0.0, -2000.0)]));
+        assert_eq!(t.get_rewards(&s), vec![0.0; 3]);
+        // Kickoff pending: nothing.
+        let s = st(0.0, vec![carp(0, 0.0, -300.0), carp(1, 0.0, 3000.0), carp(0, 0.0, -700.0)]);
+        assert_eq!(t.get_rewards(&s), vec![0.0; 3]);
+        // 1v1: nothing.
+        let s = not_kickoff(st(0.0, vec![carp(0, 0.0, -300.0), carp(1, 0.0, 300.0)]));
+        assert_eq!(t.get_rewards(&s), vec![0.0; 2]);
+    }
+
+    #[test]
+    fn tm5_last_man_and_support_bands() {
+        let p = SpacingParams::default();
+        // Blue last back at y -3000, ball at 0: 3000 behind -> paid; the other blue is not last back.
+        let s = not_kickoff(st(0.0, vec![carp(0, 0.0, -3000.0), carp(1, 0.0, 3000.0), carp(0, 500.0, -200.0)]));
+        let r = LastManGoalside::new(p.clone()).get_rewards(&s);
+        assert_eq!(r, vec![1.0, 0.0, 0.0]);
+        // 1000 behind: outside the band.
+        let s = not_kickoff(st(0.0, vec![carp(0, 0.0, -1000.0), carp(1, 0.0, 3000.0), carp(0, 500.0, -200.0)]));
+        assert_eq!(LastManGoalside::new(p.clone()).get_rewards(&s), vec![0.0; 3]);
+        // Orange last back (attack -y): car at y 3000, ball at 0 -> goalside by 3000 (orange has 2 cars).
+        let s = not_kickoff(st(0.0, vec![carp(1, 0.0, 3000.0), carp(1, 0.0, 200.0), carp(0, 0.0, -100.0)]));
+        assert_eq!(LastManGoalside::new(p.clone()).get_rewards(&s), vec![1.0, 0.0, 0.0]);
+        // Support band: 3 blue cars at 300 / 2500 / 5000 from the ball -> the 2500 one.
+        let s = not_kickoff(st(0.0, vec![carp(0, 0.0, -300.0), carp(0, 0.0, -2500.0), carp(0, 0.0, -5000.0), carp(1, 0.0, 1000.0)]));
+        assert_eq!(SupportBand::new(p.clone()).get_rewards(&s), vec![0.0, 1.0, 0.0, 0.0]);
+        // Teams of 2: no support band.
+        let s = not_kickoff(st(0.0, vec![carp(0, 0.0, -300.0), carp(0, 0.0, -2500.0), carp(1, 0.0, 1000.0)]));
+        assert_eq!(SupportBand::new(p).get_rewards(&s), vec![0.0; 3]);
+    }
+
+    #[test]
+    fn tm5_second_commit_gate_and_second_only_double_commit() {
+        // Both blue within 600 and closing (vel +y toward the ball at y 0).
+        let s = st(0.0, vec![car(0, -300.0), car(1, 3000.0), car(0, -100.0)]);
+        let r = DoubleCommit::new(DoubleCommitParams::default()).second_only(true, Vec::new()).get_rewards(&s);
+        assert_eq!(r, vec![-1.0, 0.0, 0.0], "car 2 is the closest: exempt");
+        let mut g = TeamGate::new(Box::new(SpeedTowardBall), GateKind::NotSecondCommit, DoubleCommitParams::default());
+        g.reset(&s);
+        let r = g.get_rewards(&s);
+        assert_eq!(r[0], 0.0, "{r:?}");
+        assert!(r[2] > 0.0, "{r:?}");
     }
 
     #[test]

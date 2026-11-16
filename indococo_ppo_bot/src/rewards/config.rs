@@ -47,7 +47,7 @@ use super::velocity_ball_to_goal::VelocityBallToGoal;
 use super::wall_pop_setup::WallPopSetup;
 use super::team_rewards::{
     AirDoubleTouch, ConcedeDist, DoubleCommit, DoubleTap, DoubleTapParams, GateKind, Pass, PassParams, TeamGate,
-    TeammateProximity,
+    TeammateProximity, LastManGoalside, SpacingParams, SupportBand, TeammateSpacing,
 };
 use super::zero_sum::ZeroSum;
 use crate::team::{DoubleCommitParams, TouchParams};
@@ -142,6 +142,10 @@ pub struct RewardWeights {
     pub teammate_proximity: f64,
     /// TM2: air / post-reset musty flick (experiment term).
     pub musty: f64,
+    /// TM5 spacing / role terms (`[team.spacing]`; experiment terms).
+    pub teammate_spacing: f64,
+    pub last_man_goalside: f64,
+    pub support_band: f64,
 }
 
 /// `[team]`: TM1 team-mode settings. All empty / unused by default, so
@@ -159,6 +163,9 @@ pub struct TeamRewardConfig {
     pub spirit_origin: f64,
     /// Terms that stay individual under team spirit.
     pub individual: Vec<String>,
+    /// TM5: terms blended at tau 1.0 (when team spirit is on), the rest
+    /// follow `spirit`. Must not overlap `individual`.
+    pub spirit_full: Vec<String>,
     /// Terms paid only to each team's closest car to the ball (anti-ballchase).
     pub closest_gate: Vec<String>,
     /// Terms zeroed while the car is double committing.
@@ -174,6 +181,15 @@ pub struct TeamRewardConfig {
     pub concede_scale: f64,
     /// `teammate_proximity` radius.
     pub proximity_radius: f64,
+    /// TM5: terms zeroed only for the second committer (a double-committing
+    /// car that is not its team's closest; see `GateKind::NotSecondCommit`).
+    pub no_second_commit_gate: Vec<String>,
+    /// TM5: `double_commit` term parameters when set (the gates keep
+    /// `double_commit`), and charge only the non-closest committers.
+    pub double_commit_term: Option<DoubleCommitParams>,
+    pub double_commit_second_only: bool,
+    /// TM5 `teammate_spacing` / `last_man_goalside` / `support_band`.
+    pub spacing: SpacingParams,
 }
 
 impl Default for TeamRewardConfig {
@@ -182,6 +198,7 @@ impl Default for TeamRewardConfig {
             spirit: Vec::new(),
             spirit_origin: 0.0,
             individual: Vec::new(),
+            spirit_full: Vec::new(),
             closest_gate: Vec::new(),
             no_double_commit_gate: Vec::new(),
             last_back_gate: Vec::new(),
@@ -191,6 +208,10 @@ impl Default for TeamRewardConfig {
             double_commit: DoubleCommitParams::default(),
             concede_scale: 2300.0,
             proximity_radius: 800.0,
+            no_second_commit_gate: Vec::new(),
+            double_commit_term: None,
+            double_commit_second_only: false,
+            spacing: SpacingParams::default(),
         }
     }
 }
@@ -306,6 +327,11 @@ impl RewardConfig {
         // TM1 gates go inside the zero-sum wrapper (gate the raw term);
         // terms without zero-sum are gated in the final mapping below.
         let tm = &self.team;
+        // TM5: the spacing ramp is relative to the run start (spirit_origin).
+        // Only the TM5 double_commit (`double_commit_second_only`) uses it.
+        let spacing_ramp: Vec<[f64; 2]> = tm.spacing.ramp.iter().map(|&[st, v]| [st + tm.spirit_origin, v]).collect();
+        let spacing = SpacingParams { ramp: spacing_ramp.clone(), ..tm.spacing.clone() };
+        let spacing_ramp = if tm.double_commit_second_only { spacing_ramp } else { Vec::new() };
         let gate = |key: &str, r: Box<dyn StepReward>| -> Box<dyn StepReward> {
             let mut r = r;
             if tm.closest_gate.iter().any(|k| k == key) {
@@ -316,6 +342,9 @@ impl RewardConfig {
             }
             if tm.last_back_gate.iter().any(|k| k == key) {
                 r = Box::new(TeamGate::new(r, GateKind::LastBack, tm.double_commit.clone()));
+            }
+            if tm.no_second_commit_gate.iter().any(|k| k == key) {
+                r = Box::new(TeamGate::new(r, GateKind::NotSecondCommit, tm.double_commit.clone()));
             }
             r
         };
@@ -459,7 +488,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 13] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 16] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -512,7 +541,10 @@ impl RewardConfig {
             (
                 "double_commit",
                 w.double_commit,
-                Box::new(DoubleCommit::new(tm.double_commit.clone())),
+                Box::new(
+                    DoubleCommit::new(tm.double_commit_term.clone().unwrap_or_else(|| tm.double_commit.clone()))
+                        .second_only(tm.double_commit_second_only, spacing_ramp.clone()),
+                ),
             ),
             (
                 "teammate_proximity",
@@ -520,13 +552,16 @@ impl RewardConfig {
                 Box::new(TeammateProximity::new(tm.proximity_radius)),
             ),
             ("musty", w.musty, Box::new(Musty::new(self.musty.clone()))),
+            ("teammate_spacing", w.teammate_spacing, Box::new(TeammateSpacing::new(spacing.clone()))),
+            ("last_man_goalside", w.last_man_goalside, Box::new(LastManGoalside::new(spacing.clone()))),
+            ("support_band", w.support_band, Box::new(SupportBand::new(spacing.clone()))),
         ];
         terms.extend(
             experiment
                 .into_iter()
                 .filter(|(_, weight, _)| *weight != 0.0),
         );
-        for list in [&tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate] {
+        for list in [&tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate, &tm.no_second_commit_gate, &tm.spirit_full] {
             for key in list {
                 assert!(
                     terms.iter().any(|(n, _, _)| n == key),
@@ -573,6 +608,10 @@ impl RewardConfig {
             individual: terms
                 .iter()
                 .map(|t| tm.individual.iter().any(|k| k == t.name))
+                .collect(),
+            full: terms
+                .iter()
+                .map(|t| tm.spirit_full.iter().any(|k| k == t.name))
                 .collect(),
         });
         CombinedReward::new(terms)
@@ -763,6 +802,46 @@ mod extends_tests {
         let fr = RewardConfig::from_file(&dir.join("tm1_fr.toml")).unwrap();
         assert_eq!(fr.weights.flip_reset_use, 30.0);
         assert_eq!(fr.flip_reset_use.goal_bonus, 8.0);
+    }
+
+    #[test]
+    fn tm5_config_adds_self_only_spacing_terms() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let tm2 = RewardConfig::from_file(&dir.join("tm2.toml")).unwrap();
+        let n2: Vec<_> = tm2.build().terms.iter().map(|t| t.name).collect();
+        for t in ["teammate_spacing", "last_man_goalside", "support_band"] {
+            assert!(!n2.contains(&t), "{t} in tm2");
+        }
+        assert!(tm2.team.no_second_commit_gate.is_empty() && tm2.team.double_commit_term.is_none());
+        assert!(!tm2.team.double_commit_second_only);
+        let tm5 = RewardConfig::from_file(&dir.join("tm5.toml")).unwrap();
+        assert_eq!(tm5.weights.teammate_spacing, 0.5);
+        assert_eq!(tm5.weights.double_commit, 2.0);
+        assert_eq!(tm5.weights.concede_dist, 0.0);
+        assert_eq!(tm5.weights.goal, 1200.0);
+        assert_eq!(tm5.team.double_commit_term.as_ref().unwrap().radius, 1000.0);
+        assert_eq!(tm5.team.double_commit.radius, 600.0, "gates keep the TM2 test");
+        assert_eq!(tm5.team.spirit, vec![[0.0, 0.9]]);
+        assert_eq!(tm5.team.spirit_full, vec!["goal".to_owned(), "possession".to_owned()]);
+        for k in &tm5.team.spirit_full {
+            assert!(!tm5.team.individual.contains(k), "{k} both individual and full");
+        }
+        let built = tm5.build();
+        let names: Vec<_> = built.terms.iter().map(|t| t.name).collect();
+        for t in ["teammate_spacing", "last_man_goalside", "support_band", "double_commit", "pass", "double_tap"] {
+            assert!(names.contains(&t), "{t} missing from tm5");
+        }
+        assert!(!names.contains(&"concede_dist"));
+        for t in ["teammate_spacing", "last_man_goalside", "support_band", "double_commit"] {
+            assert!(tm5.team.individual.iter().any(|k| k == t), "{t} must be self-only");
+        }
+        for t in ["pass", "double_tap", "air_double_touch", "flip_reset", "flip_reset_use", "musty"] {
+            assert!(!tm5.team.no_second_commit_gate.iter().any(|k| k == t), "{t} gated");
+        }
+        // 1v1 / st36 unchanged by the new fields.
+        let st36 = RewardConfig::from_file(&dir.join("st36.toml")).unwrap();
+        let n: Vec<_> = st36.build().terms.iter().map(|t| t.name).collect();
+        assert!(!n.contains(&"teammate_spacing"));
     }
 
     #[test]
