@@ -2930,14 +2930,47 @@ TM1 final is `exp_TM1/checkpoints/1794725270`. "TM2 now" is `exp_TM2/checkpoints
 
 `experiments/tm_TM4draft.env` is a draft of the proposed league: TM3 final start, OBS_PRED=1, past selves 1.0, Nexto 0.8 (20% of its episodes sampled), Necto 0.4, Galactus 0.6, Megabyte 0.25, ST25 0.15, TM2 final 0.3, OPPCH 0.50, 9B steps, B0 = tm4pre. It is not queued.
 
-To switch, between runs only and never under a running trainer:
+To switch, between runs only and never under a running trainer: the chain re-execs only its own file, so atomically replace `~/ippo_runs/code_tm/indococo_ppo_bot/experiments/team_launch.sh` with `team_launch_tm4pre.sh` (copy to a temp file, `bash -n`, then `mv -f`; the running bash keeps the old file open on fd 255), copy the variant env in the same way, and queue `RUN VARIANT` in `TEAM_QUEUE`. Do not start a second chain in a separate tmux. Done for TM4: see "TM4 — Cross-exam note".
 
-1. Wait until the current run is in its finals or has stopped.
-2. In `~/ippo_runs/code_tm/indococo_ppo_bot/experiments/`, copy the two files in with an atomic `cp` to `.tmp` then `mv`.
-3. Queue `TM4 TM4draft`.
-4. Start the next run with `RUN=TM4 VARIANT=TM4draft bash team_launch_tm4pre.sh` in its own tmux.
+## TM4 — Cross-exam note: Nexto / Necto league, 3v3-heavy, 6.5B steps (queued after TM3, 2026-11-16)
 
-The live `team_launch.sh` re-execs itself at follow-up, so it never picks up the copy on its own.
+Queued as `TM4 TM4` in `~/ippo_runs/TEAM_QUEUE`. The chain's `team_launch.sh` (code_tm) was atomically replaced by `team_launch_tm4pre.sh` while TM3 trained (old copy kept as `team_launch.sh.bak_tm3`). The running TM3 bash keeps reading the old file through fd 255 and only picks up the new launcher when it re-execs for the follow-up after TM3's finals. TM3's mid evals and finals therefore still run on the old launcher. Config: `experiments/tm_TM4.env` and `experiments/train_tm4.toml`.
+
+**Discord (read-only):**
+- Training on Nexto overfits to it. SoldierDoge and THEBIGTHREE used Nexto at 5–20% early, then removed it. cat warned that using Nexto as the metric overfits too.
+- Team spirit: 0.6 shipped (Necto), and 0.7–0.8 was suggested.
+- League play at about 20–40% with win-rate-based opponent selection (Aion thread, 2026-11-15).
+
+**Research (web):**
+- Necto used no external bots, and its matchups mixed slots.
+- Opti used Nexto at 0.10.
+- AlphaStar used PFSP (prioritized fictitious self-play).
+- Overweight 3v3.
+- Giveaway fixes: directional-touch and closest-to-ball-only rewards.
+
+**Code (EC2 review):**
+- The chain only re-execs its own file (`code_tm/.../team_launch.sh`), so the switch has to be an atomic replacement of that file (temp file then `mv -f`). A separate tmux is not needed.
+- The follow-up passes `START_CK=$bestck`, which overrides the env's START_CK, so `tm_TM4.env` checks for an override file, `$R_/TM4_START_CK`. That file is not created yet; a separate eval decides whether TM4 starts from TM3's best chunk or something else.
+- Nexto / Necto in the league cost about 30% sps (draft weights: about 51k sps).
+- There is no crash fallback: if the tm4pre binary or a league bot fails, the chain stops with FATAL.
+
+**Decisions (TM4):**
+- Start: TM3's final candidate (or `TM4_START_CK`), 270-wide (OBS_PRED=1, START_IS_TEAM=1). B0 = `indococo-train-tm4pre-664faf7`.
+- OPPCH 0.50. Each opponent's share = 0.50 × w / total weight. Weights: past selves 1.0, Nexto 0.30 (NEXTO_STOCH 0.2), Necto 0.13, Galactus 0.21, Megabyte 0.10, ST25 1v1 0.06, TM2 final 0.30. The total is 2.10.
+  - Shares of iterations once a past version exists: past 23.8%, Nexto 7.1%, Necto 3.1%, Galactus 5.0%, Megabyte 2.4% plus ST25 1.4% (3.8% together), TM2 final 7.1%, pure self-play 50%.
+  - Before the first saved past version (the first 250M steps), the total is 1.10: Nexto 13.6%, Necto 5.9%, Galactus 9.5%, Megabyte 4.5%, ST25 2.7%, TM2 final 13.6%.
+  - The draft (total 3.5) gave Nexto 11.4%, Necto 5.7% and Galactus 8.6%.
+- Mode mix 1v1 0.15 / 2v2 0.35 / 3v3 0.50, because 3v3 vs Nexto (16.5%) is the biggest gap. The mix lives in the train template, not the env, so `train_tm4.toml` = `train_tm2.toml` with only `mode_mix` changed. TM3's files are untouched.
+- Unchanged: rewards (`tm2.toml`, team_spirit 0.9), setters, 1 PPO epoch, no bf16, LR 5e-5, ENT 0.016, gamma 0.995, CHUNK 100M, critic warm-up 10M.
+- STEPS 6.5B on top of the start, about 45 h. HOLDREL 5.5B and DECAY 1B, so the LR decay ends at the run end (min 0.4). It can be extended if Nexto / Necto win rates are still climbing.
+- Evals and finals: the tm4pre launcher adds Nexto / Necto 2v2 / 3v3 at every mid and at finals. The candidate score is 0.5 × h2h + 0.5 × the external mean. team_best is never changed automatically.
+
+**Deferred to TM5 (needs collector code):**
+- PFSP win-rate weighting for the team league.
+- Mixed-slot matchups (1–2 Nexto cars mixed with ours).
+- Per-mode opponent weights.
+- A directional-touch giveaway reward.
+- Closest-only and spacing terms.
 
 ## Training speed: overlapped collection, league bots on a side stream (2026-11-10)
 
