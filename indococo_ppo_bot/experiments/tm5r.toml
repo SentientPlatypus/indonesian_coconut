@@ -1,0 +1,47 @@
+# TM5r reward config (EXPERIMENTS.md "TM5r — Cross-exam note"): TM5
+# (tm5.toml) with stronger spacing and a working second-commit gate.
+# Goal = 1200; 15 policy steps per second. Measured on TM5 @ 31.33B (h2h vs
+# TM3 final, 80 x 2v2 / 64 x 3v3, trajectories) and the TM5 training logs
+# (31.06-31.36B):
+# * teammate_spacing at 0.5 averaged -0.037 / car-step in training (-0.56 / s,
+#   ~4% of the 0.87 / step total; non-zero on 11% of car-steps, -0.34 / step
+#   there). TM5 pays 2.8x / 2.4x Nexto's raw band cost (2v2 / 3v3), so the
+#   600-1400 band discriminates; widening to 1800-2000 mostly adds cost that
+#   Nexto-like spacing also pays (Nexto 3v3: 1.23 -> 1.82-2.20 / s raw).
+# * TM5's no_second_commit_gate fired on 0.35% / 0.6% of touches: it exempts
+#   the team's closest car and the toucher is the closest car on 99% / 98% of
+#   touches. With commit order (first starter exempt, 8-step hold) it would
+#   fire on 8.2% / 12.9% of TM5 touches vs Nexto's 2.1% / 6.2%.
+extends = "tm5.toml"
+
+[weights]
+# x4 (TM5 0.5; research 2.0, code leg 1.5). Full stacking -2 / step = 30 / s
+# = 2.5% of a goal per second. Ball-chaser (team's closest car) exempt.
+teammate_spacing = 2.0
+# x2 (TM5 2.0; research 6-8, code leg 3), on the commit-order second
+# committer (overtaking the teammate does not clear it).
+double_commit = 4.0
+# Unchanged and flat (role_ramp): deep last man 0.47 / 0.68 (TM5) is below
+# Nexto's 0.56 / 0.73.
+last_man_goalside = 0.2
+support_band = 0.1
+
+[team.commit_order]
+# The no_second_commit_gate keeps a second committer gated 8 steps (~0.5 s)
+# after its double commit ends (the touch step's post-contact velocity often
+# no longer closes on the ball). The double_commit penalty has no hold. Test:
+# [team.double_commit_term] (1000 uu, closing >= 200 uu/s, from tm5.toml).
+hold = 8
+
+[team.spacing]
+# -1 at <= 600 uu, linear to 0 at 1500 (TM5 1400).
+near = 600.0
+clear = 1500.0
+exempt_closest = true
+# Each new term starts at its TM5 value and reaches full over 100M:
+# teammate_spacing 0.5 -> 2.0 (x0.25 -> 1), double_commit 2 -> 4 (x0.5 -> 1);
+# last_man_goalside / support_band flat at 0.2 / 0.1 (no dip).
+ramp = [[0.0, 1.0]]
+spacing_ramp = [[0.0, 0.25], [100_000_000.0, 1.0]]
+double_commit_ramp = [[0.0, 0.5], [100_000_000.0, 1.0]]
+role_ramp = [[0.0, 1.0]]

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use super::StepReward;
 use crate::state::StateView;
 use crate::team::{
-    DoubleCommitParams, TouchParams, TouchTracker, closest_on_team, double_committing,
+    CommitOrder, DoubleCommitParams, TouchParams, TouchTracker, closest_on_team, double_committing,
 };
 
 /// [`Pass`] payout parameters.
@@ -224,12 +224,22 @@ pub struct DoubleCommit {
     /// TM5: the team's closest car is never charged (only the second committer).
     exempt_closest: bool,
     ramp: Vec<[f64; 2]>,
+    /// TM5r: charge the second committers by commit order (the first
+    /// starter is exempt, not the closest car); replaces `exempt_closest`.
+    order: Option<CommitOrder>,
 }
 
 impl DoubleCommit {
     #[must_use]
     pub fn new(p: DoubleCommitParams) -> Self {
-        Self { p, exempt_closest: false, ramp: Vec::new() }
+        Self { p, exempt_closest: false, ramp: Vec::new(), order: None }
+    }
+
+    /// TM5r: see [`CommitOrder`]. Only the current step counts (no hold).
+    #[must_use]
+    pub fn with_commit_order(mut self, order: Option<CommitOrder>) -> Self {
+        self.order = order;
+        self
     }
 
     /// TM5: charge only the non-closest committers, scaled by `ramp`
@@ -243,9 +253,17 @@ impl DoubleCommit {
 }
 
 impl StepReward for DoubleCommit {
-    fn reset(&mut self, _initial: &StateView) {}
+    fn reset(&mut self, _initial: &StateView) {
+        if let Some(o) = &mut self.order {
+            o.reset();
+        }
+    }
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        if let Some(o) = &mut self.order {
+            let k = ramp_scale(&self.ramp);
+            return o.update(state).now.into_iter().map(|s| if s { -k } else { 0.0 }).collect();
+        }
         let closest = if self.exempt_closest { closest_on_team(state) } else { vec![false; state.cars.len()] };
         let k = ramp_scale(&self.ramp);
         double_committing(state, &self.p)
@@ -287,7 +305,14 @@ pub struct SpacingParams {
     pub support_min: f64,
     pub support_max: f64,
     /// `[[step, scale], ...]` relative to `spirit_origin`; empty = 1.
+    /// The default ramp of all TM5 terms (teammate_spacing, the TM5
+    /// double_commit, last_man_goalside, support_band).
     pub ramp: Vec<[f64; 2]>,
+    /// TM5r per-term overrides of `ramp` (None = `ramp`), so each term can
+    /// start at its previous run's value and the role terms stay flat.
+    pub spacing_ramp: Option<Vec<[f64; 2]>>,
+    pub double_commit_ramp: Option<Vec<[f64; 2]>>,
+    pub role_ramp: Option<Vec<[f64; 2]>>,
 }
 
 impl Default for SpacingParams {
@@ -301,6 +326,9 @@ impl Default for SpacingParams {
             support_min: 2000.0,
             support_max: 3500.0,
             ramp: Vec::new(),
+            spacing_ramp: None,
+            double_commit_ramp: None,
+            role_ramp: None,
         }
     }
 }
@@ -486,18 +514,31 @@ pub struct TeamGate {
     inner: Box<dyn StepReward>,
     kind: GateKind,
     dc: DoubleCommitParams,
+    /// TM5r (`NotSecondCommit` only): zero for second committers by commit
+    /// order, held a few steps (see [`CommitOrder`]), instead of
+    /// "double committing and not the closest".
+    order: Option<CommitOrder>,
 }
 
 impl TeamGate {
     #[must_use]
     pub fn new(inner: Box<dyn StepReward>, kind: GateKind, dc: DoubleCommitParams) -> Self {
-        Self { inner, kind, dc }
+        Self { inner, kind, dc, order: None }
+    }
+
+    #[must_use]
+    pub fn with_commit_order(mut self, order: Option<CommitOrder>) -> Self {
+        self.order = order;
+        self
     }
 }
 
 impl StepReward for TeamGate {
     fn reset(&mut self, initial: &StateView) {
         self.inner.reset(initial);
+        if let Some(o) = &mut self.order {
+            o.reset();
+        }
     }
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
@@ -509,11 +550,14 @@ impl StepReward for TeamGate {
                 .into_iter()
                 .map(|d| !d)
                 .collect(),
-            GateKind::NotSecondCommit => double_committing(state, &self.dc)
-                .into_iter()
-                .zip(closest_on_team(state))
-                .map(|(d, c)| !d || c)
-                .collect(),
+            GateKind::NotSecondCommit => match &mut self.order {
+                Some(o) => o.update(state).held.into_iter().map(|h| !h).collect(),
+                None => double_committing(state, &self.dc)
+                    .into_iter()
+                    .zip(closest_on_team(state))
+                    .map(|(d, c)| !d || c)
+                    .collect(),
+            },
         };
         for (x, ok) in r.iter_mut().zip(pass) {
             if !ok {
@@ -647,6 +691,51 @@ mod tests {
         let r = g.get_rewards(&s);
         assert_eq!(r[0], 0.0, "{r:?}");
         assert!(r[2] > 0.0, "{r:?}");
+    }
+
+    /// TM5r: the gate keys on commit order, so a second committer that
+    /// overtakes its teammate (and touches as the closest car) is still gated,
+    /// for `hold` steps after the double commit ends; the TM5 gate is not.
+    #[test]
+    fn tm5r_commit_order_gates_an_overtaking_second_committer() {
+        let wide = DoubleCommitParams { radius: 1000.0, min_approach: 200.0 };
+        let mk = |a: f64, b: f64| -> StateView {
+            // Blue 0 at y = a, blue 2 at y = b, both driving +y at 1000 toward the ball at y 0.
+            not_kickoff(st(0.0, vec![carp(0, 0.0, a), carp(1, 0.0, 3000.0), carp(0, 300.0, b)]))
+        };
+        let s0 = mk(-600.0, -1500.0); // only blue 0 commits (blue 2 is 1500 away)
+        let s1 = mk(-500.0, -900.0); // blue 2 joins: second committer
+        let s2 = mk(-400.0, -200.0); // blue 2 overtakes (now closest): still second
+        let mut g = TeamGate::new(Box::new(SpeedTowardBall), GateKind::NotSecondCommit, wide.clone())
+            .with_commit_order(Some(CommitOrder::new(wide.clone(), 2)));
+        g.reset(&s0);
+        assert!(g.get_rewards(&s0)[2] > 0.0, "no double commit yet");
+        let r = g.get_rewards(&s1);
+        assert_eq!(r[2], 0.0, "{r:?}");
+        assert!(r[0] > 0.0, "first man keeps it: {r:?}");
+        let r = g.get_rewards(&s2);
+        assert_eq!(r[2], 0.0, "overtaking does not clear it: {r:?}");
+        // TM5 (closest-exempt) gate passes the overtaker.
+        let mut old = TeamGate::new(Box::new(SpeedTowardBall), GateKind::NotSecondCommit, wide.clone());
+        old.reset(&s2);
+        assert!(old.get_rewards(&s2)[2] > 0.0);
+        // Blue 0 stops committing: hold 2 keeps blue 2 gated for 2 more steps, then clears.
+        let mut s3 = mk(-1800.0, -200.0);
+        s3.cars[0].vel = glam::DVec3::ZERO;
+        assert_eq!(g.get_rewards(&s3)[2], 0.0, "held 1");
+        assert_eq!(g.get_rewards(&s3)[2], 0.0, "held 2");
+        assert!(g.get_rewards(&s3)[2] > 0.0, "released");
+        // The penalty term charges the second committer only while it commits (no hold).
+        let mut d = DoubleCommit::new(wide.clone()).second_only(true, Vec::new()).with_commit_order(Some(CommitOrder::new(wide, 8)));
+        d.reset(&s0);
+        assert_eq!(d.get_rewards(&s0), vec![0.0; 3]);
+        assert_eq!(d.get_rewards(&s1), vec![0.0, 0.0, -1.0]);
+        assert_eq!(d.get_rewards(&s2), vec![0.0, 0.0, -1.0], "overtaker still charged, closest-exempt would not");
+        assert_eq!(d.get_rewards(&s3), vec![0.0; 3], "no hold on the penalty");
+        // reset clears the order.
+        d.reset(&s2);
+        let r = d.get_rewards(&s2);
+        assert_eq!(r, vec![-1.0, 0.0, 0.0], "same-step start: the closer car (blue 2) is first: {r:?}");
     }
 
     #[test]

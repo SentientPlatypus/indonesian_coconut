@@ -145,6 +145,95 @@ pub fn double_committing(state: &StateView, p: &DoubleCommitParams) -> Vec<bool>
         .collect()
 }
 
+/// TM5r: who committed first. A car "commits" when it is alive, within
+/// `p.radius` of the ball and closing at `p.min_approach` or more (the
+/// [`double_committing`] test for one car). While 2+ teammates commit, the
+/// earliest starter (ties: closest to the ball) is the first man and the
+/// others are second committers. Unlike `closest_on_team`, overtaking the
+/// teammate does not clear a second committer: the TM5 gate exempted the
+/// team's closest car, and the toucher is the closest car on ~99% of
+/// touches, so it almost never fired (EXPERIMENTS.md "TM5r").
+/// Call [`CommitOrder::update`] exactly once per step.
+#[derive(Clone, Debug)]
+pub struct CommitOrder {
+    p: DoubleCommitParams,
+    hold: u64,
+    step: u64,
+    since: Vec<Option<u64>>,
+    second_until: Vec<Option<u64>>,
+}
+
+/// One [`CommitOrder::update`]: `now` = second committer this step,
+/// `held` = second committer this step or in the last `hold` steps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitFlags {
+    pub now: Vec<bool>,
+    pub held: Vec<bool>,
+}
+
+impl CommitOrder {
+    #[must_use]
+    pub fn new(p: DoubleCommitParams, hold: u32) -> Self {
+        Self { p, hold: u64::from(hold), step: 0, since: Vec::new(), second_until: Vec::new() }
+    }
+
+    pub fn reset(&mut self) {
+        self.step = 0;
+        self.since.clear();
+        self.second_until.clear();
+    }
+
+    pub fn update(&mut self, state: &StateView) -> CommitFlags {
+        let n = state.cars.len();
+        if self.since.len() != n {
+            self.since = vec![None; n];
+            self.second_until = vec![None; n];
+        }
+        let k = self.step;
+        self.step += 1;
+        let committing: Vec<bool> = state
+            .cars
+            .iter()
+            .map(|c| {
+                let d = state.ball.pos - c.pos;
+                let dist = d.length();
+                !c.is_demoed() && dist < self.p.radius && dist > 1e-6 && c.vel.dot(d / dist) >= self.p.min_approach
+            })
+            .collect();
+        for i in 0..n {
+            if committing[i] {
+                self.since[i].get_or_insert(k);
+            } else {
+                self.since[i] = None;
+            }
+        }
+        let mut now = vec![false; n];
+        for team in [0u8, 1u8] {
+            let c: Vec<usize> = (0..n).filter(|&i| committing[i] && state.cars[i].team == team).collect();
+            if c.len() < 2 {
+                continue;
+            }
+            let dist = |i: usize| state.cars[i].pos.distance(state.ball.pos);
+            let first = *c
+                .iter()
+                .min_by(|&&a, &&b| {
+                    self.since[a]
+                        .cmp(&self.since[b])
+                        .then(dist(a).partial_cmp(&dist(b)).unwrap_or(std::cmp::Ordering::Equal))
+                })
+                .expect("2+ committers");
+            for &i in &c {
+                if i != first {
+                    now[i] = true;
+                    self.second_until[i] = Some(k + self.hold);
+                }
+            }
+        }
+        let held = (0..n).map(|i| now[i] || self.second_until[i].is_some_and(|u| u >= k)).collect();
+        CommitFlags { now, held }
+    }
+}
+
 /// Cars per team in this state (`[blue, orange]`).
 #[must_use]
 pub fn team_counts(state: &StateView) -> [usize; 2] {

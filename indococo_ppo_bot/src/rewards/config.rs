@@ -50,7 +50,7 @@ use super::team_rewards::{
     TeammateProximity, LastManGoalside, SpacingParams, SupportBand, TeammateSpacing,
 };
 use super::zero_sum::ZeroSum;
-use crate::team::{DoubleCommitParams, TouchParams};
+use crate::team::{CommitOrder, DoubleCommitParams, TouchParams};
 use super::{CombinedReward, StepReward, Term};
 
 /// Reads `path` as a TOML table with its `extends` chain merged in.
@@ -190,6 +190,27 @@ pub struct TeamRewardConfig {
     pub double_commit_second_only: bool,
     /// TM5 `teammate_spacing` / `last_man_goalside` / `support_band`.
     pub spacing: SpacingParams,
+    /// TM5r: when set, `double_commit` (second only) and the
+    /// `no_second_commit_gate` use commit order ([`CommitOrder`]) with the
+    /// `double_commit_term` test instead of "not the team's closest car"
+    /// with the TM2 test. None = TM5 behaviour.
+    pub commit_order: Option<CommitOrderParams>,
+}
+
+/// `[team.commit_order]` (TM5r).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CommitOrderParams {
+    /// Steps the gate keeps a second committer gated after its double
+    /// commit ends (the touch step's post-contact velocity often no longer
+    /// "closes" on the ball). The penalty term has no hold.
+    pub hold: u32,
+}
+
+impl Default for CommitOrderParams {
+    fn default() -> Self {
+        Self { hold: 8 }
+    }
 }
 
 impl Default for TeamRewardConfig {
@@ -212,6 +233,7 @@ impl Default for TeamRewardConfig {
             double_commit_term: None,
             double_commit_second_only: false,
             spacing: SpacingParams::default(),
+            commit_order: None,
         }
     }
 }
@@ -329,9 +351,16 @@ impl RewardConfig {
         let tm = &self.team;
         // TM5: the spacing ramp is relative to the run start (spirit_origin).
         // Only the TM5 double_commit (`double_commit_second_only`) uses it.
-        let spacing_ramp: Vec<[f64; 2]> = tm.spacing.ramp.iter().map(|&[st, v]| [st + tm.spirit_origin, v]).collect();
-        let spacing = SpacingParams { ramp: spacing_ramp.clone(), ..tm.spacing.clone() };
-        let spacing_ramp = if tm.double_commit_second_only { spacing_ramp } else { Vec::new() };
+        // TM5r: per-term overrides (`spacing_ramp`, `double_commit_ramp`,
+        // `role_ramp`) fall back to `ramp`.
+        let abs = |r: &[[f64; 2]]| -> Vec<[f64; 2]> { r.iter().map(|&[st, v]| [st + tm.spirit_origin, v]).collect() };
+        let pick = |o: &Option<Vec<[f64; 2]>>| abs(o.as_deref().unwrap_or(&tm.spacing.ramp));
+        let spacing = SpacingParams { ramp: pick(&tm.spacing.spacing_ramp), ..tm.spacing.clone() };
+        let roles = SpacingParams { ramp: pick(&tm.spacing.role_ramp), ..tm.spacing.clone() };
+        let spacing_ramp = if tm.double_commit_second_only { pick(&tm.spacing.double_commit_ramp) } else { Vec::new() };
+        // TM5r: commit order on the double_commit_term test (fallback TM2's).
+        let order_dc = tm.double_commit_term.clone().unwrap_or_else(|| tm.double_commit.clone());
+        let order = || tm.commit_order.as_ref().map(|o| CommitOrder::new(order_dc.clone(), o.hold));
         let gate = |key: &str, r: Box<dyn StepReward>| -> Box<dyn StepReward> {
             let mut r = r;
             if tm.closest_gate.iter().any(|k| k == key) {
@@ -344,7 +373,7 @@ impl RewardConfig {
                 r = Box::new(TeamGate::new(r, GateKind::LastBack, tm.double_commit.clone()));
             }
             if tm.no_second_commit_gate.iter().any(|k| k == key) {
-                r = Box::new(TeamGate::new(r, GateKind::NotSecondCommit, tm.double_commit.clone()));
+                r = Box::new(TeamGate::new(r, GateKind::NotSecondCommit, tm.double_commit.clone()).with_commit_order(order()));
             }
             r
         };
@@ -543,7 +572,8 @@ impl RewardConfig {
                 w.double_commit,
                 Box::new(
                     DoubleCommit::new(tm.double_commit_term.clone().unwrap_or_else(|| tm.double_commit.clone()))
-                        .second_only(tm.double_commit_second_only, spacing_ramp.clone()),
+                        .second_only(tm.double_commit_second_only, spacing_ramp.clone())
+                        .with_commit_order(order()),
                 ),
             ),
             (
@@ -553,8 +583,8 @@ impl RewardConfig {
             ),
             ("musty", w.musty, Box::new(Musty::new(self.musty.clone()))),
             ("teammate_spacing", w.teammate_spacing, Box::new(TeammateSpacing::new(spacing.clone()))),
-            ("last_man_goalside", w.last_man_goalside, Box::new(LastManGoalside::new(spacing.clone()))),
-            ("support_band", w.support_band, Box::new(SupportBand::new(spacing.clone()))),
+            ("last_man_goalside", w.last_man_goalside, Box::new(LastManGoalside::new(roles.clone()))),
+            ("support_band", w.support_band, Box::new(SupportBand::new(roles.clone()))),
         ];
         terms.extend(
             experiment
@@ -842,6 +872,61 @@ mod extends_tests {
         let st36 = RewardConfig::from_file(&dir.join("st36.toml")).unwrap();
         let n: Vec<_> = st36.build().terms.iter().map(|t| t.name).collect();
         assert!(!n.contains(&"teammate_spacing"));
+    }
+
+    #[test]
+    fn tm5r_config_loads_commit_order_and_stronger_spacing() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let tm5 = RewardConfig::from_file(&dir.join("tm5.toml")).unwrap();
+        assert!(tm5.team.commit_order.is_none(), "TM5 unchanged");
+        let c = RewardConfig::from_file(&dir.join("tm5r.toml")).unwrap();
+        assert_eq!(c.team.commit_order.as_ref().unwrap().hold, 8);
+        assert_eq!(c.weights.teammate_spacing, 2.0);
+        assert_eq!(c.weights.double_commit, 4.0);
+        assert_eq!((c.team.spacing.near, c.team.spacing.clear), (600.0, 1500.0));
+        assert!(c.team.spacing.exempt_closest);
+        // Each new term starts at its TM5 value (0.5 / 2.0), roles stay flat.
+        let sr = c.team.spacing.spacing_ramp.as_ref().unwrap();
+        assert!((sr[0][1] * c.weights.teammate_spacing - 0.5).abs() < 1e-9 && sr[1] == [100_000_000.0, 1.0]);
+        let dr = c.team.spacing.double_commit_ramp.as_ref().unwrap();
+        assert!((dr[0][1] * c.weights.double_commit - 2.0).abs() < 1e-9 && dr[1] == [100_000_000.0, 1.0]);
+        assert_eq!(c.team.spacing.role_ramp, Some(vec![[0.0, 1.0]]));
+        assert!(tm5.team.spacing.spacing_ramp.is_none() && tm5.team.spacing.role_ramp.is_none(), "TM5 unchanged");
+        assert_eq!(c.weights.last_man_goalside, 0.2);
+        assert_eq!(c.weights.support_band, 0.1);
+        assert_eq!(c.team.no_second_commit_gate, tm5.team.no_second_commit_gate);
+        assert_eq!(c.team.individual, tm5.team.individual);
+        let names: Vec<_> = c.build().terms.iter().map(|t| t.name).collect();
+        for t in ["teammate_spacing", "last_man_goalside", "support_band", "double_commit", "touch", "possession"] {
+            assert!(names.contains(&t), "{t} missing from tm5r");
+        }
+    }
+
+    /// TM5r ramps at the run start (learner step 0 = spirit_origin 0 here):
+    /// teammate_spacing pays 2.0 x 0.25 = 0.5 (TM5's value), the role terms
+    /// their full 0.2 / 0.1 (no dip).
+    #[test]
+    fn tm5r_ramps_start_at_tm5_values_and_roles_stay_flat() {
+        use crate::state::{BallView, CarView, StateView};
+        use glam::DVec3;
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm5r.toml")).unwrap();
+        let car = |team: u8, y: f64| CarView { team, pos: DVec3::new(0.0, y, 17.0), ..CarView::default() };
+        // Blue: closest at -300, second at -700 (400 uu from it), last back at -3000.
+        let s = StateView {
+            tick_count: 0,
+            ball: BallView { pos: DVec3::new(10.0, 0.0, 93.0), vel: DVec3::new(0.0, 500.0, 0.0), ..BallView::default() },
+            cars: vec![car(0, -300.0), car(0, -700.0), car(0, -3000.0), car(1, 3000.0)],
+        };
+        let mut b = c.build();
+        b.reset_view(&s);
+        let _ = b.step_view(&s);
+        let names: Vec<&str> = b.terms.iter().map(|t| t.name).collect();
+        let get = |n: &str| b.last_terms()[names.iter().position(|x| *x == n).unwrap()].clone();
+        let sp = get("teammate_spacing");
+        assert!((sp[1] + 0.5).abs() < 1e-9 && sp[0] == 0.0, "{sp:?}");
+        let lm = get("last_man_goalside");
+        assert!((lm[2] - 0.2).abs() < 1e-9, "{lm:?}");
     }
 
     #[test]
