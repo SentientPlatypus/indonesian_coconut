@@ -3103,3 +3103,79 @@ All three legs agree that spacing at 0.5 was too weak to change play. Weight: co
 - The 8-step hold and the commit-order definition were tuned on offline trajectories only. Whether the policy learns to "commit first" earlier (a race to start committing) instead of spacing out.
 - The h2h and Nexto trajectory sizes are small (64-80 games per cell). The Nexto references come from TM3-vs-Nexto games.
 - RLBot behaviour: 270-wide models still need pack changes and the user's OK to test.
+
+## TM6 — Cross-exam note: role-based rewards (staged 2026-11-17, not launched)
+
+Why: TM5r's stronger spacing did not change play. At 32.56B pair800 was ~0.16 (2v2) / ~0.32 (3v3), flat for three mids and barely below TM5's ~0.18 / ~0.34 (Nexto 0.06 / 0.13). Win rates held (h2h vs the TM4 cut ~0.54 in both modes; Nexto 0.51 / 0.31); no crash, no passive alarm. A heavier penalty was judged unlikely to help, so TM6 changes who is paid to go at the ball.
+
+### Three legs
+
+- Code (TM5r binary `indococo-train-tm5r-0119390`; h2h of TM5r @ `exp_TM5r/checkpoints/1794914033` vs the TM4 cut, 96 games per mode, trajectory dumps; Nexto trajectories as in TM5r; scripts in `/opt/dlami/nvme/tm6_codeleg`):
+  - Main finding: `contact_quality` (w 250, self-only) pays **every** car for bumps within 2500 uu of the ball. That is ~87 raw reward per good bump, whoever makes it. TM5r's non-first car bumps near the ball 1.90 / team-min in 2v2 (Nexto 0.53, **3.6x**) and 2.95 + 0.44 in 3v3 (Nexto 1.45 + 0.20, **~2x**). The closest car bumps at Nexto's rate (9.2 vs 9.3, 9.7 vs 10.1). Bumps with a teammate within 1500 uu: 1.53 vs 0.40 (2v2) and 3.08 vs 1.21 (3v3) per team-min.
+  - Bunching (pair800 steps): the back car is closing on the ball (>200 uu/s) 62-64% of the time and within 1500 uu of the ball 63-78% of the time. The bunch includes the first man 100% (2v2) / 82% (3v3) of the time, and the ball is in the air (z > 300) 73-81% of the time. So the second car goes for the same ball; it is not a positional drift.
+  - The closest-car exemptions (speed_to_ball / face_ball gate, spacing) pay for overtaking: 60-64% of TM5r's bunched spells end with an overtake (Nexto 49-54%). Raw distance-to-ball rank swaps 13.9 / 23.9 per min, and a 300 uu / 8-step hysteresis cuts that to 13.0 / 21.4 (Nexto 13.0 / 21.2). The distance rank and the time-to-ball rank disagree 10-18% of the time.
+  - Size: teammate_spacing is ~1.2% of the mean absolute reward per car-step. contact_quality averages +0.45 per car-step (TM5r training metrics), more than 3x the spacing penalty.
+  - Proposal: give the ball-approach and bump terms to the first man only (contact_quality x0.25 for the others), drop spacing to 1.0, and add support / last-man role terms. The obs already carries the distance-to-ball rank (column 87), so the obs and the RLBot pack stay unchanged. About 300 lines of Rust. Main risk: support cars going passive.
+- Outside research: every car is still paid to approach the ball, and the spacing penalty only pushes back against that. Gate the ball-approach shaping to the first man and give the other cars their own targets: the second man supports, and the last man stays between the ball and his goal (DeepMind football, TiZero). Switch roles with hysteresis so they do not flicker (RoboCup role assignment). Keep the role shaping small next to the goal reward.
+- Discord (read-only): role-relative suitability beats raw distance terms (HappyBavarian07, SoldierDoge). Passivity warnings for positional / support rewards (Vermatten, Lamp), so support stays small. Without a target of his own, the third man has nothing to do (Eastvillage). Time-to-ball beats distance for picking the first man (Zealan). Kickoff caveat: spacing penalties during the kickoff teach bad kickoffs; exempt it (HappyBavarian07).
+
+### Reconciliation
+
+All three legs agree on gating the ball-approach terms to one car. Roles use the distance rank with hysteresis (code + RoboCup), not ETA. ETA-based roles are deferred because the distance rank is already in the obs and the hysteresis brings swap rates to Nexto's level. contact_quality is kept at x0.25 for the other cars (not 0) so the support car still punishes a free opponent touch. support_role is 0.2, not the code leg's 0.3, because of the Discord passivity warnings. Spacing goes down to 1.0 because the gates take over the load; it is ramped from 2.0 so there is no sudden drop. The kickoff is exempt for spacing, support and double commit.
+
+### Spec (tm6.toml on tm5r.toml; code b54acc5 + a922fb6)
+
+| term | TM6 | TM5r |
+|---|---|---|
+| roles (`[team.roles]`) | RoleTracker: distance rank with hysteresis; a challenger becomes first man only after 8 consecutive steps at least 300 uu closer; a toucher becomes first man at once; demoed cars hold no role; Last = remaining car closest to own goal; Second = the rest (3v3) | closest car each step |
+| `speed_to_ball`, `face_ball` | first man only (role gate) | team's closest car |
+| `aerial_boost`, `high_ball` | first man only | ungated |
+| `contact_quality` | first man full, others x0.25 (`role_scale`) | everyone full |
+| `shadow_box`, `safe_boost` | non-first roles only; shadow_box now self-only | ungated |
+| `teammate_spacing` | 2.0 -> 1.0 over 100M; first man by role exempt; off in the kickoff phase | 2.0, closest exempt |
+| `double_commit` | 4.0 on commit order, flat; off in the kickoff phase | 4.0 (ramped from 2) |
+| `support_role` (new, replaces `support_band`) | self-only; support role = Second (3v3) / non-first (2v2); +1 goal-side within 1800-4000 uu (2v2) / 1500-3500 (3v3) of the ball, linear to 0 over 700 uu outside; 0.2, ramped 0 -> 1 over 200M; off in the kickoff phase | support_band 0.1 (3v3 second-closest) |
+| `last_man_goalside` | Last role; 0.2 -> 0.3 over 200M; far edge 3500 (not 4500) when the ball is in the opponent's third | last-back car, 0.2 |
+
+- Kickoff phase = pending kickoff, the first-touch step, and 15 steps (1 s) after it (`kickoff_exempt`, `kickoff_grace_s`).
+- Unchanged: commit-order gate on touch / possession / range_carry / airdribble / airdribble_seq; pass / double_tap / air_double_touch ungated; team spirit 0.9 (goal / possession 1.0); every new or role term self-only (individual, added after the spirit mix); 1v1 identical (one car per team = first man; the role gates pass 1-car teams through); 270-wide obs; mode mix, setters, league, PPO (1 epoch, no bf16, LR 5e-5 held then 1B cosine to 0.4x, ENT 0.016, gamma 0.995), CHUNK 100M, 20M critic warm-up, 5B steps. Start: TM5r's latest checkpoint at the cut. BT: team_best read at launch (TM4 cut).
+- Diagnostics: `[team] role_metrics` logs `RewardFirst/<term>` / `RewardOther/<term>` (no reward change). The h2h JSON gains role_swaps_per_min, first_mean_stint_s, touch_share_first/second/last, no_challenger_ratio and opp_ball_own_half_ratio, and `tools/team_spacing.py` gains opp_ball_own_half / no_challenger. No-challenger = an opponent is the closest living car to the ball (within 1000 uu) in our half, and no teammate is within 1500 uu of it.
+- Launcher `team_launch_tm6.sh` (staged next to team_launch.sh, not installed): the TM5r launcher plus role metrics in mid.jsonl and the chunk log. The TM5r passive alarm is kept and gains one rule: no_challenger above 1.5x TM5r's baseline for 2 mids in a row (NCR_BASE_2 / NCR_BASE_3 in tm_TM6.env).
+- No-challenger baseline (TM5r @ `exp_TM5r/checkpoints/1794916422`, 32.656B, vs the TM4 cut, 400 games per mode, TM6 binary): no_challenger 0.0404 (2v2) / 0.0329 (3v3), so the alarm fires above 0.061 / 0.049. Also: opp_ball_own_half 0.145 / 0.142, role swaps 9.2 / 14.5 per min, mean first-man stint 5.3 / 3.7 s, first-man touch share 0.90 / 0.80 (Second 0.13 in 3v3), pair800 0.156 / 0.309, passes 1.12 / 1.76 per min; h2h 0.555 / 0.545..
+- Cut-over: `experiments/tm6_cutover.sh`. It stages the configs, opens ippo_team:tm6 (`tm6_window.sh`), waits for TM5r's trainer chunk, stops the TM5r chain by PID, and starts TM6 from TM5r's latest. If TM6 dies before its first chunk, it resumes TM5r. It also writes `exp_TM5r/CUT_FOR_TM6`, pushes `checkpoints_to_test/tm5r_<N>M.bpk` (not promoted) and runs abbreviated TM5r evals (`tm5r_cut_evals.sh`).
+- Tests: lib 162 (154 + 8: role hysteresis / touch / demo; 3v3 roles and 1v1; kickoff phase; role gates incl. 1v1; support_role; kickoff mask; spacing exempts the role first man; tm6 config build + gates + kickoff + role split) and trainer 12 (11 + no-challenger metric) passed. Binary `/opt/dlami/nvme/ippo_bins/indococo-train-tm6-a922fb6`, sha256 `e715ffeca6b9d75ab6358d42339065947f3d29d7bc5f6066293d6730be81e6fa`.
+- Smoke (TM6 binary, from TM5r @ 32.656B, 4 x 60k steps per variant, self-play, 4 threads; per car-step, all modes pooled): 
+
+base = TM5r rewards with role diagnostics on (its spacing / double_commit ramps start at 0.25 / 0.5, so those two are understated); launch = tm6 at the run start; full = tm6 with every ramp finished.
+
+| per car-step | base | TM6 launch | TM6 full |
+|---|---|---|---|
+| RewardOther/contact_quality (non-first, team modes) | 0.0914 | 0.0266 (3.4x lower) | 0.0222 (4.1x lower) |
+| RewardFirst/contact_quality | 0.599 | 0.572 | 0.631 |
+| Reward/contact_quality (all) | 0.373 | 0.346 | 0.408 |
+| Reward/support_role (nonzero share) | - | 0.00001 (0.088; ramp ~0 at the start) | 0.0199 (0.122); 0.052 per non-first car-step |
+| Reward/last_man_goalside | 0.0187 | 0.0174 | 0.0262 |
+| Reward/teammate_spacing | -0.036 | -0.132 | -0.079 |
+| Reward/double_commit | -0.027 | -0.048 | -0.059 |
+| RewardFirst / RewardOther speed_to_ball | 0.138 / -0.101 | 0.165 / -0.122 | 0.162 / -0.120 |
+| Collect/avg step reward | 0.836 | 0.616 | 0.707 |
+
+TM5r's live training at 32.65B: teammate_spacing -0.140, double_commit -0.053, contact_quality +0.446, avg step reward 0.672. TM6's spacing at launch matches TM5r's live value, since both are 2.0 with no ramp dip. The negative RewardOther on speed_to_ball / face_ball comes from the zero-sum wrapper: a gated car keeps the opponents' -mean. TM5r's closest gate does the same (-0.10 in base).
+
+### Watch
+
+- Working: pair800 and near2 fall toward Nexto's levels. RewardOther/contact_quality stays at about a quarter of TM5r's. The non-first bump rate per team-min drops toward Nexto's 0.5 / 1.5. touch_share_first rises and swaps/min stay near Nexto's. h2h vs the TM4 cut and the Nexto / Necto rates hold.
+- Passive: the alarm, especially the no-challenger rule and passes/min. If it fires, lower support_role first, then last_man_goalside. Do not raise teammate_spacing.
+- Over-gating: the first man's touches rise while the team's touches/min or goals fall. That would mean the second car stopped contesting; then lift contact_quality's role_scale to 0.5.
+
+### Deferred
+
+- A role one-hot in the critic (or the obs): needs a wider critic input; the actor already has the rank column.
+- Concede scaling by role (who is charged for a goal against).
+- ETA / time-to-ball roles (Zealan): distance and ETA disagree 10-18% of the time; revisit if role flicker or bad first-man picks show up.
+
+### Unknowns
+
+- Whether the support car learns to contest when the first man is beaten (no-challenger rule watches this).
+- support_role 0.2 / last_man 0.3 have no public calibration at goal = 1200.
+- The smoke is 240k steps per variant: contact rates are noisy (contacts are on 0.5% of car-steps).
