@@ -3058,3 +3058,48 @@ TM4 was cut at 30411.5M for TM5 (marker `exp_TM4/CUT_FOR_TM5`); full finals were
 | vs Necto (300 games) | 0.903 (TM3 0.820) | 0.813 (TM3 0.735) |
 
 TM5 was already running and read `$BT` (the TM3 final) at its start, so TM5's BEST-team mids and finals are measured against the TM3 final. The switch applies from TM5r onward. TM4 is 270-wide and is not in the RLBot pack.
+
+## TM5r — Cross-exam note: stronger spacing, a working second-commit gate (cut over from TM5, 2026-11-16)
+
+Why: TM5's spacing terms barely moved play. After +800M at full strength, pair800 (a teammate pair within 800 uu) was 0.166-0.191 (2v2) / ~0.34 (3v3) vs TM3's 0.21 / 0.39 and Nexto's 0.06 / 0.13; near2 0.23-0.25 / 0.35; dcw 0.06 / 0.10; deep last man 0.47 / 0.66. Win rates held (Nexto 2v2 ~0.49, 3v3 ~0.25; h2h vs TM3 final 0.58 / 0.55). The user approved designing TM5r, cross-examining it and cutting TM5 over.
+
+### Three legs
+
+- Code (TM5 binary `indococo-train-tm5-559870f`; TM5 `metrics.jsonl` 31.06-31.36B; h2h TM5 @ 31.33B (`exp_TM5/checkpoints/1794884674`) vs TM3 final with trajectory dumps, 80 x 2v2 / 64 x 3v3; Nexto trajectories from `/opt/dlami/nvme/spacing/results`; scripts in `/opt/dlami/nvme/tm5r_diag`):
+  - The TM5 terms do what the spec says: sign, band, scale, closest exemption, demo / kickoff / 1v1 exclusions, orange's side (attack_sign), self-only (not blended by spirit), and the ramp (per non-zero step 0.06 at the start to 0.34 at +300M, then flat).
+  - Dead gate: `no_second_commit_gate` exempted the team's closest car, but the toucher is the closest car on 99% (2v2) / 98% (3v3) of touches, so it zeroed only 0.35% / 0.6% of TM5 touches. It also used the TM2 600 / 300 test, not the 1000 / 200 term test. Ignoring the exemption, 17.6% / 25.2% of TM5 touches are double-commit touches (Nexto 5.9% / 10.3%). With commit order (the first starter is exempt, 8-step hold) the gate fires on 8.2% / 12.9% of TM5 touches vs Nexto's 2.1% / 6.2%. The same closest exemption let a second committer clear the double_commit penalty by overtaking.
+  - Magnitudes (training, per car-step, all modes pooled): total 0.87 (13 / s); teammate_spacing -0.037 (-0.56 / s, ~4%; non-zero on 11% of car-steps, -0.34 there); double_commit -0.031; last_man_goalside +0.020; support_band +0.0035. Mean absolute value of the big terms: vel_ball_to_goal 2.05, goal_dist 1.37, face_ball 0.72, goal_prob 0.64, energy 0.63, contact_quality +0.42, possession 0.41, touch 0.26, speed_to_ball 0.20, airdribble 0.17. Spacing was outcompeted.
+  - Raw band cost per car-second (h2h): TM5 1.50 / 2.96 vs Nexto 0.54 / 1.23 on the 600-1400 band (2.8x / 2.4x). At 700-1800 or 800-2000 the ratio drops (2.3x / 2.0x and lower) and Nexto-like spacing pays more (3v3 1.82-2.20 / s), so keep a narrow band. TM5 touches with a teammate within 800 uu: 22.5% / 36.6% (Nexto 7.9% / 16.5%); bunched spells lasting 3 s or more: 10% / 15% (Nexto 4% / 6%). Nexto also ends 36-46% of bunched spells by overtaking, so the ball-chaser exemption on spacing is kept.
+- Outside research: TiZero / Opti use a local, self-only spacing shape (Opti 700 uu after zero-sum; TiZero a small grouping penalty). DeepMind's warning: territory / area-control style terms get farmed and distort play, so no territory term and no positive spacing term. Nexto had no spacing term and used team spirit 0.6. Recommended teammate_spacing 2.0 with a band, and double_commit 6-8.
+- Discord (read-only): role-specific rewards beat a raw distance term (HappyBavarian07, SoldierDoge). Keep the penalty local (Rou_Ad). Passivity warnings: Kaiyotech (Opti, 2024), Zealan (concede distance), Lamp (2021). SRG Zynqaro used teammate spacing 0.5 (TM5's value).
+
+### Reconciliation
+
+All three legs agree that spacing at 0.5 was too weak to change play. Weight: code 1.5, research 2.0. We took 2.0 because 0.5 did almost nothing; the commit-order gate takes some of the load. double_commit: code 3, research 6-8, compromise 4. Band: code data argues against widening to 1800-2000, research wants a band, Discord says keep it local, so 600-1500. Role terms stay as they are, and we add no territory or positive spacing term (DeepMind, passivity warnings). The ball-chaser stays exempt.
+
+### Spec (tm5r.toml on tm5.toml; code 0119390)
+
+| term | change | full cost |
+|---|---|---|
+| `teammate_spacing` | 0.5 -> 2.0; -1 at <= 600 uu, linear to 0 at 1500 (was 1400); team's closest car exempt | -30 / s = 2.5% of a goal |
+| `double_commit` | 2 -> 4; charged to the second committer by commit order (`[team.commit_order]`, 1000 uu / 200 uu/s test), even if it overtakes; no hold on the penalty | -60 / s |
+| `no_second_commit_gate` | same terms (touch, possession, range_carry, airdribble, airdribble_seq); keyed on commit order with an 8-step hold, so it fires | - |
+| `last_man_goalside` / `support_band` | unchanged 0.2 / 0.1, flat (no ramp dip) | - |
+
+- Ramps (new per-term `spacing_ramp` / `double_commit_ramp` / `role_ramp`; `ramp` stays the default): teammate_spacing starts at its TM5 value (x0.25 = 0.5) and double_commit at its TM5 value (x0.5 = 2.0); both reach full by +100M. The role terms stay at 1.0.
+- Unchanged: team spirit 0.9 with goal / possession at 1.0, self-only list, 270-wide pred obs, mode mix 1v1 0.15 / 2v2 0.35 / 3v3 0.50, setters, league, PPO (1 epoch, no bf16, LR 5e-5, ENT 0.016, gamma 0.995), CHUNK 100M, critic warm-up 20M. 5B steps, LR held to 4B then 1B cosine to 0.4x. Start: TM5's latest checkpoint. BT: team_best read at launch (TM4 cut, `exp_TM4/checkpoints/1794862892`).
+- Launcher `team_launch_tm5r.sh`: the TM5 launcher plus a passive-play alarm (log only plus `exp_TM5r/PASSIVE_ALARM`; it never changes the run). The alarm fires when the same condition holds in 2 mids in a row: passes/min 2v2 < 0.85 or 3v3 < 1.30; deep last man above Nexto's (0.56 / 0.73) while h2h vs BEST-team is under 0.48; Nexto 2v2 < 0.40 or 3v3 < 0.20; near2 2v2 < 0.06 or 3v3 < 0.10.
+- Tests: lib 154 (151 + 3: commit-order gate / penalty, tm5r config, ramp start values) and trainer 11 passed. Binary `/opt/dlami/nvme/ippo_bins/indococo-train-tm5r-0119390`, sha256 `a75c09aa85e4f18f29d8ec2e7df29e168c9bb034437e215bb852881ce04059a6`.
+
+### Watch
+
+- Working: pair800 heads toward Nexto (0.06 / 0.13) and below TM5's 0.17 / 0.34 by +500M; near2 and dcw fall; the `Reward/double_commit` share and `RewardNonzero` on gated terms move. h2h vs BEST-team (TM4 cut) and the Nexto / Necto rates hold.
+- Passive: the alarm above. If it fires, lower teammate_spacing first (spacing is the new pressure), then double_commit.
+- Over-penalty: touches/min or passes/min collapse, or deep last man rises above Nexto's.
+
+### Unknowns
+
+- Whether 2.0 / 4.0 overshoots into passivity. No public source tests these weights on this reward scale (goal 1200).
+- The 8-step hold and the commit-order definition were tuned on offline trajectories only. Whether the policy learns to "commit first" earlier (a race to start committing) instead of spacing out.
+- The h2h and Nexto trajectory sizes are small (64-80 games per cell). The Nexto references come from TM3-vs-Nexto games.
+- RLBot behaviour: 270-wide models still need pack changes and the user's OK to test.
