@@ -212,6 +212,9 @@ pub struct TeamRewardConfig {
     /// `kickoff_grace_s` after the first touch).
     pub kickoff_exempt: Vec<String>,
     pub kickoff_grace_s: f64,
+    /// TM6 diagnostics: terms reported split by role
+    /// (`RewardFirst/<term>`, `RewardOther/<term>`; needs `[team.roles]`).
+    pub role_metrics: Vec<String>,
 }
 
 /// `[team.commit_order]` (TM5r).
@@ -257,6 +260,7 @@ impl Default for TeamRewardConfig {
             role_scale: BTreeMap::new(),
             kickoff_exempt: Vec::new(),
             kickoff_grace_s: 1.0,
+            role_metrics: Vec::new(),
         }
     }
 }
@@ -638,7 +642,7 @@ impl RewardConfig {
         let role_scale_keys: Vec<String> = tm.role_scale.keys().cloned().collect();
         for list in [
             &tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate, &tm.no_second_commit_gate, &tm.spirit_full,
-            &tm.role_first_gate, &tm.role_not_first_gate, &role_scale_keys, &tm.kickoff_exempt,
+            &tm.role_first_gate, &tm.role_not_first_gate, &role_scale_keys, &tm.kickoff_exempt, &tm.role_metrics,
         ] {
             for key in list {
                 assert!(
@@ -691,9 +695,14 @@ impl RewardConfig {
                 .map(|t| tm.spirit_full.iter().any(|k| k == t.name))
                 .collect(),
         });
+        let role_report = (!tm.role_metrics.is_empty())
+            .then(|| tm.roles.clone())
+            .flatten()
+            .map(|p| (RoleTracker::new(p), terms.iter().map(|t| tm.role_metrics.iter().any(|k| k == t.name)).collect()));
         CombinedReward::new(terms)
             .with_setter_scales(scales)
             .with_team_spirit(spirit)
+            .with_role_report(role_report)
     }
 }
 
@@ -1015,6 +1024,11 @@ mod extends_tests {
         let fb = get(&b, "face_ball");
         // Zero-sum after the gate: the gated cars keep only the opponents' -mean.
         assert!((fb[1] - fb[2]).abs() < 1e-12 && fb[0] > fb[1], "face_ball first man only: {fb:?}");
+        // Role-split diagnostics: blue first man vs its 2 teammates; orange (1 car) not split.
+        let split = b.last_role_split();
+        let ts = split.iter().find(|(n, _, _)| *n == "teammate_spacing").expect("teammate_spacing split");
+        assert_eq!(ts.2, [1, 2]);
+        assert!((ts.1[1] + 2.0).abs() < 1e-9 && ts.1[0] == 0.0, "{ts:?}");
         // Kickoff pending (ball resting at center), two blue cars committing together.
         let mut k = s.clone();
         k.ball = BallView { pos: DVec3::new(0.0, 0.0, 93.0), ..BallView::default() };

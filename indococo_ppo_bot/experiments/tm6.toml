@@ -48,6 +48,9 @@ role_scale = { contact_quality = 0.25 }
 # kickoffs).
 kickoff_exempt = ["teammate_spacing", "support_role", "double_commit"]
 kickoff_grace_s = 1.0
+# Diagnostics only (no reward change): RewardFirst/<term> and
+# RewardOther/<term> in metrics.jsonl (team modes).
+role_metrics = ["contact_quality", "speed_to_ball", "face_ball", "support_role", "last_man_goalside", "teammate_spacing"]
 # tm5r's list minus support_band (off) plus shadow_box and support_role:
 # every new and role term is self-only (added after the spirit mix). Spirit
 # stays 0.9 for the rest (goal / possession 1.0), as in TM5r.

@@ -66,6 +66,11 @@ pub struct CombinedReward {
     spirit: Option<TeamSpirit>,
     /// Last step's tau and mean |total change| per car from the blend.
     last_spirit: Option<(f64, f64)>,
+    /// TM6 diagnostics: a role tracker and, per term, whether to report
+    /// `RewardFirst/<term>` / `RewardOther/<term>` (mean weighted value per
+    /// car-step of the first man / the other cars, teams of 2+ cars only).
+    role_report: Option<(crate::team::RoleTracker, Vec<bool>)>,
+    last_roles: Vec<crate::team::Role>,
 }
 
 impl CombinedReward {
@@ -77,7 +82,16 @@ impl CombinedReward {
             setter_scales: Vec::new(),
             spirit: None,
             last_spirit: None,
+            role_report: None,
+            last_roles: Vec::new(),
         }
+    }
+
+    /// TM6: reports the listed terms split by role (see `role_report`).
+    #[must_use]
+    pub fn with_role_report(mut self, report: Option<(crate::team::RoleTracker, Vec<bool>)>) -> Self {
+        self.role_report = report;
+        self
     }
 
     /// Turns on team spirit (see [`TeamSpirit`]).
@@ -98,6 +112,41 @@ impl CombinedReward {
         for t in &mut self.terms {
             t.reward.reset(initial);
         }
+        if let Some((r, _)) = &mut self.role_report {
+            r.reset();
+        }
+    }
+
+    /// TM6: per reported term, (sum, count) of the first man's and the other
+    /// cars' weighted values in the last step (teams of 2+ cars only).
+    #[must_use]
+    pub fn last_role_split(&self) -> Vec<(&'static str, [f64; 2], [usize; 2])> {
+        let Some((_, flags)) = &self.role_report else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for ((t, w), &on) in self.terms.iter().zip(&self.last).zip(flags) {
+            if !on {
+                continue;
+            }
+            let (mut sum, mut cnt) = ([0.0; 2], [0usize; 2]);
+            for (i, x) in w.iter().enumerate() {
+                match self.last_roles.get(i) {
+                    Some(crate::team::Role::First) => {
+                        sum[0] += x;
+                        cnt[0] += 1;
+                    }
+                    Some(crate::team::Role::Second | crate::team::Role::Last) => {
+                        sum[1] += x;
+                        cnt[1] += 1;
+                    }
+                    // Demoed cars and 1-car teams (1v1) are not split.
+                    Some(crate::team::Role::Out) | None => {}
+                }
+            }
+            out.push((t.name, sum, cnt));
+        }
+        out
     }
 
     /// Total reward per car.
@@ -120,6 +169,20 @@ impl CombinedReward {
             Some(sp) if multi => Some(sp.tau()),
             _ => None,
         };
+        self.last_roles.clear();
+        if let Some((tracker, _)) = &mut self.role_report {
+            let counts = crate::team::team_counts(state);
+            let roles = tracker.update(state);
+            // Only cars of 2+ car teams are split (1v1 has no roles to compare).
+            if counts.iter().any(|&n| n > 1) {
+                self.last_roles = roles.to_vec();
+                for (r, c) in self.last_roles.iter_mut().zip(&state.cars) {
+                    if counts[usize::from(c.team.min(1))] < 2 {
+                        *r = crate::team::Role::Out;
+                    }
+                }
+            }
+        }
         let mut shift = 0.0;
         for (i, t) in self.terms.iter_mut().enumerate() {
             let r = t.reward.get_rewards(state);
@@ -170,6 +233,14 @@ impl<SI: SharedInfoReport + TickResets> Reward<SI> for CombinedReward {
             report[format!("RewardAbs/{}", t.name).as_str()] += AvgTracker::from(abs as f32);
             report[format!("RewardNonzero/{}", t.name).as_str()] +=
                 AvgTracker::from(nonzero as f32);
+        }
+        for (name, sum, cnt) in self.last_role_split() {
+            if cnt[0] > 0 {
+                report[format!("RewardFirst/{name}").as_str()] += AvgTracker::from((sum[0] / cnt[0] as f64) as f32);
+            }
+            if cnt[1] > 0 {
+                report[format!("RewardOther/{name}").as_str()] += AvgTracker::from((sum[1] / cnt[1] as f64) as f32);
+            }
         }
         if let Some((tau, shift)) = self.last_spirit {
             report["Team/tau"] += AvgTracker::from(tau as f32);
