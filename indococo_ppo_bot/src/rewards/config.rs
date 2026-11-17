@@ -46,11 +46,11 @@ use super::touch::Touch;
 use super::velocity_ball_to_goal::VelocityBallToGoal;
 use super::wall_pop_setup::WallPopSetup;
 use super::team_rewards::{
-    AirDoubleTouch, ConcedeDist, DoubleCommit, DoubleTap, DoubleTapParams, GateKind, Pass, PassParams, TeamGate,
-    TeammateProximity, LastManGoalside, SpacingParams, SupportBand, TeammateSpacing,
+    AirDoubleTouch, ConcedeDist, DoubleCommit, DoubleTap, DoubleTapParams, GateKind, KickoffMask, Pass, PassParams,
+    TeamGate, TeammateProximity, LastManGoalside, SpacingParams, SupportBand, SupportRole, TeammateSpacing,
 };
 use super::zero_sum::ZeroSum;
-use crate::team::{CommitOrder, DoubleCommitParams, TouchParams};
+use crate::team::{CommitOrder, DoubleCommitParams, RoleParams, RoleTracker, TouchParams};
 use super::{CombinedReward, StepReward, Term};
 
 /// Reads `path` as a TOML table with its `extends` chain merged in.
@@ -146,6 +146,8 @@ pub struct RewardWeights {
     pub teammate_spacing: f64,
     pub last_man_goalside: f64,
     pub support_band: f64,
+    /// TM6: goal-side support band for the support role (`[team.roles]`).
+    pub support_role: f64,
 }
 
 /// `[team]`: TM1 team-mode settings. All empty / unused by default, so
@@ -195,6 +197,21 @@ pub struct TeamRewardConfig {
     /// `double_commit_term` test instead of "not the team's closest car"
     /// with the TM2 test. None = TM5 behaviour.
     pub commit_order: Option<CommitOrderParams>,
+    /// TM6 `[team.roles]`: role tracking with hysteresis ([`RoleTracker`]).
+    /// When set, `teammate_spacing` exempts the first man by role,
+    /// `last_man_goalside` keys on the `Last` role, `support_role` uses it,
+    /// and the `role_*` lists below apply. None = TM5r behaviour.
+    pub roles: Option<RoleParams>,
+    /// TM6: terms paid only to the first man (role gate (1, 0)).
+    pub role_first_gate: Vec<String>,
+    /// TM6: terms paid only to the non-first cars (role gate (0, 1)).
+    pub role_not_first_gate: Vec<String>,
+    /// TM6: `{term: scale}`: full for the first man, x scale for the others.
+    pub role_scale: BTreeMap<String, f64>,
+    /// TM6: terms zeroed during the kickoff phase (pending kickoff plus
+    /// `kickoff_grace_s` after the first touch).
+    pub kickoff_exempt: Vec<String>,
+    pub kickoff_grace_s: f64,
 }
 
 /// `[team.commit_order]` (TM5r).
@@ -234,6 +251,12 @@ impl Default for TeamRewardConfig {
             double_commit_second_only: false,
             spacing: SpacingParams::default(),
             commit_order: None,
+            roles: None,
+            role_first_gate: Vec::new(),
+            role_not_first_gate: Vec::new(),
+            role_scale: BTreeMap::new(),
+            kickoff_exempt: Vec::new(),
+            kickoff_grace_s: 1.0,
         }
     }
 }
@@ -357,6 +380,17 @@ impl RewardConfig {
         let pick = |o: &Option<Vec<[f64; 2]>>| abs(o.as_deref().unwrap_or(&tm.spacing.ramp));
         let spacing = SpacingParams { ramp: pick(&tm.spacing.spacing_ramp), ..tm.spacing.clone() };
         let roles = SpacingParams { ramp: pick(&tm.spacing.role_ramp), ..tm.spacing.clone() };
+        // TM6: last_man_goalside / support_role ramps fall back to role_ramp.
+        let pick_role = |o: &Option<Vec<[f64; 2]>>| -> Vec<[f64; 2]> {
+            match o {
+                Some(r) => abs(r),
+                None => roles.ramp.clone(),
+            }
+        };
+        let last_p = SpacingParams { ramp: pick_role(&tm.spacing.last_ramp), ..tm.spacing.clone() };
+        let support_p = SpacingParams { ramp: pick_role(&tm.spacing.support_ramp), ..tm.spacing.clone() };
+        let tracker = || tm.roles.clone().map(RoleTracker::new);
+        let role_p = tm.roles.clone().unwrap_or_default();
         let spacing_ramp = if tm.double_commit_second_only { pick(&tm.spacing.double_commit_ramp) } else { Vec::new() };
         // TM5r: commit order on the double_commit_term test (fallback TM2's).
         let order_dc = tm.double_commit_term.clone().unwrap_or_else(|| tm.double_commit.clone());
@@ -374,6 +408,15 @@ impl RewardConfig {
             }
             if tm.no_second_commit_gate.iter().any(|k| k == key) {
                 r = Box::new(TeamGate::new(r, GateKind::NotSecondCommit, tm.double_commit.clone()).with_commit_order(order()));
+            }
+            if tm.role_first_gate.iter().any(|k| k == key) {
+                r = Box::new(TeamGate::role(r, role_p.clone(), 1.0, 0.0));
+            }
+            if tm.role_not_first_gate.iter().any(|k| k == key) {
+                r = Box::new(TeamGate::role(r, role_p.clone(), 0.0, 1.0));
+            }
+            if let Some(&s) = tm.role_scale.get(key) {
+                r = Box::new(TeamGate::role(r, role_p.clone(), 1.0, s));
             }
             r
         };
@@ -517,7 +560,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 16] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 17] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -582,16 +625,21 @@ impl RewardConfig {
                 Box::new(TeammateProximity::new(tm.proximity_radius)),
             ),
             ("musty", w.musty, Box::new(Musty::new(self.musty.clone()))),
-            ("teammate_spacing", w.teammate_spacing, Box::new(TeammateSpacing::new(spacing.clone()))),
-            ("last_man_goalside", w.last_man_goalside, Box::new(LastManGoalside::new(roles.clone()))),
+            ("teammate_spacing", w.teammate_spacing, Box::new(TeammateSpacing::new(spacing.clone()).with_roles(tracker()))),
+            ("last_man_goalside", w.last_man_goalside, Box::new(LastManGoalside::new(last_p.clone()).with_roles(tracker()))),
             ("support_band", w.support_band, Box::new(SupportBand::new(roles.clone()))),
+            ("support_role", w.support_role, Box::new(SupportRole::new(support_p.clone(), role_p.clone()))),
         ];
         terms.extend(
             experiment
                 .into_iter()
                 .filter(|(_, weight, _)| *weight != 0.0),
         );
-        for list in [&tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate, &tm.no_second_commit_gate, &tm.spirit_full] {
+        let role_scale_keys: Vec<String> = tm.role_scale.keys().cloned().collect();
+        for list in [
+            &tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate, &tm.no_second_commit_gate, &tm.spirit_full,
+            &tm.role_first_gate, &tm.role_not_first_gate, &role_scale_keys, &tm.kickoff_exempt,
+        ] {
             for key in list {
                 assert!(
                     terms.iter().any(|(n, _, _)| n == key),
@@ -599,17 +647,16 @@ impl RewardConfig {
                 );
             }
         }
+        let grace = (tm.kickoff_grace_s * crate::consts::STEPS_PER_SECOND).round().max(0.0) as u32;
         let terms: Vec<Term> = terms
             .into_iter()
-            .map(|(name, weight, reward)| Term {
-                name,
-                weight,
+            .map(|(name, weight, reward)| {
                 // Gate terms that have no zero-sum wrapper here (zs gated the others).
-                reward: if wrapped.borrow().iter().any(|k| k == name) {
-                    reward
-                } else {
-                    gate(name, reward)
-                },
+                let mut reward = if wrapped.borrow().iter().any(|k| k == name) { reward } else { gate(name, reward) };
+                if tm.kickoff_exempt.iter().any(|k| k == name) {
+                    reward = Box::new(KickoffMask::new(reward, grace));
+                }
+                Term { name, weight, reward }
             })
             .collect();
         let scales = self
@@ -927,6 +974,61 @@ mod extends_tests {
         assert!((sp[1] + 0.5).abs() < 1e-9 && sp[0] == 0.0, "{sp:?}");
         let lm = get("last_man_goalside");
         assert!((lm[2] - 0.2).abs() < 1e-9, "{lm:?}");
+    }
+
+    /// TM6 builds with the role terms and gates; at the run start
+    /// teammate_spacing pays 2.0 (first man by role exempt), support_role 0
+    /// (ramp 0), last_man_goalside 0.3 x 0.6667 on the Last role, the
+    /// first-man gates zero face_ball for the non-first car, and the
+    /// kickoff-exempt terms are 0 during the kickoff.
+    #[test]
+    fn tm6_builds_role_terms_and_gates() {
+        use crate::state::{BallView, CarView, StateView};
+        use glam::DVec3;
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm6.toml")).unwrap();
+        assert_eq!(c.team.roles, Some(RoleParams { margin: 300.0, hold: 8 }));
+        assert_eq!((c.weights.support_role, c.weights.support_band, c.weights.last_man_goalside), (0.2, 0.0, 0.3));
+        assert_eq!(c.team.role_scale.get("contact_quality"), Some(&0.25));
+        assert_eq!(c.team.closest_gate, vec!["shadow_space".to_string()]);
+        let car = |team: u8, y: f64| CarView { team, pos: DVec3::new(0.0, y, 17.0), forward: DVec3::Y, ..CarView::default() };
+        // Blue: first at -300, a teammate 400 uu behind it, last back at -3000.
+        let s = StateView {
+            tick_count: 0,
+            ball: BallView { pos: DVec3::new(10.0, 0.0, 93.0), vel: DVec3::new(0.0, 500.0, 0.0), ..BallView::default() },
+            cars: vec![car(0, -300.0), car(0, -700.0), car(0, -3000.0), car(1, 3000.0)],
+        };
+        let mut b = c.build();
+        let names: Vec<&str> = b.terms.iter().map(|t| t.name).collect();
+        for t in ["teammate_spacing", "last_man_goalside", "support_role", "double_commit", "contact_quality", "shadow_box"] {
+            assert!(names.contains(&t), "{t} missing from tm6");
+        }
+        assert!(!names.contains(&"support_band"));
+        b.reset_view(&s);
+        let _ = b.step_view(&s);
+        let get = |b: &CombinedReward, n: &str| b.last_terms()[names.iter().position(|x| *x == n).unwrap()].clone();
+        let sp = get(&b, "teammate_spacing");
+        assert!(sp[0] == 0.0 && (sp[1] + 2.0).abs() < 1e-9, "{sp:?}");
+        let lm = get(&b, "last_man_goalside");
+        assert!((lm[2] - 0.3 * 0.6667).abs() < 1e-6 && lm[1] == 0.0, "{lm:?}");
+        assert!(get(&b, "support_role").iter().all(|x| *x == 0.0));
+        let fb = get(&b, "face_ball");
+        // Zero-sum after the gate: the gated cars keep only the opponents' -mean.
+        assert!((fb[1] - fb[2]).abs() < 1e-12 && fb[0] > fb[1], "face_ball first man only: {fb:?}");
+        // Kickoff pending (ball resting at center), two blue cars committing together.
+        let mut k = s.clone();
+        k.ball = BallView { pos: DVec3::new(0.0, 0.0, 93.0), ..BallView::default() };
+        k.cars[0].pos = DVec3::new(-100.0, -400.0, 17.0);
+        k.cars[1].pos = DVec3::new(100.0, -400.0, 17.0);
+        for c in &mut k.cars[..2] {
+            c.vel = DVec3::new(0.0, 1500.0, 0.0);
+        }
+        let mut b = c.build();
+        b.reset_view(&k);
+        let _ = b.step_view(&k);
+        for t in ["teammate_spacing", "double_commit", "support_role"] {
+            assert!(get(&b, t).iter().all(|x| *x == 0.0), "{t} not exempt at kickoff");
+        }
     }
 
     #[test]

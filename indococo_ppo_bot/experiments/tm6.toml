@@ -1,0 +1,85 @@
+# TM6 reward config (EXPERIMENTS.md "TM6 — Cross-exam note"): TM5r
+# (tm5r.toml) with role-based rewards. TM5r's spacing stayed flat (pair800
+# 0.16 / 0.32 vs Nexto 0.06 / 0.13 at 32.56B) because every car is still
+# paid to go at the ball: contact_quality (w250, self-only, ungated) pays
+# the second car ~87 raw per bump near the ball, and TM5r's second car bumps
+# near the ball 3.6x (2v2) / 2x (3v3) as often as Nexto's; teammate_spacing
+# was ~1.2% of the reward size. TM6 gives the ball-approach terms to ONE car
+# per team (the first man by a hysteretic role, [team.roles]) and gives the
+# others their own targets (support band, goal-side last man). Obs unchanged
+# (270 wide; column 87 already carries the distance-to-ball rank). 1v1 is
+# unchanged (one car per team = first man; role gates pass 1v1 through).
+# Goal = 1200; 15 policy steps per second.
+extends = "tm5r.toml"
+
+[weights]
+# 2.0 -> 1.0 over the first 100M ([team.spacing] spacing_ramp); the first
+# man by role is exempt (not the team's closest car, so overtaking no
+# longer clears it). Off during the kickoff phase.
+teammate_spacing = 2.0
+# Unchanged: commit-order second committer, 4.0. Off during the kickoff phase.
+double_commit = 4.0
+# Keyed on the Last role; 0.2 -> 0.3 over 200M (last_ramp). In the
+# opponent's third the band's far edge is 3500 (not 4500) so the last man
+# holds near midfield instead of camping in net.
+last_man_goalside = 0.3
+# Replaced by support_role.
+support_band = 0.0
+# Support role (2v2: the non-first car; 3v3: the Second role), goal-side and
+# 1800-4000 (2v2) / 1500-3500 (3v3) uu from the ball, linear fall-off over
+# 700 uu: +0.2 / step at full (3 / s = 0.25% of a goal per second), ramped
+# 0 -> 1 over 200M. Lower than the code leg's 0.3 because of the Discord
+# passivity warnings (Vermatten, Lamp).
+support_role = 0.2
+
+[team]
+# speed_to_ball / face_ball move from the closest-car gate to the first-man
+# role gate; shadow_space keeps the closest gate.
+closest_gate = ["shadow_space"]
+# Ball-approach terms: first man only.
+role_first_gate = ["speed_to_ball", "face_ball", "aerial_boost", "high_ball"]
+# Defensive / resource terms: non-first roles only (shadow_box keeps
+# team_last_back from tm1.toml, so it is the last-back non-first car).
+role_not_first_gate = ["shadow_box", "safe_boost"]
+# Bumps: full for the first man, x0.25 for the others.
+role_scale = { contact_quality = 0.25 }
+# No spacing / support / double-commit shaping until 1 s after the first
+# kickoff touch (HappyBavarian07: kickoff spacing penalties teach bad
+# kickoffs).
+kickoff_exempt = ["teammate_spacing", "support_role", "double_commit"]
+kickoff_grace_s = 1.0
+# tm5r's list minus support_band (off) plus shadow_box and support_role:
+# every new and role term is self-only (added after the spirit mix). Spirit
+# stays 0.9 for the rest (goal / possession 1.0), as in TM5r.
+individual = [
+  "speed_to_ball", "face_ball", "energy", "boost_keep", "boost_change",
+  "aerial_boost", "in_air", "ang_vel", "safe_boost", "overextend",
+  "contact_quality", "recover", "double_commit",
+  "flip_reset", "flip_reset_use", "air_double_touch", "musty",
+  "teammate_spacing", "last_man_goalside", "shadow_box", "support_role",
+]
+# Kept from tm5r (commit order, 8-step hold): touch, possession,
+# range_carry, airdribble, airdribble_seq. pass / double_tap /
+# air_double_touch stay ungated.
+
+[team.roles]
+# Distance-to-ball rank with hysteresis: a challenger takes first man only
+# if >= 300 uu closer for >= 8 consecutive steps (~0.5 s); a toucher is
+# first man at once; demoed cars hold no role.
+margin = 300.0
+hold = 8
+
+[team.spacing]
+near = 600.0
+clear = 1500.0
+exempt_closest = true
+ramp = [[0.0, 1.0]]
+spacing_ramp = [[0.0, 1.0], [100_000_000.0, 0.5]]
+double_commit_ramp = [[0.0, 1.0]]
+role_ramp = [[0.0, 1.0]]
+last_ramp = [[0.0, 0.6667], [200_000_000.0, 1.0]]
+support_ramp = [[0.0, 0.0], [200_000_000.0, 1.0]]
+last_max_attack_third = 3500.0
+support_band_2 = [1800.0, 4000.0]
+support_band_3 = [1500.0, 3500.0]
+support_falloff = 700.0

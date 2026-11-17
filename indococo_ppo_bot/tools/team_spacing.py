@@ -36,6 +36,11 @@ Per team-step (both cars alive unless noted), distances in uu:
                      K-th closest car to the ball (first / second / third man)
   boost_steal        share of a team's big-pad-area visits (car within 300 uu
                      of a big pad, boost rising) that are in the opponent half
+  opp_ball_own_half  (TM6; all post-kickoff steps, demoed cars allowed) share of
+                     steps an opponent is the closest living car to the ball,
+                     within 1000 uu, with the ball in the team's half
+  no_challenger      (TM6) the same with no living teammate within 1500 uu of the
+                     ball (h2h `team.a.no_challenger_ratio` counts the kickoff too)
 """
 import glob, json, math, sys
 from collections import defaultdict
@@ -149,6 +154,15 @@ class Acc:
                             elif sign * py < 0:
                                 self.pad_own += 1
                 prev_boost[i] = bo
+            # TM6 no-challenger rate (all post-kickoff steps).
+            self.c["live_steps"] += 1
+            live = [j for j in range(len(cars)) if not cars[j][8]]
+            if live:
+                cl = min(live, key=lambda j: d3(cars[j][1:4], b))
+                if cars[cl][0] != team and d3(cars[cl][1:4], b) < 1000 and sign * b[1] < 0:
+                    self.c["opp_ball_own_half"] += 1
+                    if not any(d3(pos[i], b) < 1500 for i in alive):
+                        self.c["no_challenger"] += 1
             if len(alive) < len(idx):
                 continue
             self.n += 1
@@ -217,6 +231,8 @@ class Acc:
             "touch_top_share": sum(self.touch_top) / max(len(self.touch_top), 1),
             "passes_per_min": self.passes / mins,
             "boost_steal": self.pad_opp / max(self.pad_opp + self.pad_own, 1),
+            "opp_ball_own_half": self.c["opp_ball_own_half"] / max(self.c["live_steps"], 1),
+            "no_challenger": self.c["no_challenger"] / max(self.c["live_steps"], 1),
             **{f"r{k}_{w}": self.c[f"r{k}_{w}"] / max(self.c[f"r{k}_n"], 1)
                for k in (1, 2, 3) for w in ("ball", "goal")},
         }

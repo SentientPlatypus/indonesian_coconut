@@ -19,14 +19,18 @@
 //! * [`TeamGate`]: wraps a term and zeroes it for cars that fail a team
 //!   test: `Closest` (team's closest to the ball: anti-ballchase gate for
 //!   speed_to_ball & co), `LastBack` (team's last-back car, e.g. the 1v1
-//!   recover shaping) or `NotDoubleCommit` (e.g. flip_reset).
+//!   recover shaping) or `NotDoubleCommit` (e.g. flip_reset). TM6 adds
+//!   `Role`: scale by the car's [`RoleTracker`] role (first man vs the rest).
+//! * [`SupportRole`] (TM6): goal-side support band for the support role.
+//! * [`KickoffMask`] (TM6): zeroes a term during the kickoff phase.
 
 use serde::{Deserialize, Serialize};
 
 use super::StepReward;
 use crate::state::StateView;
 use crate::team::{
-    CommitOrder, DoubleCommitParams, TouchParams, TouchTracker, closest_on_team, double_committing,
+    CommitOrder, DoubleCommitParams, KickoffPhase, Role, RoleParams, RoleTracker, TouchParams, TouchTracker,
+    closest_on_team, double_committing,
 };
 
 /// [`Pass`] payout parameters.
@@ -313,6 +317,20 @@ pub struct SpacingParams {
     pub spacing_ramp: Option<Vec<[f64; 2]>>,
     pub double_commit_ramp: Option<Vec<[f64; 2]>>,
     pub role_ramp: Option<Vec<[f64; 2]>>,
+    /// TM6 per-term overrides of `role_ramp` (None = `role_ramp`, then `ramp`).
+    pub last_ramp: Option<Vec<[f64; 2]>>,
+    pub support_ramp: Option<Vec<[f64; 2]>>,
+    /// TM6 `last_man_goalside`: while the ball is in the opponent's third
+    /// (`attack_sign * ball.y > BACK_WALL_Y / 3`), the far edge of the band
+    /// is this instead of `last_max`, so the last man holds near midfield
+    /// rather than camping in net. None = `last_max` (TM5).
+    pub last_max_attack_third: Option<f64>,
+    /// TM6 `support_role` bands (car-to-ball distance, uu) for teams with 2
+    /// living cars (2v2) and 3+ (3v3); linear fall-off to 0 over
+    /// `support_falloff` outside the band.
+    pub support_band_2: [f64; 2],
+    pub support_band_3: [f64; 2],
+    pub support_falloff: f64,
 }
 
 impl Default for SpacingParams {
@@ -329,6 +347,12 @@ impl Default for SpacingParams {
             spacing_ramp: None,
             double_commit_ramp: None,
             role_ramp: None,
+            last_ramp: None,
+            support_ramp: None,
+            last_max_attack_third: None,
+            support_band_2: [1800.0, 4000.0],
+            support_band_3: [1500.0, 3500.0],
+            support_falloff: 700.0,
         }
     }
 }
@@ -348,24 +372,38 @@ fn alive_team_counts(state: &StateView) -> [usize; 2] {
 /// blended by team spirit).
 pub struct TeammateSpacing {
     p: SpacingParams,
+    /// TM6: exempt the first man by role ([`RoleTracker`]) instead of the
+    /// team's closest car.
+    roles: Option<RoleTracker>,
 }
 
 impl TeammateSpacing {
     #[must_use]
     pub fn new(p: SpacingParams) -> Self {
-        Self { p }
+        Self { p, roles: None }
+    }
+
+    #[must_use]
+    pub fn with_roles(mut self, roles: Option<RoleTracker>) -> Self {
+        self.roles = roles;
+        self
     }
 }
 
 impl StepReward for TeammateSpacing {
-    fn reset(&mut self, _initial: &StateView) {}
+    fn reset(&mut self, _initial: &StateView) {
+        if let Some(r) = &mut self.roles {
+            r.reset();
+        }
+    }
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let n = state.cars.len();
+        let role_first: Option<Vec<bool>> = self.roles.as_mut().map(|r| r.update(state).iter().map(|x| *x == Role::First).collect());
         if crate::team::kickoff_pending(state) {
             return vec![0.0; n];
         }
-        let closest = closest_on_team(state);
+        let closest = role_first.unwrap_or_else(|| closest_on_team(state));
         let k = ramp_scale(&self.p.ramp);
         let span = (self.p.clear - self.p.near).max(1.0);
         (0..n)
@@ -392,25 +430,39 @@ impl StepReward for TeammateSpacing {
 /// team has 2+ living cars and the kickoff is not pending.
 pub struct LastManGoalside {
     p: SpacingParams,
+    /// TM6: key on the `Last` role ([`RoleTracker`]) instead of the
+    /// last-back car.
+    roles: Option<RoleTracker>,
 }
 
 impl LastManGoalside {
     #[must_use]
     pub fn new(p: SpacingParams) -> Self {
-        Self { p }
+        Self { p, roles: None }
+    }
+
+    #[must_use]
+    pub fn with_roles(mut self, roles: Option<RoleTracker>) -> Self {
+        self.roles = roles;
+        self
     }
 }
 
 impl StepReward for LastManGoalside {
-    fn reset(&mut self, _initial: &StateView) {}
+    fn reset(&mut self, _initial: &StateView) {
+        if let Some(r) = &mut self.roles {
+            r.reset();
+        }
+    }
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let n = state.cars.len();
+        let role_last: Option<Vec<bool>> = self.roles.as_mut().map(|r| r.update(state).iter().map(|x| *x == Role::Last).collect());
         if crate::team::kickoff_pending(state) {
             return vec![0.0; n];
         }
         let alive = alive_team_counts(state);
-        let last = crate::team::last_back_on_team(state);
+        let last = role_last.unwrap_or_else(|| crate::team::last_back_on_team(state));
         let k = ramp_scale(&self.p.ramp);
         (0..n)
             .map(|i| {
@@ -419,9 +471,102 @@ impl StepReward for LastManGoalside {
                     return 0.0;
                 }
                 let behind = c.attack_sign() * (state.ball.pos.y - c.pos.y);
-                if (self.p.last_min..=self.p.last_max).contains(&behind) { k } else { 0.0 }
+                let attack_third = c.attack_sign() * state.ball.pos.y > crate::consts::BACK_WALL_Y / 3.0;
+                let max = match self.p.last_max_attack_third {
+                    Some(m) if attack_third => m,
+                    _ => self.p.last_max,
+                };
+                if (self.p.last_min..=max).contains(&behind) { k } else { 0.0 }
             })
             .collect()
+    }
+}
+
+/// TM6 `support_role` (replaces `support_band`): self-only, for the
+/// support role: `Second` with 3+ living teammates, the non-first car with
+/// 2. Pays +1 while goal-side of the ball (`attack_sign * (ball.y - car.y) >
+/// 0`) with its ball distance inside the band (`support_band_2` /
+/// `support_band_3`), falling linearly to 0 over `support_falloff` outside
+/// it; 0 when not goal-side, demoed, while the kickoff is pending, and in
+/// 1v1.
+pub struct SupportRole {
+    p: SpacingParams,
+    roles: RoleTracker,
+}
+
+impl SupportRole {
+    #[must_use]
+    pub fn new(p: SpacingParams, roles: RoleParams) -> Self {
+        Self { p, roles: RoleTracker::new(roles) }
+    }
+
+    /// Band value for ball distance `d` (1 inside, linear fall-off outside).
+    #[must_use]
+    pub fn band_value(band: [f64; 2], falloff: f64, d: f64) -> f64 {
+        let out = if d < band[0] { band[0] - d } else if d > band[1] { d - band[1] } else { 0.0 };
+        (1.0 - out / falloff.max(1e-6)).clamp(0.0, 1.0)
+    }
+}
+
+impl StepReward for SupportRole {
+    fn reset(&mut self, _initial: &StateView) {
+        self.roles.reset();
+    }
+
+    fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        let n = state.cars.len();
+        let roles = self.roles.update(state).to_vec();
+        if crate::team::kickoff_pending(state) {
+            return vec![0.0; n];
+        }
+        let alive = alive_team_counts(state);
+        let k = ramp_scale(&self.p.ramp);
+        (0..n)
+            .map(|i| {
+                let c = &state.cars[i];
+                let a = alive[usize::from(c.team.min(1))];
+                let support = match a {
+                    0 | 1 => false,
+                    2 => roles[i] == Role::Last,
+                    _ => roles[i] == Role::Second,
+                };
+                if !support || c.is_demoed() {
+                    return 0.0;
+                }
+                if c.attack_sign() * (state.ball.pos.y - c.pos.y) <= 0.0 {
+                    return 0.0;
+                }
+                let band = if a == 2 { self.p.support_band_2 } else { self.p.support_band_3 };
+                k * Self::band_value(band, self.p.support_falloff, c.pos.distance(state.ball.pos))
+            })
+            .collect()
+    }
+}
+
+/// TM6: zeroes `inner` during the kickoff phase ([`KickoffPhase`]: the
+/// pending kickoff plus a grace period after the first touch). `inner` is
+/// still evaluated every step, so its trackers stay in sync.
+pub struct KickoffMask {
+    inner: Box<dyn StepReward>,
+    phase: KickoffPhase,
+}
+
+impl KickoffMask {
+    #[must_use]
+    pub fn new(inner: Box<dyn StepReward>, grace_steps: u32) -> Self {
+        Self { inner, phase: KickoffPhase::new(grace_steps) }
+    }
+}
+
+impl StepReward for KickoffMask {
+    fn reset(&mut self, initial: &StateView) {
+        self.inner.reset(initial);
+        self.phase.reset(initial);
+    }
+
+    fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        let r = self.inner.get_rewards(state);
+        if self.phase.update(state) { vec![0.0; r.len()] } else { r }
     }
 }
 
@@ -508,6 +653,10 @@ pub enum GateKind {
     /// TM5: zero only for a double-committing car that is NOT its team's
     /// closest (the second committer); the first man keeps the term.
     NotSecondCommit,
+    /// TM6: scale by role ([`RoleTracker`]): `first` for the first man,
+    /// `other` for the rest (teams of 2+ cars only; 1v1 passes unchanged).
+    /// First-only gate = (1, 0), non-first only = (0, 1), `role_scale` = (1, s).
+    Role,
 }
 
 pub struct TeamGate {
@@ -518,12 +667,21 @@ pub struct TeamGate {
     /// order, held a few steps (see [`CommitOrder`]), instead of
     /// "double committing and not the closest".
     order: Option<CommitOrder>,
+    /// TM6 (`Role` only): the role tracker and the (first, other) scales.
+    role: Option<(RoleTracker, f64, f64)>,
 }
 
 impl TeamGate {
     #[must_use]
     pub fn new(inner: Box<dyn StepReward>, kind: GateKind, dc: DoubleCommitParams) -> Self {
-        Self { inner, kind, dc, order: None }
+        Self { inner, kind, dc, order: None, role: None }
+    }
+
+    /// TM6: a [`GateKind::Role`] gate paying `first` x the term to the
+    /// first man and `other` x to the other cars.
+    #[must_use]
+    pub fn role(inner: Box<dyn StepReward>, p: RoleParams, first: f64, other: f64) -> Self {
+        Self { inner, kind: GateKind::Role, dc: DoubleCommitParams::default(), order: None, role: Some((RoleTracker::new(p), first, other)) }
     }
 
     #[must_use]
@@ -539,11 +697,25 @@ impl StepReward for TeamGate {
         if let Some(o) = &mut self.order {
             o.reset();
         }
+        if let Some((t, _, _)) = &mut self.role {
+            t.reset();
+        }
     }
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let mut r = self.inner.get_rewards(state);
+        if let (GateKind::Role, Some((t, first, other))) = (self.kind, &mut self.role) {
+            let counts = crate::team::team_counts(state);
+            for ((x, role), c) in r.iter_mut().zip(t.update(state)).zip(&state.cars) {
+                if counts[usize::from(c.team.min(1))] < 2 {
+                    continue;
+                }
+                *x *= if *role == Role::First { *first } else { *other };
+            }
+            return r;
+        }
         let pass: Vec<bool> = match self.kind {
+            GateKind::Role => unreachable!("role gate without a tracker"),
             GateKind::Closest => closest_on_team(state),
             GateKind::LastBack => crate::team::last_back_on_team(state),
             GateKind::NotDoubleCommit => double_committing(state, &self.dc)
@@ -744,5 +916,108 @@ mod tests {
         assert_eq!(TeammateProximity::new(800.0).get_rewards(&s), vec![-1.0, 0.0, -1.0]);
         let r = DoubleCommit::new(DoubleCommitParams::default()).get_rewards(&s);
         assert_eq!(r, vec![-1.0, 0.0, -1.0]);
+    }
+    struct Fixed(Vec<f64>);
+    impl StepReward for Fixed {
+        fn reset(&mut self, _initial: &StateView) {}
+        fn get_rewards(&mut self, _state: &StateView) -> Vec<f64> {
+            self.0.clone()
+        }
+    }
+
+    /// TM6 role gates: first-only, non-first-only and role_scale (x0.25
+    /// off the first man); 1v1 passes through unchanged.
+    #[test]
+    fn role_gate_first_other_and_1v1() {
+        // Blue 0 first (closest), blue 2 last; orange 1 alone (first).
+        let s = st(100.0, vec![car(0, -400.0), car(1, 3000.0), car(0, -2500.0)]);
+        let mut first = TeamGate::role(Box::new(Fixed(vec![2.0; 3])), RoleParams::default(), 1.0, 0.0);
+        first.reset(&s);
+        assert_eq!(first.get_rewards(&s), vec![2.0, 2.0, 0.0]);
+        let mut not_first = TeamGate::role(Box::new(Fixed(vec![2.0; 3])), RoleParams::default(), 0.0, 1.0);
+        not_first.reset(&s);
+        // Orange is a 1-car team here: passes through.
+        assert_eq!(not_first.get_rewards(&s), vec![0.0, 2.0, 2.0]);
+        let mut cq = TeamGate::role(Box::new(Fixed(vec![80.0; 3])), RoleParams::default(), 1.0, 0.25);
+        cq.reset(&s);
+        assert_eq!(cq.get_rewards(&s), vec![80.0, 80.0, 20.0]);
+        // 1v1: everything unchanged for every gate.
+        let s1 = st(100.0, vec![car(0, -400.0), car(1, 3000.0)]);
+        let mut g = TeamGate::role(Box::new(SpeedTowardBall), RoleParams::default(), 0.0, 1.0);
+        g.reset(&s1);
+        assert_eq!(g.get_rewards(&s1), SpeedTowardBall.get_rewards(&s1));
+    }
+
+    /// TM6 support_role: 2v2 non-first car / 3v3 Second role, goal-side
+    /// only, band 1 inside and linear fall-off over 700 uu outside.
+    #[test]
+    fn support_role_band_goalside_and_roles() {
+        let p = SpacingParams::default();
+        assert_eq!(SupportRole::band_value([1800.0, 4000.0], 700.0, 2500.0), 1.0);
+        assert!((SupportRole::band_value([1800.0, 4000.0], 700.0, 1450.0) - 0.5).abs() < 1e-9);
+        assert_eq!(SupportRole::band_value([1800.0, 4000.0], 700.0, 4800.0), 0.0);
+        // 2v2: blue 0 first at the ball, blue 2 2500 uu goal-side -> 1.
+        let mk = |y2: f64| st(500.0, vec![car(0, 300.0), car(1, 3000.0), car(0, y2), car(1, 4000.0)]);
+        let mut r = SupportRole::new(p.clone(), RoleParams::default());
+        let s = mk(-2000.0);
+        r.reset(&s);
+        let v = r.get_rewards(&s);
+        assert!((v[2] - 1.0).abs() < 1e-6 && v[0] == 0.0, "{v:?}");
+        // Orange: the non-first car (y 4000) is goal-side by 3500 (ball 500): inside band.
+        assert!(v[3] > 0.9, "{v:?}");
+        // Ahead of the ball (not goal-side) -> 0.
+        let mut r = SupportRole::new(p.clone(), RoleParams::default());
+        let s = mk(2600.0);
+        r.reset(&s);
+        assert_eq!(r.get_rewards(&s)[2], 0.0);
+        // 3v3: only the Second role is paid (band 1500-3500), not Last.
+        let s3 = st(500.0, vec![car(0, 300.0), car(1, 3000.0), car(0, -1500.0), car(1, 3500.0), car(0, -4500.0), car(1, 4500.0)]);
+        let mut r = SupportRole::new(p, RoleParams::default());
+        r.reset(&s3);
+        let v = r.get_rewards(&s3);
+        assert!((v[2] - 1.0).abs() < 1e-6 && v[4] == 0.0 && v[0] == 0.0, "{v:?}");
+        // 1v1: nothing.
+        let s1 = st(500.0, vec![car(0, -2000.0), car(1, 3000.0)]);
+        assert_eq!(SupportRole::new(SpacingParams::default(), RoleParams::default()).get_rewards(&s1), vec![0.0; 2]);
+    }
+
+    /// TM6 kickoff exemption: zero while the kickoff is pending and for the
+    /// grace steps after the first touch, then the inner term as is.
+    #[test]
+    fn kickoff_mask_zeroes_kickoff_phase_only() {
+        let cars = || vec![car(0, -2000.0), car(1, 2000.0), car(0, -2300.0), car(1, 2300.0)];
+        let pending = st(0.0, cars());
+        let live = st(30.0, cars());
+        let mut m = KickoffMask::new(Box::new(Fixed(vec![-1.0; 4])), 2);
+        m.reset(&pending);
+        assert_eq!(m.get_rewards(&pending), vec![0.0; 4]);
+        assert_eq!(m.get_rewards(&live), vec![0.0; 4], "first touch step");
+        assert_eq!(m.get_rewards(&live), vec![0.0; 4]);
+        assert_eq!(m.get_rewards(&live), vec![0.0; 4]);
+        assert_eq!(m.get_rewards(&live), vec![-1.0; 4]);
+        // Not a kickoff episode: never masked.
+        let mut m = KickoffMask::new(Box::new(Fixed(vec![-1.0; 4])), 15);
+        m.reset(&live);
+        assert_eq!(m.get_rewards(&live), vec![-1.0; 4]);
+    }
+
+    /// TM6 teammate_spacing exempts the first man by role (an overtaking
+    /// teammate without the margin is still charged; the closest-car
+    /// exemption would clear it).
+    #[test]
+    fn teammate_spacing_exempts_role_first_not_closest() {
+        let p = SpacingParams { near: 600.0, clear: 1500.0, ..SpacingParams::default() };
+        let mut sp = TeammateSpacing::new(p.clone()).with_roles(Some(RoleTracker::new(RoleParams::default())));
+        let s0 = st(100.0, vec![car(0, -500.0), car(1, 3000.0), car(0, -900.0)]);
+        sp.reset(&s0);
+        let r = sp.get_rewards(&s0);
+        assert_eq!(r[0], 0.0);
+        assert!((r[2] + 1.0).abs() < 1e-9, "{r:?}");
+        // Blue 2 now 100 uu closer than blue 0 (< margin): blue 0 stays first, blue 2 charged.
+        let s1 = st(100.0, vec![car(0, -500.0), car(1, 3000.0), car(0, -400.0)]);
+        let r = sp.get_rewards(&s1);
+        assert!(r[0] == 0.0 && r[2] < 0.0, "{r:?}");
+        let r_old = TeammateSpacing::new(p).get_rewards(&s1);
+        assert!(r_old[2] == 0.0 && r_old[0] < 0.0, "closest-exempt: {r_old:?}");
     }
 }

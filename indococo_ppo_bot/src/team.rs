@@ -251,6 +251,181 @@ pub fn kickoff_pending(state: &StateView) -> bool {
     b.pos.x.abs() < 1.0 && b.pos.y.abs() < 1.0 && b.vel.length() < 1.0
 }
 
+/// TM6 `[team.roles]`: role-assignment parameters for [`RoleTracker`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoleParams {
+    /// A challenger takes first man only if it is at least this much closer
+    /// to the ball than the current first man (uu) ...
+    pub margin: f64,
+    /// ... for at least this many consecutive steps.
+    pub hold: u32,
+}
+
+impl Default for RoleParams {
+    fn default() -> Self {
+        Self { margin: 300.0, hold: 8 }
+    }
+}
+
+/// TM6 team role of one car (see [`RoleTracker`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// The team's ball-approach car (one per team with a living car).
+    First,
+    /// 3+ living cars: the cars that are neither first nor last.
+    Second,
+    /// The living non-first car closest to its own goal line.
+    Last,
+    /// Demoed: holds no role, is never first (ranks last in the distance rank).
+    Out,
+}
+
+/// TM6: per-team roles with hysteresis. The first man is the team's
+/// distance-to-ball leader, but a challenger only takes over once it is at
+/// least `margin` uu closer than the current first man for `hold`
+/// consecutive steps; a car that touches the ball becomes first man at once
+/// (closest toucher if several); a demoed first man is replaced by the
+/// closest living car at once. Of the remaining living cars, the one closest
+/// to its own goal line is `Last` and the rest are `Second` (3v3 only).
+/// One car per team (1v1) is always `First`. Like [`CommitOrder`], each
+/// user owns a tracker and calls [`RoleTracker::update`] once per step.
+#[derive(Clone, Debug)]
+pub struct RoleTracker {
+    p: RoleParams,
+    first: [Option<usize>; 2],
+    /// Consecutive steps each car has been a qualifying challenger.
+    streak: Vec<u32>,
+    roles: Vec<Role>,
+    /// First-man changes since the last reset, per team.
+    pub swaps: [u64; 2],
+}
+
+impl RoleTracker {
+    #[must_use]
+    pub fn new(p: RoleParams) -> Self {
+        Self { p, first: [None; 2], streak: Vec::new(), roles: Vec::new(), swaps: [0; 2] }
+    }
+
+    pub fn reset(&mut self) {
+        self.first = [None; 2];
+        self.streak.clear();
+        self.roles.clear();
+        self.swaps = [0; 2];
+    }
+
+    /// Roles of the last [`RoleTracker::update`].
+    #[must_use]
+    pub fn roles(&self) -> &[Role] {
+        &self.roles
+    }
+
+    pub fn update(&mut self, state: &StateView) -> &[Role] {
+        let n = state.cars.len();
+        if self.streak.len() != n {
+            self.first = [None; 2];
+            self.streak = vec![0; n];
+        }
+        let dist = |i: usize| state.cars[i].pos.distance(state.ball.pos);
+        let cmp = |a: &usize, b: &usize| dist(*a).partial_cmp(&dist(*b)).unwrap_or(std::cmp::Ordering::Equal);
+        let mut roles = vec![Role::Out; n];
+        for team in [0u8, 1u8] {
+            let t = usize::from(team);
+            let alive: Vec<usize> = (0..n).filter(|&i| state.cars[i].team == team && !state.cars[i].is_demoed()).collect();
+            let Some(&closest) = alive.iter().min_by(|a, b| cmp(a, b)) else {
+                self.first[t] = None;
+                continue;
+            };
+            let toucher = alive.iter().copied().filter(|&i| state.cars[i].ball_touches > 0).min_by(|a, b| cmp(a, b));
+            let cur = self.first[t].filter(|i| alive.contains(i));
+            let new_first = match (toucher, cur) {
+                (Some(tc), _) => tc,
+                (None, None) => closest,
+                (None, Some(f)) => {
+                    // Hysteresis: only the closest challenger can build a streak.
+                    let df = dist(f);
+                    for &i in &alive {
+                        if i != f && i == closest && dist(i) + self.p.margin <= df {
+                            self.streak[i] += 1;
+                        } else {
+                            self.streak[i] = 0;
+                        }
+                    }
+                    if closest != f && self.streak[closest] >= self.p.hold.max(1) { closest } else { f }
+                }
+            };
+            if self.first[t].is_some_and(|f| f != new_first) {
+                self.swaps[t] += 1;
+            }
+            if toucher.is_some() || self.first[t] != Some(new_first) {
+                for &i in &alive {
+                    self.streak[i] = 0;
+                }
+            }
+            self.first[t] = Some(new_first);
+            roles[new_first] = Role::First;
+            let rest: Vec<usize> = alive.iter().copied().filter(|&i| i != new_first).collect();
+            // Own goal line: smaller attack_sign * y is further back.
+            if let Some(&last) = rest.iter().min_by(|&&a, &&b| {
+                let ya = state.cars[a].attack_sign() * state.cars[a].pos.y;
+                let yb = state.cars[b].attack_sign() * state.cars[b].pos.y;
+                ya.partial_cmp(&yb).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                for &i in &rest {
+                    roles[i] = if i == last { Role::Last } else { Role::Second };
+                }
+            }
+        }
+        self.roles = roles;
+        &self.roles
+    }
+}
+
+/// TM6 kickoff phase: from a pending kickoff (ball resting at center)
+/// through the first step the kickoff is no longer pending (the first
+/// touch) and `grace_steps` steps after it. Episodes that do not start from a kickoff have no
+/// kickoff phase. Call [`KickoffPhase::update`] once per step.
+#[derive(Clone, Debug)]
+pub struct KickoffPhase {
+    grace_steps: u32,
+    /// None = no kickoff phase in this episode; Some(None) = still pending;
+    /// Some(Some(k)) = k grace steps left.
+    state: Option<Option<u32>>,
+}
+
+impl KickoffPhase {
+    #[must_use]
+    pub fn new(grace_steps: u32) -> Self {
+        Self { grace_steps, state: None }
+    }
+
+    pub fn reset(&mut self, initial: &StateView) {
+        self.state = kickoff_pending(initial).then_some(None);
+    }
+
+    /// True while the kickoff phase is on (this step counts).
+    pub fn update(&mut self, state: &StateView) -> bool {
+        match self.state {
+            None => false,
+            Some(None) => {
+                if !kickoff_pending(state) {
+                    // The first-touch step counts, then `grace_steps` more.
+                    self.state = Some(Some(self.grace_steps));
+                }
+                true
+            }
+            Some(Some(0)) => {
+                self.state = None;
+                false
+            }
+            Some(Some(k)) => {
+                self.state = Some(Some(k - 1));
+                true
+            }
+        }
+    }
+}
+
 /// Pass / double-touch detection parameters (shared by the rewards and the
 /// metrics; see [`TouchTracker`]).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -759,5 +934,69 @@ mod tests {
         c[0].ball_touches = 1;
         let e = t.step(&st(8, DVec3::new(0.0, 10.0, 93.0), DVec3::new(0.0, 500.0, 0.0), c));
         assert_eq!(e.kickoff_duplicate, Some(0));
+    }
+    #[test]
+    fn role_tracker_hysteresis_touch_and_demo() {
+        let mut t = RoleTracker::new(RoleParams { margin: 300.0, hold: 3 });
+        let ball = DVec3::new(0.0, 0.0, 93.0);
+        // Blue 0 at 1000 uu, blue 2 at 1200 uu: blue 0 first, blue 2 last; orange alone = first.
+        let mk = |y0: f64, y2: f64| vec![car(0, 0.0, y0, 17.0), car(1, 0.0, 3000.0, 17.0), car(0, 0.0, y2, 17.0)];
+        let r = t.update(&st(0, ball, DVec3::ZERO, mk(-1000.0, -1200.0))).to_vec();
+        assert_eq!(r, vec![Role::First, Role::First, Role::Last]);
+        // Blue 2 overtakes by 100 uu only (< margin): no swap however long.
+        for _ in 0..10 {
+            assert_eq!(t.update(&st(0, ball, DVec3::ZERO, mk(-1000.0, -900.0)))[0], Role::First);
+        }
+        // >= 300 uu closer: swaps on the 3rd consecutive step, not before.
+        assert_eq!(t.update(&st(0, ball, DVec3::ZERO, mk(-1000.0, -600.0)))[0], Role::First);
+        assert_eq!(t.update(&st(0, ball, DVec3::ZERO, mk(-1000.0, -600.0)))[0], Role::First);
+        let r = t.update(&st(0, ball, DVec3::ZERO, mk(-1000.0, -600.0))).to_vec();
+        assert_eq!((r[0], r[2]), (Role::Last, Role::First));
+        assert_eq!(t.swaps, [1, 0]);
+        // A touch by the farther car makes it first at once.
+        let mut c = mk(-1000.0, -600.0);
+        c[0].ball_touches = 1;
+        assert_eq!(t.update(&st(0, ball, DVec3::ZERO, c))[0], Role::First);
+        assert_eq!(t.swaps, [2, 0]);
+        // A demoed first man is replaced at once and holds no role.
+        let mut c = mk(-1000.0, -600.0);
+        c[0].demo_respawn_timer = 2.0;
+        let r = t.update(&st(0, ball, DVec3::ZERO, c)).to_vec();
+        assert_eq!((r[0], r[2]), (Role::Out, Role::First));
+    }
+
+    #[test]
+    fn role_tracker_3v3_second_and_last_and_1v1_first() {
+        let mut t = RoleTracker::new(RoleParams::default());
+        let ball = DVec3::new(0.0, 0.0, 93.0);
+        // Blue: closest at -500, then -1500, deepest at -4000; orange 3 cars.
+        let cars = vec![
+            car(0, 0.0, -1500.0, 17.0), car(1, 0.0, 800.0, 17.0), car(0, 0.0, -500.0, 17.0),
+            car(1, 0.0, 2000.0, 17.0), car(0, 0.0, -4000.0, 17.0), car(1, 0.0, 4500.0, 17.0),
+        ];
+        let r = t.update(&st(0, ball, DVec3::ZERO, cars)).to_vec();
+        assert_eq!(r, vec![Role::Second, Role::First, Role::First, Role::Second, Role::Last, Role::Last]);
+        let mut t = RoleTracker::new(RoleParams::default());
+        let r = t.update(&st(0, ball, DVec3::ZERO, vec![car(0, 0.0, -4000.0, 17.0), car(1, 0.0, 4000.0, 17.0)])).to_vec();
+        assert_eq!(r, vec![Role::First, Role::First]);
+    }
+
+    #[test]
+    fn kickoff_phase_lasts_until_first_touch_plus_grace() {
+        let cars = || vec![car(0, 0.0, -2000.0, 17.0), car(1, 0.0, 2000.0, 17.0)];
+        let center = DVec3::new(0.0, 0.0, 93.0);
+        let mut k = KickoffPhase::new(2);
+        k.reset(&st(0, center, DVec3::ZERO, cars()));
+        assert!(k.update(&st(8, center, DVec3::ZERO, cars())), "pending");
+        let moved = DVec3::new(0.0, 50.0, 93.0);
+        assert!(k.update(&st(16, moved, DVec3::new(0.0, 900.0, 0.0), cars())), "touch step (grace 2 left)");
+        assert!(k.update(&st(24, moved, DVec3::ZERO, cars())), "grace 1");
+        assert!(k.update(&st(32, moved, DVec3::ZERO, cars())), "grace 0");
+        assert!(!k.update(&st(40, moved, DVec3::ZERO, cars())), "over");
+        assert!(!k.update(&st(48, center, DVec3::ZERO, cars())), "stays over");
+        // No kickoff at reset: never on.
+        let mut k = KickoffPhase::new(15);
+        k.reset(&st(0, moved, DVec3::ZERO, cars()));
+        assert!(!k.update(&st(8, moved, DVec3::ZERO, cars())));
     }
 }

@@ -2732,7 +2732,41 @@ mod spacing_tests {
     }
 }
 
-const N_H2H: usize = 35;
+/// TM6 role metrics for one team: the opponents have the ball (an
+/// opponent is the closest living car to it, within 1000 uu) in `team`'s
+/// half, and whether no living `team` car is within 1500 uu of the ball
+/// (the "no challenger" case). None while the kickoff is pending.
+fn opp_ball_own_half(v: &StateView, team: u8) -> Option<(bool, bool)> {
+    if indococo_bot::team::kickoff_pending(v) { return None; }
+    let closest = v.cars.iter().filter(|c| !c.is_demoed()).min_by(|a, b| {
+        a.pos.distance(v.ball.pos).partial_cmp(&b.pos.distance(v.ball.pos)).unwrap_or(std::cmp::Ordering::Equal)
+    })?;
+    let sign = if team == 0 { 1.0 } else { -1.0 };
+    let opp_ball = closest.team != team && closest.pos.distance(v.ball.pos) < 1000.0 && sign * v.ball.pos.y < 0.0;
+    let challenger = v.cars.iter().any(|c| c.team == team && !c.is_demoed() && c.pos.distance(v.ball.pos) < 1500.0);
+    Some((opp_ball, opp_ball && !challenger))
+}
+
+#[cfg(test)]
+mod role_metric_tests {
+    use super::*;
+    use indococo_bot::state::CarView;
+    #[test]
+    fn no_challenger_needs_opponent_ball_in_own_half_and_no_teammate_near() {
+        let mut v = StateView::default();
+        v.ball.pos.y = -2000.0; // blue half, not a pending kickoff
+        let c = |team: u8, y: f64| CarView { team, pos: glam::DVec3::new(0.0, y, 17.0), ..CarView::default() };
+        v.cars = vec![c(0, -4500.0), c(1, -1800.0), c(0, 1000.0), c(1, 2000.0)];
+        assert_eq!(opp_ball_own_half(&v, 0), Some((true, true)));
+        v.cars[0].pos.y = -3000.0; // teammate within 1500 of the ball
+        assert_eq!(opp_ball_own_half(&v, 0), Some((true, false)));
+        assert_eq!(opp_ball_own_half(&v, 1), Some((false, false)), "orange: ball in blue's half");
+        v.ball.pos = glam::DVec3::new(0.0, 0.0, 93.0);
+        assert_eq!(opp_ball_own_half(&v, 0), None, "pending kickoff");
+    }
+}
+
+const N_H2H: usize = 47;
 
 fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
     init_from_default(true).expect("load collision meshes");
@@ -2783,6 +2817,14 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
             "double_commit_wide_ratio": tot[29 + k] as f64 / tot[33 + k].max(1) as f64,
             "deep_last_man_ratio": tot[31 + k] as f64 / tot[33 + k].max(1) as f64,
             "flip_resets_per_game": ([ra, rb][k] as f64) / ((w + l + d).max(1) as f64),
+            // TM6 role metrics (RoleTracker 300 uu / 8 steps; touch role = role before the touch step).
+            "role_swaps_per_min": tot[35 + k] as f64 / mins,
+            "first_mean_stint_s": steps / 15.0 / ((tot[35 + k] + w + l + d).max(1) as f64),
+            "touch_share_first": tot[37 + k] as f64 / (tot[37 + k] + tot[39 + k] + tot[41 + k]).max(1) as f64,
+            "touch_share_second": tot[39 + k] as f64 / (tot[37 + k] + tot[39 + k] + tot[41 + k]).max(1) as f64,
+            "touch_share_last": tot[41 + k] as f64 / (tot[37 + k] + tot[39 + k] + tot[41 + k]).max(1) as f64,
+            "no_challenger_ratio": tot[43 + k] as f64 / steps,
+            "opp_ball_own_half_ratio": tot[45 + k] as f64 / steps,
         });
         out["team"] = serde_json::json!({"a": side(0), "b": side(1), "steps": tot[19], "kickoffs": tot[22]});
     }
@@ -2804,6 +2846,7 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
         a_team: u8,
         uses: FlipResetUse,
         touches: indococo_bot::team::TouchTracker,
+        roles: indococo_bot::team::RoleTracker,
         live: bool,
         gid: usize,
     }
@@ -2824,7 +2867,8 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
         let live = *started < games;
         let gid = *started;
         *started += 1;
-        G { env, state, obs, prev, a_team: (k % 2) as u8, uses, touches, live, gid }
+        let roles = indococo_bot::team::RoleTracker::new(indococo_bot::team::RoleParams::default());
+        G { env, state, obs, prev, a_team: (k % 2) as u8, uses, touches, roles, live, gid }
     };
     let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
     while gs.iter().any(|g| g.live) {
@@ -2895,6 +2939,30 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
                         out[27 + k] += u64::from(m[1]);
                         out[29 + k] += u64::from(m[2]);
                         out[31 + k] += u64::from(m[3]);
+                    }
+                }
+                // TM6 role metrics.
+                let before = g.roles.roles().to_vec();
+                let sw0 = g.roles.swaps;
+                g.roles.update(&view);
+                for (k, team) in [g.a_team, 1 - g.a_team].into_iter().enumerate() {
+                    let t = usize::from(team);
+                    out[35 + k] += g.roles.swaps[t] - sw0[t];
+                    if before.len() == view.cars.len() {
+                        for (i, c) in view.cars.iter().enumerate() {
+                            if c.team == team && c.ball_touches > 0 {
+                                match before[i] {
+                                    indococo_bot::team::Role::First => out[37 + k] += 1,
+                                    indococo_bot::team::Role::Second => out[39 + k] += 1,
+                                    indococo_bot::team::Role::Last => out[41 + k] += 1,
+                                    indococo_bot::team::Role::Out => {}
+                                }
+                            }
+                        }
+                    }
+                    if let Some((ob, nc)) = opp_ball_own_half(&view, team) {
+                        out[45 + k] += u64::from(ob);
+                        out[43 + k] += u64::from(nc);
                     }
                 }
                 out[19] += 1;

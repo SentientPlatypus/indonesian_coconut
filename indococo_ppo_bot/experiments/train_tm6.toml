@@ -1,0 +1,116 @@
+# TM6 (EXPERIMENTS.md "TM6"): train_tm5r.toml as is (mode mix, setters,
+# PPO, league block); the TM6 change is the reward (tm6.toml: role tracker,
+# first-man ball-approach gates, contact_quality x0.25 off the first man,
+# support_role, last man on the Last role, kickoff exemption). Kept so the
+# role effect is not confounded with a mix change.
+# TM5r (EXPERIMENTS.md "TM5r"): train_tm5.toml as is (mode mix,
+# setters, PPO, league block); the TM5r change is the reward (tm5r.toml:
+# teammate_spacing 2.0, band 600-1500, double_commit 4.0 and the
+# no_second_commit_gate on commit order). Kept so the spacing effect is not
+# confounded with a mix change.
+# TM5 (EXPERIMENTS.md "TM5", docs/TM3_SPACING.md): train_tm4.toml as is
+# (mode mix 1v1 0.15 / 2v2 0.35 / 3v3 0.50, TM2 setters, PPO); the TM5
+# change is the reward (tm5.toml). Kept so the spacing effect is not
+# confounded with a mix change.
+# TM4 (EXPERIMENTS.md "TM4 — Cross-exam note"): train_tm2.toml with the
+# TM4 mode mix 1v1 0.15 / 2v2 0.35 / 3v3 0.50 (3v3 vs Nexto is the biggest
+# gap). Everything else (PPO, setters, opponents block) is TM2 / TM3 as is.
+# TM2 (EXPERIMENTS.md "Cross-exam note — TM2"): the TM1 template with the TM2
+# mode mix (1v1 35%: TM1 lost 1v1 to ST25 43.8%) and setter mix. Was TM1:
+# One shared policy on the 235-wide team-ext obs (INDOCOCO_OBS_TEAM=1),
+# warm-started from the ST36 1v1 final widened with `widen-team` (actor and
+# critic; new columns zero, so step 0 plays like the 1v1 policy). Mixed team
+# sizes in ONE process by experience share ([team] mode_mix; arenas split by
+# share / cars): 1v1 keeps 25% so the shared policy does not lose 1v1 skill.
+# PPO as ST: 1 epoch, no bf16, ENT 0.016, lambda 0.95, CHUNK 100M; gamma
+# 0.995 (TM1 design; horizon ~13 s at 15 steps/s); 20M critic-only warm-up.
+reward_config = "@RUN@/tm_rewards.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 384
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = false
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+[team]
+mode_mix = { "1" = 0.15, "2" = 0.35, "3" = 0.50 }
+obs_shuffle = true
+
+# Opponent team = ONE sampled version per rollout (teammates are always the
+# current policy). OPPCH of rollouts vs a frozen team: past selves (weight
+# PASTW) and the league (Galactus / Megabyte team ports, the 1v1 finals
+# widened on load). The launcher appends the external and fixed entries.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = @PASTW@
+
+# TM2 setter mix (sum 1.0). Mechanic drills 22% (TM1 10%): backboard_double_tap
+# 0.10, reset_shot 0.05 (air_near_ball in the attacking third, goalward
+# carry), musty_setup 0.03, air_near_ball 0.02, air_reset 0.02; taken from
+# team_play, replay and random. Cars 2.. of 2-car setters go to support spots.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.05
+[[state_setters]]
+kind = "random"
+weight = 0.08
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.08
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "team_play"
+weight = 0.20
+[[state_setters]]
+kind = "replay"
+weight = 0.12
+path = "@SNAP@"
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.08
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.05
+distance = [1800.0, 3000.0]
+[[state_setters]]
+kind = "aerial_pass"
+weight = 0.12
+[[state_setters]]
+kind = "backboard_double_tap"
+weight = 0.10
+[[state_setters]]
+kind = "reset_shot"
+weight = 0.05
+[[state_setters]]
+kind = "musty_setup"
+weight = 0.03
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.02
+[[state_setters]]
+kind = "air_reset"
+weight = 0.02
