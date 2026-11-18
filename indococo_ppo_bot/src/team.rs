@@ -494,6 +494,7 @@ struct PendingPass {
     aerial: bool,
     confirm_tick: u64,
     goal_deadline: u64,
+    receiver_start_sep: f64,
 }
 
 /// A pass that paid: the receiving team kept the ball or scored.
@@ -504,6 +505,8 @@ pub struct PassEvent {
     /// Ball path length from the passer's touch to the receive.
     pub travel: f64,
     pub aerial: bool,
+    /// Receiver-passer separation at the originating touch (uu).
+    pub receiver_start_sep: f64,
 }
 
 /// What [`TouchTracker::step`] saw this step.
@@ -536,6 +539,8 @@ pub struct TouchTracker {
     p: TouchParams,
     prev: Option<StateView>,
     last: Option<TouchRec>,
+    /// Per-car separation from the originating toucher.
+    last_separations: Vec<f64>,
     ball_path: f64,
     grounded_since_touch: bool,
     pending: Vec<PendingPass>,
@@ -654,6 +659,7 @@ impl TouchTracker {
                             team: rec.team,
                             travel: self.ball_path,
                             aerial: ball.pos.z > self.p.aerial_z,
+                            receiver_start_sep: self.last_separations.get(rec.car).copied().unwrap_or(0.0),
                             confirm_tick: now + Self::ticks(self.p.keep_s),
                             goal_deadline: now + Self::ticks(self.p.goal_s),
                         });
@@ -702,6 +708,7 @@ impl TouchTracker {
                 self.possession = Some(rec.team);
                 self.paid_this_possession = 0;
             }
+            self.last_separations = cur.cars.iter().map(|c| c.pos.distance(car.pos)).collect();
             self.last = Some(rec);
             self.ball_path = 0.0;
             self.grounded_since_touch = false;
@@ -724,6 +731,7 @@ impl TouchTracker {
                         receiver: pp.receiver,
                         travel: pp.travel,
                         aerial: pp.aerial,
+                        receiver_start_sep: pp.receiver_start_sep,
                     });
                 }
             } else if scorer_team.is_none() {

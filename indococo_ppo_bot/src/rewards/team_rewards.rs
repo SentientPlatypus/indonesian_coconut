@@ -47,6 +47,8 @@ pub struct PassParams {
     pub giveaway: f64,
     /// Receiver's share of the payout (passer gets 1.0).
     pub receiver_share: f64,
+    /// TM7: receiver payout requires this separation at the pass start.
+    pub receiver_min_sep: f64,
 }
 
 impl Default for PassParams {
@@ -57,6 +59,7 @@ impl Default for PassParams {
             aerial_mult: 1.5,
             giveaway: 0.25,
             receiver_share: 1.0,
+            receiver_min_sep: 0.0,
         }
     }
 }
@@ -90,7 +93,9 @@ impl StepReward for Pass {
                 s *= self.p.aerial_mult;
             }
             r[pe.passer] += s;
-            r[pe.receiver] += s * self.p.receiver_share;
+            if pe.receiver_start_sep >= self.p.receiver_min_sep {
+                r[pe.receiver] += s * self.p.receiver_share;
+            }
         }
         for &(car, travel) in &ev.giveaways {
             r[car] -= self.p.giveaway * (travel / self.p.travel_norm).min(1.0);
@@ -331,6 +336,9 @@ pub struct SpacingParams {
     pub support_band_2: [f64; 2],
     pub support_band_3: [f64; 2],
     pub support_falloff: f64,
+    /// TM7 far penalty starts at far_start and saturates after far_span.
+    pub far_start: f64,
+    pub far_span: f64,
 }
 
 impl Default for SpacingParams {
@@ -353,6 +361,8 @@ impl Default for SpacingParams {
             support_band_2: [1800.0, 4000.0],
             support_band_3: [1500.0, 3500.0],
             support_falloff: 700.0,
+            far_start: 4500.0,
+            far_span: 1500.0,
         }
     }
 }
@@ -422,6 +432,130 @@ impl StepReward for TeammateSpacing {
                 if d.is_finite() { -k * ((self.p.clear - d) / span).clamp(0.0, 1.0) } else { 0.0 }
             })
             .collect()
+    }
+}
+
+/// TM7 `teammate_far`: too-far penalty to the nearest living teammate,
+/// `-clamp((d - far_start) / far_span, 0, 1)`, for the non-first cars by role
+/// ([`RoleTracker`]); 0 for the first man, demoed cars and cars without a
+/// living teammate (1v1). Self-only (`individual`); the kickoff phase is
+/// masked by `kickoff_exempt`. The other half of the too-close / too-far
+/// pair with `teammate_spacing`.
+pub struct TeammateFar {
+    p: SpacingParams,
+    roles: RoleTracker,
+}
+
+impl TeammateFar {
+    #[must_use]
+    pub fn new(p: SpacingParams, roles: RoleParams) -> Self {
+        Self { p, roles: RoleTracker::new(roles) }
+    }
+}
+
+impl StepReward for TeammateFar {
+    fn reset(&mut self, _initial: &StateView) {
+        self.roles.reset();
+    }
+
+    fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        let roles = self.roles.update(state).to_vec();
+        let span = self.p.far_span.max(1.0);
+        (0..state.cars.len())
+            .map(|i| {
+                let c = &state.cars[i];
+                if c.is_demoed() || roles[i] == Role::First {
+                    return 0.0;
+                }
+                let d = state
+                    .cars
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, o)| *j != i && o.team == c.team && !o.is_demoed())
+                    .map(|(_, o)| o.pos.distance(c.pos))
+                    .fold(f64::INFINITY, f64::min);
+                if d.is_finite() { -((d - self.p.far_start) / span).clamp(0.0, 1.0) } else { 0.0 }
+            })
+            .collect()
+    }
+}
+
+/// TM7 `[team.concede_role]`: role scales of [`ConcedeRole`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConcedeRoleParams {
+    /// Roles are read this many policy steps before the goal step (the
+    /// oldest kept if the episode is shorter).
+    pub lag_steps: usize,
+    pub first: f64,
+    pub second: f64,
+    pub last: f64,
+}
+
+impl Default for ConcedeRoleParams {
+    fn default() -> Self {
+        Self { lag_steps: 15, first: 0.7, second: 1.0, last: 1.3 }
+    }
+}
+
+/// TM7 `concede_role`: on the goal step, each car of the conceding team gets
+/// `-s_i / mean(s)` with `s` its role scale `lag_steps` before the goal
+/// (first / second / last; demoed = 1.0), so the team total is always
+/// `-team size` (team-normalized) and only the split depends on the role.
+/// Teams of one car (1v1) get 0 (1v1 unchanged). Meant to be `individual`
+/// (added after the team-spirit blend, which would average the split away).
+pub struct ConcedeRole {
+    p: ConcedeRoleParams,
+    roles: RoleTracker,
+    history: std::collections::VecDeque<Vec<Role>>,
+    scored: bool,
+}
+
+impl ConcedeRole {
+    #[must_use]
+    pub fn new(p: ConcedeRoleParams, roles: RoleParams) -> Self {
+        Self { p, roles: RoleTracker::new(roles), history: std::collections::VecDeque::new(), scored: false }
+    }
+
+    fn scale(&self, role: Option<&Role>) -> f64 {
+        match role {
+            Some(Role::First) => self.p.first,
+            Some(Role::Second) => self.p.second,
+            Some(Role::Last) => self.p.last,
+            _ => 1.0,
+        }
+    }
+}
+
+impl StepReward for ConcedeRole {
+    fn reset(&mut self, initial: &StateView) {
+        self.roles.reset();
+        self.history.clear();
+        self.scored = initial.goal_scored();
+    }
+
+    fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
+        let cur = self.roles.update(state).to_vec();
+        self.history.push_back(cur);
+        while self.history.len() > self.p.lag_steps + 1 {
+            self.history.pop_front();
+        }
+        let mut r = vec![0.0; state.cars.len()];
+        let scored = state.goal_scored();
+        if scored && !self.scored {
+            if let (Some(team), Some(snap)) = (state.scoring_team(), self.history.front()) {
+                let ids: Vec<usize> = (0..state.cars.len()).filter(|&i| state.cars[i].team != team).collect();
+                if ids.len() > 1 {
+                    let s: Vec<f64> = ids.iter().map(|&i| self.scale(snap.get(i))).collect();
+                    let mean = s.iter().sum::<f64>() / s.len() as f64;
+                    for (&i, si) in ids.iter().zip(&s) {
+                        r[i] = -si / mean.max(1e-9);
+                    }
+                }
+            }
+        }
+        self.scored = scored;
+        r
     }
 }
 
@@ -1019,5 +1153,128 @@ mod tests {
         assert!(r[0] == 0.0 && r[2] < 0.0, "{r:?}");
         let r_old = TeammateSpacing::new(p).get_rewards(&s1);
         assert!(r_old[2] == 0.0 && r_old[0] < 0.0, "closest-exempt: {r_old:?}");
+    }
+
+    /// TM7 teammate_far: 0 up to far_start, linear to -1 over far_span, the
+    /// first man by role, demoed cars and 1v1 exempt.
+    #[test]
+    fn teammate_far_band_role_and_1v1() {
+        let p = SpacingParams { far_start: 4500.0, far_span: 1500.0, ..SpacingParams::default() };
+        let mut f = TeammateFar::new(p.clone(), RoleParams::default());
+        // Blue first man at -100; teammate 5250 uu away (half penalty).
+        let s = st(0.0, vec![car(0, -100.0), car(1, 3000.0), car(0, -5350.0)]);
+        f.reset(&s);
+        let r = f.get_rewards(&s);
+        assert!(r[0] == 0.0 && (r[2] + 0.5).abs() < 1e-9 && r[1] == 0.0, "{r:?}");
+        // Inside far_start: no penalty; past far_start + far_span: -1.
+        let s = st(0.0, vec![car(0, -100.0), car(1, 3000.0), car(0, -4000.0)]);
+        assert_eq!(f.get_rewards(&s)[2], 0.0);
+        let mut f = TeammateFar::new(p.clone(), RoleParams::default());
+        let s = st(0.0, vec![car(0, 100.0), car(1, 3000.0), car(0, -7000.0)]);
+        f.reset(&s);
+        assert!((f.get_rewards(&s)[2] + 1.0).abs() < 1e-9);
+        // Demoed teammate: nobody to be far from.
+        let mut d = car(0, -7000.0);
+        d.demo_respawn_timer = 2.0;
+        let s = st(0.0, vec![car(0, 100.0), car(1, 3000.0), d]);
+        assert_eq!(f.get_rewards(&s), vec![0.0; 3]);
+        // 1v1 unchanged.
+        let mut f = TeammateFar::new(p, RoleParams::default());
+        let s = st(0.0, vec![car(0, -100.0), car(1, 9000.0)]);
+        f.reset(&s);
+        assert_eq!(f.get_rewards(&s), vec![0.0; 2]);
+    }
+
+    fn goal_state(cars: Vec<CarView>, ball_y: f64) -> StateView {
+        StateView { tick_count: 0, ball: BallView { pos: DVec3::new(0.0, ball_y, 93.0), ..BallView::default() }, cars }
+    }
+
+    /// TM7 concede_role: team-normalized (total = -team size), split by the
+    /// roles `lag_steps` before the goal, scoring team and 1v1 get 0.
+    #[test]
+    fn concede_role_is_team_normalized_and_lagged() {
+        assert!(!StateView::default().goal_scored());
+        // Orange scores into blue's goal (y = -5120 side): ball past the line.
+        let goal_y = -(crate::consts::BACK_WALL_Y + 200.0);
+        for n in [2usize, 3] {
+            let mut cr = ConcedeRole::new(ConcedeRoleParams::default(), RoleParams::default());
+            // Blue: first man near the ball at y -1000, last back at -4000, (3v3) second at -2500.
+            let mut cars = vec![car(0, -1000.0), car(0, -4000.0), car(1, 2000.0), car(1, 3000.0)];
+            if n == 3 {
+                cars.push(car(0, -2500.0));
+                cars.push(car(1, 2500.0));
+            }
+            let live = goal_state(cars.clone(), -900.0);
+            cr.reset(&live);
+            for _ in 0..20 {
+                assert!(cr.get_rewards(&live).iter().all(|x| *x == 0.0));
+            }
+            // Roles swap in the last few steps before the goal (the last-back car rushes the ball):
+            // the 15-step-old snapshot still decides the split.
+            let mut late = cars.clone();
+            late[1].pos = DVec3::new(0.0, -950.0, 17.0);
+            late[0].pos = DVec3::new(0.0, -4500.0, 17.0);
+            for _ in 0..5 {
+                let _ = cr.get_rewards(&goal_state(late.clone(), -900.0));
+            }
+            let g = goal_state(late, goal_y);
+            assert_eq!(g.scoring_team(), Some(1));
+            let r = cr.get_rewards(&g);
+            let blue: f64 = (0..r.len()).filter(|&i| g.cars[i].team == 0).map(|i| r[i]).sum();
+            assert!((blue + n as f64).abs() < 1e-9, "team total {blue}");
+            assert!((0..r.len()).filter(|&i| g.cars[i].team == 1).all(|i| r[i] == 0.0));
+            // Car 0 was first man, car 1 last back 15 steps ago.
+            assert!((r[0] + 0.7).abs() < 1e-9 && (r[1] + 1.3).abs() < 1e-9, "{n}v{n}: {r:?}");
+            if n == 3 {
+                assert!((r[4] + 1.0).abs() < 1e-9);
+            }
+            // Fires once per goal.
+            assert!(cr.get_rewards(&g).iter().all(|x| *x == 0.0));
+        }
+        // 1v1: no extra concede penalty.
+        let mut cr = ConcedeRole::new(ConcedeRoleParams::default(), RoleParams::default());
+        let live = goal_state(vec![car(0, -1000.0), car(1, 2000.0)], -900.0);
+        cr.reset(&live);
+        let _ = cr.get_rewards(&live);
+        assert_eq!(cr.get_rewards(&goal_state(vec![car(0, -1000.0), car(1, 2000.0)], goal_y)), vec![0.0; 2]);
+    }
+
+    /// TM7 pass receiver_min_sep: the receiver is paid only if it was that
+    /// far from the passer at the passer's touch; the passer is always paid.
+    #[test]
+    fn pass_receiver_needs_start_separation() {
+        let run = |recv_start_y: f64| -> Vec<f64> {
+            let mut pass = Pass::new(TouchParams::default(), PassParams { receiver_min_sep: 1200.0, ..PassParams::default() });
+            let at = |tick: u64, by: f64, ry: f64, touch: Option<usize>| {
+                let mut cars = vec![car(0, 0.0), car(1, 6000.0), car(0, ry)];
+                for c in &mut cars {
+                    c.vel = DVec3::ZERO;
+                }
+                if let Some(i) = touch {
+                    cars[i].ball_touches = 1;
+                }
+                StateView { tick_count: tick, ball: BallView { pos: DVec3::new(0.0, by, 93.0), ..BallView::default() }, cars }
+            };
+            pass.reset(&at(0, 0.0, recv_start_y, None));
+            let mut total = vec![0.0; 3];
+            let mut add = |r: Vec<f64>| total.iter_mut().zip(r).for_each(|(t, x)| *t += x);
+            add(pass.get_rewards(&at(8, 100.0, recv_start_y, Some(0))));
+            let mut tick = 8;
+            for k in 1..=14u64 {
+                tick += 8;
+                add(pass.get_rewards(&at(tick, 100.0 + 100.0 * k as f64, 1500.0, None)));
+            }
+            tick += 8;
+            add(pass.get_rewards(&at(tick, 1500.0, 1500.0, Some(2))));
+            for _ in 0..20 {
+                tick += 8;
+                add(pass.get_rewards(&at(tick, 1500.0, 1500.0, None)));
+            }
+            total
+        };
+        let far = run(1500.0);
+        assert!(far[0] > 0.0 && (far[2] - far[0]).abs() < 1e-9, "{far:?}");
+        let near = run(900.0);
+        assert!(near[0] > 0.0 && near[2] == 0.0, "{near:?}");
     }
 }

@@ -46,8 +46,8 @@ use super::touch::Touch;
 use super::velocity_ball_to_goal::VelocityBallToGoal;
 use super::wall_pop_setup::WallPopSetup;
 use super::team_rewards::{
-    AirDoubleTouch, ConcedeDist, DoubleCommit, DoubleTap, DoubleTapParams, GateKind, KickoffMask, Pass, PassParams,
-    TeamGate, TeammateProximity, LastManGoalside, SpacingParams, SupportBand, SupportRole, TeammateSpacing,
+    AirDoubleTouch, ConcedeDist, ConcedeRole, ConcedeRoleParams, DoubleCommit, DoubleTap, DoubleTapParams, GateKind, KickoffMask, Pass, PassParams,
+    TeamGate, TeammateFar, TeammateProximity, LastManGoalside, SpacingParams, SupportBand, SupportRole, TeammateSpacing,
 };
 use super::zero_sum::ZeroSum;
 use crate::team::{CommitOrder, DoubleCommitParams, RoleParams, RoleTracker, TouchParams};
@@ -148,6 +148,10 @@ pub struct RewardWeights {
     pub support_band: f64,
     /// TM6: goal-side support band for the support role (`[team.roles]`).
     pub support_role: f64,
+    /// TM7: too-far penalty for non-first cars (`[team.spacing]` far_*).
+    pub teammate_far: f64,
+    /// TM7: role-scaled, team-normalized concede penalty (`[team.concede_role]`).
+    pub concede_role: f64,
 }
 
 /// `[team]`: TM1 team-mode settings. All empty / unused by default, so
@@ -215,6 +219,8 @@ pub struct TeamRewardConfig {
     /// TM6 diagnostics: terms reported split by role
     /// (`RewardFirst/<term>`, `RewardOther/<term>`; needs `[team.roles]`).
     pub role_metrics: Vec<String>,
+    /// TM7 `concede_role` scales and role lag.
+    pub concede_role: ConcedeRoleParams,
 }
 
 /// `[team.commit_order]` (TM5r).
@@ -261,6 +267,7 @@ impl Default for TeamRewardConfig {
             kickoff_exempt: Vec::new(),
             kickoff_grace_s: 1.0,
             role_metrics: Vec::new(),
+            concede_role: ConcedeRoleParams::default(),
         }
     }
 }
@@ -564,7 +571,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 17] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 19] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -633,12 +640,18 @@ impl RewardConfig {
             ("last_man_goalside", w.last_man_goalside, Box::new(LastManGoalside::new(last_p.clone()).with_roles(tracker()))),
             ("support_band", w.support_band, Box::new(SupportBand::new(roles.clone()))),
             ("support_role", w.support_role, Box::new(SupportRole::new(support_p.clone(), role_p.clone()))),
+            ("teammate_far", w.teammate_far, Box::new(TeammateFar::new(tm.spacing.clone(), role_p.clone()))),
+            ("concede_role", w.concede_role, Box::new(ConcedeRole::new(tm.concede_role.clone(), role_p.clone()))),
         ];
         terms.extend(
             experiment
                 .into_iter()
                 .filter(|(_, weight, _)| *weight != 0.0),
         );
+        if w.concede_role != 0.0 {
+            assert!(tm.individual.iter().any(|k| k == "concede_role"), "concede_role must be individual (post-mix)");
+            assert!(!self.zero_sum.contains_key("concede_role"), "concede_role is a penalty, not zero-sum");
+        }
         let role_scale_keys: Vec<String> = tm.role_scale.keys().cloned().collect();
         for list in [
             &tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate, &tm.no_second_commit_gate, &tm.spirit_full,
@@ -1077,5 +1090,72 @@ mod extends_tests {
         let mut c = RewardConfig::default();
         c.team.closest_gate = vec!["nope".into()];
         let _ = c.build();
+    }
+
+    /// TM7: tm6 plus teammate_spacing 4.0 (2.0 -> 4.0 over 200M, clear 1800),
+    /// teammate_far 0.5, pass receiver_min_sep 1200 and concede_role 120
+    /// (individual); kickoff-exempt teammate_far; 1v1 builds no extra reward.
+    #[test]
+    fn tm7_builds_spacing_far_pass_and_concede_role() {
+        use crate::state::{BallView, CarView, StateView};
+        use glam::DVec3;
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm7.toml")).unwrap();
+        assert_eq!((c.weights.teammate_spacing, c.weights.teammate_far, c.weights.concede_role), (4.0, 0.5, 120.0));
+        assert_eq!((c.team.spacing.near, c.team.spacing.clear), (600.0, 1800.0));
+        assert_eq!(c.team.spacing.spacing_ramp, Some(vec![[0.0, 0.5], [200_000_000.0, 1.0]]));
+        assert_eq!((c.team.spacing.far_start, c.team.spacing.far_span), (4500.0, 1500.0));
+        assert_eq!(c.team.pass.receiver_min_sep, 1200.0);
+        assert_eq!(c.team.concede_role, ConcedeRoleParams::default());
+        // TM6 kept: role gates, support / last man, double commit, spirit.
+        assert_eq!(c.team.roles, Some(RoleParams { margin: 300.0, hold: 8 }));
+        assert_eq!((c.weights.support_role, c.weights.last_man_goalside, c.weights.double_commit), (0.2, 0.3, 4.0));
+        assert_eq!(c.team.spirit, vec![[0.0, 0.9]]);
+        assert!(c.team.no_second_commit_gate.iter().any(|k| k == "touch"));
+        for t in ["teammate_far", "concede_role", "teammate_spacing"] {
+            assert!(c.team.individual.iter().any(|k| k == t), "{t} not individual");
+        }
+        assert!(c.team.kickoff_exempt.iter().any(|k| k == "teammate_far"));
+        let tm6 = RewardConfig::from_file(&dir.join("tm6.toml")).unwrap();
+        assert_eq!((tm6.weights.teammate_far, tm6.weights.concede_role, tm6.team.pass.receiver_min_sep), (0.0, 0.0, 0.0));
+        let car = |team: u8, y: f64| CarView { team, pos: DVec3::new(0.0, y, 17.0), forward: DVec3::Y, ..CarView::default() };
+        // Blue: first at -300, a teammate 400 uu behind it, a third 6500 behind.
+        let s = StateView {
+            tick_count: 0,
+            ball: BallView { pos: DVec3::new(10.0, 0.0, 93.0), vel: DVec3::new(0.0, 500.0, 0.0), ..BallView::default() },
+            cars: vec![car(0, -300.0), car(0, -700.0), car(0, -7000.0), car(1, 3000.0)],
+        };
+        let mut b = c.build();
+        let names: Vec<&str> = b.terms.iter().map(|t| t.name).collect();
+        for t in ["teammate_far", "concede_role", "teammate_spacing", "pass", "support_role"] {
+            assert!(names.contains(&t), "{t} missing from tm7");
+        }
+        b.reset_view(&s);
+        let _ = b.step_view(&s);
+        let get = |b: &CombinedReward, n: &str| b.last_terms()[names.iter().position(|x| *x == n).unwrap()].clone();
+        // Spacing at the run start: 4.0 x 0.5, d = 400 <= near.
+        let sp = get(&b, "teammate_spacing");
+        assert!(sp[0] == 0.0 && (sp[1] + 2.0).abs() < 1e-9, "{sp:?}");
+        // Far: car 2 is 6300 from its nearest teammate -> -1 x 0.5, unblended.
+        let far = get(&b, "teammate_far");
+        assert!((far[2] + 0.5).abs() < 1e-9 && far[0] == 0.0 && far[1] == 0.0 && far[3] == 0.0, "{far:?}");
+        // Orange scores into blue's goal: the role split survives the blend.
+        let mut g = s.clone();
+        g.ball.pos = DVec3::new(0.0, -5400.0, 93.0);
+        let _ = b.step_view(&g);
+        let cr = get(&b, "concede_role");
+        let blue = cr[0] + cr[1] + cr[2];
+        assert!((blue + 3.0 * 120.0).abs() < 1e-6 && cr[3] == 0.0, "{cr:?}");
+        assert!(cr[0] > cr[1] && cr[1] > cr[2], "first < second < last penalty: {cr:?}");
+        // 1v1: no far / concede_role reward.
+        let s1 = StateView { cars: vec![car(0, -300.0), car(1, 3000.0)], ..s.clone() };
+        let mut b = c.build();
+        b.reset_view(&s1);
+        let _ = b.step_view(&s1);
+        let mut g1 = s1.clone();
+        g1.ball.pos = DVec3::new(0.0, -5400.0, 93.0);
+        let _ = b.step_view(&g1);
+        assert!(get(&b, "concede_role").iter().all(|x| *x == 0.0));
+        assert!(get(&b, "teammate_far").iter().all(|x| *x == 0.0));
     }
 }

@@ -1,0 +1,56 @@
+# TM7 reward config (EXPERIMENTS.md "TM7 — Cross-exam note"): TM6 (tm6.toml)
+# with a stronger too-close penalty, a new too-far penalty, a pass receiver
+# separation gate and a role-scaled concede penalty. TM6's spacing stayed
+# near TM5r's (pair800 0.13-0.15 / 0.26-0.30 vs Nexto 0.06 / 0.13) because
+# the anti-clump terms were 1.7% of |reward| (TM6's spacing_ramp halved
+# teammate_spacing to 1.0), pass paid more per step than the whole spacing
+# penalty and paid receivers standing next to the passer, and nothing
+# penalized being too far from a teammate (Annie: too close AND too far).
+# Obs unchanged (270 wide), so TM7 warm-starts from TM6's final. 1v1 is
+# unchanged (no teammate: the new terms are 0; pass needs a teammate).
+# Goal = 1200; 15 policy steps per second.
+extends = "tm6.toml"
+
+[weights]
+# 4.0 x spacing_ramp: 2.0 at the start -> 4.0 over 200M (Vermatten's
+# passivity warning: ramp slowly). First man by role still exempt; off
+# during the kickoff phase.
+teammate_spacing = 4.0
+# Too-far penalty for non-first cars: -clamp((d - 4500) / 1500, 0, 1) to the
+# nearest living teammate (-0.5 / step at full = 0.6% of a goal per second).
+teammate_far = 0.5
+# Extra concede penalty, 120 = 10% of a goal per car, split by role 15 steps
+# before the goal (first 0.7 / second 1.0 / last 1.3, normalized so the team
+# total is unchanged). Individual: added after the team-spirit blend.
+concede_role = 120.0
+
+[team]
+kickoff_exempt = ["teammate_spacing", "support_role", "double_commit", "teammate_far"]
+role_metrics = ["contact_quality", "speed_to_ball", "face_ball", "support_role", "last_man_goalside", "teammate_spacing", "teammate_far", "concede_role", "pass"]
+# tm6's list plus teammate_far and concede_role (self-only).
+individual = [
+  "speed_to_ball", "face_ball", "energy", "boost_keep", "boost_change",
+  "aerial_boost", "in_air", "ang_vel", "safe_boost", "overextend",
+  "contact_quality", "recover", "double_commit",
+  "flip_reset", "flip_reset_use", "air_double_touch", "musty",
+  "teammate_spacing", "last_man_goalside", "shadow_box", "support_role",
+  "teammate_far", "concede_role",
+]
+
+[team.pass]
+# The receiver is paid only if it was >= 1200 uu from the passer at the
+# passer's touch (the passer is always paid).
+receiver_min_sep = 1200.0
+
+[team.concede_role]
+lag_steps = 15
+first = 0.7
+second = 1.0
+last = 1.3
+
+[team.spacing]
+# Too-close band 600 -> 1800 (was 1500).
+clear = 1800.0
+spacing_ramp = [[0.0, 0.5], [200_000_000.0, 1.0]]
+far_start = 4500.0
+far_span = 1500.0
