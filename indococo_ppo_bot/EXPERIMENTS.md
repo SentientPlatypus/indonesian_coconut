@@ -3347,10 +3347,15 @@ control gets 0.54. 3v3 is about neutral. With only 100 games per arm (SE about
 control. Dropping concede_role or the pass gate does not. A 2M smoke cannot show
 whether this is a short transient on a reward-shift or a lasting cost.
 
-**Launch status: NOT launched.** The 2v2 h2h smoke regression counts as a
-smoke failure under the launch condition. `tm7_after_tm6.sh` is staged
-(committed and installed in `code_tm`) but not started; TM6 continues
-unchanged and its own launcher will run its built-in finals. Options
-for the user: (a) TM7 without teammate_far, (b) TM7 with TM6 spacing settings
-plus far, (c) launch as specified, relying on the h2h<0.50 2-mid alarm, or
-(d) run a longer (e.g. 20M) smoke of the full spec / ablation arms first.
+**Launch status: approved and armed (Nov 18 2026, 11:29 AM ET).** At first the
+cut-over was held because of the 2v2 h2h dip in the 2M smoke above. The user
+then reviewed the results and approved launching TM7 **as designed (full spec, no
+changes)**, despite the 2M smoke dip. The h2h vs TM4 cut `<0.50` for 2 mids
+passive alarm will catch a lasting regression. `tm7_after_tm6.sh` was started
+detached (setsid/nohup, waiter PID 1325380) at 11:29 AM ET. Log:
+`/opt/dlami/nvme/tm7_work/cut/cutover.log`. It waits on TM6 launcher PID 405435
+until TM6 reaches 37956.7M with a normal exit, then starts TM7 in tmux
+`ippo_team:tm7` from the final TM6 checkpoint. In parallel it pushes
+`checkpoints_to_test/tm6_<N>M.bpk` (not promoted) and runs TM6 finals at nice 19.
+`TEAM_NO_FOLLOWUP` is set, so TM6 does not chain into TM6r. Untested
+fallbacks, if 2v2 regresses: TM7 minus teammate_far, or TM6 spacing plus far.
