@@ -3179,3 +3179,178 @@ TM5r's live training at 32.65B: teammate_spacing -0.140, double_commit -0.053, c
 - Whether the support car learns to contest when the first man is beaten (no-challenger rule watches this).
 - support_role 0.2 / last_man 0.3 have no public calibration at goal = 1200.
 - The smoke is 240k steps per variant: contact rates are noisy (contacts are on 0.5% of car-steps).
+
+
+## TM7 — Cross-exam note: close + far spacing, pass separation, role-concede (2026-11-18)
+
+TM6 got stronger (h2h vs the TM4 cut ~0.6) but spacing barely moved, so TM7
+was cross-examined per the Nov 12 rule: separate Discord, outside-research and
+code-review legs, reconciled before the experiment.
+TM6 keeps running to its planned end; no live trainer/binary/script is replaced.
+TM7 starts from TM6's **last checkpoint at its 5B endpoint**, not a mid-run best.
+BT remains the TM4 cut (`exp_TM4/checkpoints/1794862892`), not a promotion.
+
+### Cross-exam
+
+- **Discord (read-only, RLGym/RLBot):** Eastvillage (#deep-dives, Feb 17 2026)
+  describes *TeamMaxing*: for "one player should do it" rewards, use
+  `(1-a)*own + a*max(team) - b*max(opp)` (min for penalties), not mean.
+  His self-reported result was faster learning and early rotations; not a
+  controlled comparison. JPK314 warns the naive implementation breaks
+  zero-sum; JeffA233 warns it can stop penalizing a teammate's bad play, and
+  the third man can flop around in goal. tedzards509 (Annie, reported to beat
+  Necto) used high team spirit on possession plus penalties for **both too
+  close AND too far** from teammates. Vermatten reports a rotation reward
+  made his bot too hesitant to touch: ramp spacing slowly, preserve the
+  first-man exemption and keep a passive-play alarm. No direct community
+  evidence was found for critic-only role inputs, ETA roles or role-concede.
+- **Outside research:** MAPPO motivates a centralized/privileged critic; ETA
+  roles can be better than geometric distance; role-scaled concede can give
+  defensive responsibility without increasing the team's total penalty.
+  Research raised dilution under `0.1*own + 0.9*mean(team)` as a concern.
+  The code check below resolves that concern for the existing individual
+  terms: they already bypass blending. ETA roles and a zero-init critic
+  one-hot need careful observation/reward synchronization and are deferred.
+- **Code + logs:** TM6's anti-clump terms (spacing, double_commit,
+  support_role, last_man_goalside) are only **1.7% of sum RewardAbs**, vs
+  about 1.2% for TM5r. TM6's spacing ramp actually halved the final effective
+  spacing weight, 2.0 -> **1.0** after 100M. Pass pays the passer and receiver
+  equally with no start-separation gate; RewardAbs/pass is 0.068–0.089 per
+  car-step versus spacing 0.061. No too-far-from-teammate penalty exists.
+  TM6 role terms are already individual: contact_quality 0.5688 first /
+  0.0223 other; speed/face are gated (other retains only the opposing team's
+  constant zero-sum offset, not a self approach incentive). high_ball is a
+  first-only term but is NOT individual, so its payout is subsequently
+  shared. Team spirit is **per term**, after gating / ZeroSum, before summing;
+  individual terms are added unchanged (100% of their split survives).
+  The actor and critic use the same 270-wide input, but separate networks.
+  Observation col 87 is raw distance rank, NOT the hysteretic RoleTracker:
+  closest-vs-first disagrees **11.6% / 18.7%** of 2v2 / 3v3 team-steps.
+  A quick ETA proxy (velocity heading, no rotations in TRAJ_DUMP) changes
+  twice as often as distance roles (18.9/29.7 vs 9.1/15.1 swaps per minute).
+
+Clump timing from the TM6 checkpoint at 36.7844B, 60 self-play games per mode
+(both teams, copied TM6 binary, nice 19, one eval job). Pair800 0.143 / 0.275;
+Nexto (as team b in the TM4-era `spacing/results2` Nexto runs) gives 0.060 / 0.135. These are descriptive
+small samples, not a controlled TM6-vs-Nexto match. Exclusive phase buckets in
+priority order kickoff -> role swap -> team touch -> ball half:
+
+| share of TM6 clumped steps | 2v2 | 3v3 |
+|---|---:|---:|
+| Kickoff through 1 s after first touch | 2.6% | 4.8% |
+| <=1 s after role swap | 20.0% | 27.3% |
+| <=1 s after own-team touch | 21.1% | 17.1% |
+| Defense (ball own half) | 34.0% | 31.8% |
+| Offense (ball opponent half) | 22.3% | 19.1% |
+
+In clumps, non-first cars are within 1500 uu of the ball on 74.8% / 64.4%
+of steps and closing >300 uu/s on 63% / 64%; 100% / 76.7% of pairs include
+the first man. Kickoffs are not the main source. Artifacts:
+`/opt/dlami/nvme/tm7_codeleg/{clumps.py,clumps.out,tm6_self_*}`.
+
+### Reconciliation / exact spec
+
+Use Annie's close+far backstop, not more hidden role complexity. Restore and
+raise spacing pressure; remove the receiver's incentive to trail immediately
+beside the passer. Apply defensive credit outside the team-spirit blend.
+Vermatten's passivity warning makes the spacing ramp **200M, not 100M**.
+
+- `tm7.toml extends tm6.toml`; policy obs remains **270** for exact warm start.
+- `teammate_spacing = 4.0`, band `near = 600`, `clear = 1800`,
+  `spacing_ramp = [[0,0.5],[200M,1.0]]`: effective 2.0 -> 4.0. First man by
+  role stays exempt. Commit-order gate / double_commit stay as in TM6.
+- `teammate_far = 0.5`, for non-first cars only:
+  `-clamp((nearest_living_teammate_distance-4500)/1500,0,1)`; individual,
+  kickoff-exempt (pending plus 1 s after kickoff touch). 1v1/demoed/all
+  teammates demoed get 0. No far ramp.
+- `[team.pass] receiver_min_sep = 1200`: only the receiver payout requires
+  >=1200 uu separation at the originating passer touch. Passer payout,
+  giveaway logic, pass detection and team-spirit treatment are unchanged.
+- `concede_role = 120`, extra concession penalty (10% of goal 1200),
+  first 0.7 / second 1.0 / last 1.3, divide by team's mean so its total
+  remains `-120*team_size`. Roles sampled **15 policy steps before goal**
+  (oldest available if shorter), demoed role neutral 1.0, 1v1 gets 0.
+  Individual (post-mix); not ZeroSum. The original goal term stays unchanged.
+- Everything else TM6: mode mix .15/.35/.50, setters/league, team spirit .9,
+  LR 5e-5, gamma .995, 20M critic warm-up, **1 epoch, no bf16, CHUNK 100M,
+  5B steps**. `train_tm7.toml` is TM6's template with a comment header only.
+- `team_launch_tm7.sh` lives at its own path. Training is nice 19. All TM6
+  passive rules kept; add h2h vs TM4 cut `<0.50` in either mode for **2 mids**.
+  No-challenger alarm remains `>1.5*0.0404 / 0.0329` (~0.061 / 0.049) for
+  2 mids. Log + `PASSIVE_ALARM` only; never silently promote or cut.
+- TeamMaxing, ETA roles, and critic-only one-hot go to **TM8**. Max/mean needs
+  a joint aggregator/zero-sum wrapper (subtract opponents' same aggregation,
+  not naive `max` after the current opponent mean). Current commit-order gates
+  already suppress second touch/possession payouts. Critic-only widening
+  requires separate state paths/loading/export/frozen-opponent support;
+  changing actor role obs also needs the user's OK for the RLBot pack.
+
+### Implementation / verification
+
+Code commit `3c49c88` (no policy / critic architecture changes). Production
+code and tests are confined to `src/rewards/{config,team_rewards}.rs`,
+`src/team.rs`, and new configs/scripts. No live scripts, TM6 binary,
+`rlbot_submission/`, RLBot pack, `.pt` models or BEST/team_best were changed.
+Build in detached worktree `/opt/dlami/nvme/tm7_work/wt` using the inactive
+`tm6_target` cache (no build concurrently used it). New immutable binary:
+`/opt/dlami/nvme/ippo_bins/indococo-train-tm7-3c49c88`, SHA256
+`c1ad9bf3c868824b30a74529fb395f563599a7c7ed3331d44b8dc2192bb40116`.
+
+- Unit tests: **166 lib + 12 trainer**, all passed. Four new tests cover far
+  band/exemption/demo/1v1, start-separation receiver gating, concede role
+  normalization + 15-step lag + one-shot/1v1, and TM7 config + unblended term
+  split. Integration: reward parity 33, team obs 1, pred obs 1 (1 ignored),
+  obs ext 1; **214 passed, 1 ignored** overall. Shell `bash -n` passes for
+  all new scripts. Passive-alarm fixtures: two bad mids -> `h2h2,ncr2`,
+  recovered second mid -> no alarm.
+- Smoke: 20 x 100k = **2,000,000 steps**, self-play, 4 threads/48 games,
+  from TM6 checkpoint `1795016575` (36.7844B), own scratch output only.
+  Exit 0; finite metrics, no panic/NaN, 1 epoch/no bf16. KL about 0.0001–0.0002,
+  clip fraction <0.002, entropy ~3.8. Smoke ramps start at launch values,
+  so it checks effective spacing ~2.0, not a 200M training result.
+
+| pooled per car-step, smoke mean | value |
+|---|---:|
+| RewardAbs/teammate_spacing | 0.15893 |
+| RewardAbs/teammate_far | 0.04571 |
+| RewardAbs/concede_role | 0.09833 |
+| RewardAbs/pass | 0.06294 |
+| RewardFirst / Other teammate_spacing | 0 / -0.38476 |
+| RewardFirst / Other teammate_far | 0 / -0.11638 |
+| RewardFirst / Other concede_role | -0.11900 / -0.15441 |
+| RewardFirst / Other pass | 0.03164 / 0.03531 |
+| sum RewardAbs (exclude team_spirit_shift) | 10.89094 |
+| anti-clump incl far / total | **2.483%** (TM6 live ~1.7%) |
+| anti-clump + concede_role / total | **3.386%** |
+
+The role-split metrics classify cars by **current** role, while concede_role
+uses the 15-step snapshot; their means need not be exactly 0.7:1.3. Pass is
+still blended so non-first recipients can receive their teammate's share.
+
+#### H2H smoke vs the TM6 start checkpoint (`1795016575`), 2M steps each
+
+| arm | 2v2 | 3v3 | Nexto 2v2 |
+|---|---:|---:|---:|
+| TM7 smoke (40 g) | 0.375 | 0.40 | 0.45 (20 g) |
+| TM7 smoke (100 g) | 0.40 | 0.45 | – |
+| control: tm6.toml, same binary/settings (100 g) | **0.54** | 0.46 | 0.45 |
+| TM7, 2M critic warm-up + 4M PPO (100 g) | 0.39 | 0.52 | (parse failed) |
+| ablation: TM7 minus teammate_far (100 g) | 0.54 | – | – |
+| ablation: TM7 minus concede_role (100 g) | 0.49 | – | – |
+| ablation: TM7 with TM6 spacing (w 2.0 x ramp 0.5 = 1.0, clear 1500) (100 g) | 0.55 | – | – |
+| ablation: TM7 minus receiver_min_sep (100 g) | 0.46 | – | – |
+
+2v2 h2h of the full TM7 smoke stays at about 0.39 over 240 games, while the
+control gets 0.54. 3v3 is about neutral. With only 100 games per arm (SE about
+0.05) the ablations point to the two anti-clump changes, **teammate_far** and
+**the spacing weight/ramp**: dropping either one brings 2v2 back to the
+control. Dropping concede_role or the pass gate does not. A 2M smoke cannot show
+whether this is a short transient on a reward-shift or a lasting cost.
+
+**Launch status: NOT launched.** The 2v2 h2h smoke regression counts as a
+smoke failure under the launch condition. `tm7_after_tm6.sh` is staged
+(committed and installed in `code_tm`) but not started; TM6 continues
+unchanged and its own launcher will run its built-in finals. Options
+for the user: (a) TM7 without teammate_far, (b) TM7 with TM6 spacing settings
+plus far, (c) launch as specified, relying on the h2h<0.50 2-mid alarm, or
+(d) run a longer (e.g. 20M) smoke of the full spec / ablation arms first.
