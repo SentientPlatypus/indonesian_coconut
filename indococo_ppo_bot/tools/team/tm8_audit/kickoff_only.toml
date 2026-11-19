@@ -1,0 +1,3 @@
+[[state_setters]]
+kind = "kickoff"
+weight = 1.0

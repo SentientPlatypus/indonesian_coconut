@@ -1,0 +1,263 @@
+--- a/src/rewards/mod.rs
++++ b/src/rewards/mod.rs
+@@ -55,7 +55,7 @@
+ pub mod wall_pop_setup;
+ pub mod zero_sum;
+ 
+-mod combined;
++pub mod combined;
+ mod config;
+ 
+ pub use combined::{CombinedReward, Term};
+--- a/src/rewards/combined.rs
++++ b/src/rewards/combined.rs
+@@ -16,6 +16,24 @@
+     pub reward: Box<dyn StepReward>,
+ }
+ 
++
++/// TM8 AUDIT (scratch only, not training code): per (team size, role,
++/// phase, term) sums of the weighted value before and after the team-spirit
++/// blend, plus the |deviation from the car's team mean| after the blend
++/// (the part of the term that differs between teammates).
++pub mod audit {
++    use std::collections::BTreeMap;
++    use std::sync::Mutex;
++    use std::sync::atomic::{AtomicBool, Ordering};
++    pub static ON: AtomicBool = AtomicBool::new(false);
++    /// key: (cars per team, role 0 first / 1 second / 2 last / 3 out-or-1v1,
++    /// phase 0 live / 1 kickoff pending, term) -> [n, sum_pre, abs_pre,
++    /// sum_post, abs_post, absdev_post]
++    pub static AGG: Mutex<BTreeMap<(usize, usize, usize, String), [f64; 6]>> = Mutex::new(BTreeMap::new());
++    pub static FLAGS: Mutex<BTreeMap<String, (bool, bool)>> = Mutex::new(BTreeMap::new());
++    pub fn on() -> bool { ON.load(Ordering::Relaxed) }
++}
++
+ /// TM1 team spirit: per term (unless `individual`), each car's weighted
+ /// value becomes `(1 - tau) r_i + tau * mean(r over its team)`, with `tau`
+ /// from the piecewise-linear `points` over the learner's cumulative steps
+@@ -71,6 +89,7 @@
+     /// car-step of the first man / the other cars, teams of 2+ cars only).
+     role_report: Option<(crate::team::RoleTracker, Vec<bool>)>,
+     last_roles: Vec<crate::team::Role>,
++    audit_roles: Option<crate::team::RoleTracker>,
+ }
+ 
+ impl CombinedReward {
+@@ -84,6 +103,7 @@
+             last_spirit: None,
+             role_report: None,
+             last_roles: Vec::new(),
++            audit_roles: None,
+         }
+     }
+ 
+@@ -115,6 +135,9 @@
+         if let Some((r, _)) = &mut self.role_report {
+             r.reset();
+         }
++        if let Some(r) = &mut self.audit_roles {
++            r.reset();
++        }
+     }
+ 
+     /// TM6: per reported term, (sum, count) of the first man's and the other
+@@ -183,6 +206,18 @@
+                 }
+             }
+         }
++        let audit_on = audit::on();
++        let (aud_roles, aud_n, aud_phase): (Vec<usize>, usize, usize) = if audit_on {
++            let tr = self.audit_roles.get_or_insert_with(|| crate::team::RoleTracker::new(crate::team::RoleParams::default()));
++            let counts = crate::team::team_counts(state);
++            let roles = tr.update(state).to_vec();
++            let rs = roles.iter().zip(&state.cars).map(|(r, c)| {
++                if counts[usize::from(c.team.min(1))] < 2 { return 3; }
++                match r { crate::team::Role::First => 0, crate::team::Role::Second => 1, crate::team::Role::Last => 2, crate::team::Role::Out => 3 }
++            }).collect();
++            (rs, counts[0].max(counts[1]), usize::from(crate::team::kickoff_pending(state)))
++        } else { (Vec::new(), 0, 0) };
++        let mut aud_rows: Vec<(String, Vec<f64>, Vec<f64>)> = Vec::new();
+         let mut shift = 0.0;
+         for (i, t) in self.terms.iter_mut().enumerate() {
+             let r = t.reward.get_rewards(state);
+@@ -196,12 +231,45 @@
+                     shift += before.iter().zip(&weighted).map(|(a, b)| (a - b).abs()).sum::<f64>();
+                 }
+             }
++            if audit_on {
++                let pre: Vec<f64> = r.iter().map(|x| x * weight).collect();
++                aud_rows.push((t.name.to_string(), pre, weighted.clone()));
++                if let Some(sp) = &self.spirit {
++                    let ind = sp.individual.get(i).copied().unwrap_or(false);
++                    let full = sp.full.get(i).copied().unwrap_or(false);
++                    audit::FLAGS.lock().unwrap().entry(t.name.to_string()).or_insert((ind, full));
++                }
++            }
+             for (acc, w) in total.iter_mut().zip(&weighted) {
+                 *acc += w;
+             }
+             self.last.push(weighted);
+         }
+         self.last_spirit = tau.map(|t| (t, shift / state.cars.len().max(1) as f64));
++        if audit_on {
++            let teams: Vec<u8> = state.cars.iter().map(|c| c.team.min(1)).collect();
++            let mut agg = audit::AGG.lock().unwrap();
++            let mut tot_rows: Vec<(String, Vec<f64>, Vec<f64>)> = Vec::new();
++            let mut tpre = vec![0.0; total.len()];
++            for (_, pre, _) in &aud_rows { for (a, x) in tpre.iter_mut().zip(pre) { *a += x; } }
++            tot_rows.push(("__total__".to_string(), tpre, total.clone()));
++            for (name, pre, post) in aud_rows.iter().chain(tot_rows.iter()) {
++                let mut sum = [0.0f64; 2];
++                let mut cnt = [0usize; 2];
++                for (x, &t) in post.iter().zip(&teams) { sum[usize::from(t)] += x; cnt[usize::from(t)] += 1; }
++                for c in 0..post.len() {
++                    let t = usize::from(teams[c]);
++                    let mean = sum[t] / cnt[t].max(1) as f64;
++                    let e = agg.entry((aud_n, aud_roles[c], aud_phase, name.clone())).or_insert([0.0; 6]);
++                    e[0] += 1.0;
++                    e[1] += pre[c];
++                    e[2] += pre[c].abs();
++                    e[3] += post[c];
++                    e[4] += post[c].abs();
++                    e[5] += (post[c] - mean).abs();
++                }
++            }
++        }
+         total
+     }
+ 
+--- a/src/bin/train.rs
++++ b/src/bin/train.rs
+@@ -1618,6 +1618,13 @@
+             args.get(5).map(Path::new),
+         ),
+         "speed-bench" => speed_bench(Path::new(arg(1)), arg(2).parse().expect("iters")),
++        "reward-audit" => reward_audit(
++            Path::new(arg(1)),
++            Path::new(arg(2)),
++            Path::new(arg(3)),
++            arg(4).parse().expect("steps"),
++            args.get(5).map_or(6, |t| t.parse().expect("threads")),
++        ),
+         other => panic!("unknown mode {other:?}"),
+     }
+ }
+@@ -3276,3 +3283,117 @@
+ fn ripple_dump(_rdir: &Path, _steps: usize, _out: &Path) {
+     panic!("ripple-dump requires --features ripple");
+ }
++
++
++// ---------------------------------------------------------------------------
++// TM8 AUDIT (scratch only): `reward-audit <reward.toml> <setters.toml> <ckpt>
++// <steps> [threads]`. Self-play of <ckpt> (both teams, actions SAMPLED from
++// the policy softmax as in training rollouts) over the setter mix of
++// <setters.toml> (a train_tm.toml works: only [[state_setters]] is read),
++// with the run's real reward config. The learner step for team-spirit /
++// ramp schedules is AUDIT_STEP (default 1e12 = every ramp at its end).
++// Prints the per (team size, role, phase, term) sums from
++// `rewards::combined::audit` as JSON.
++fn audit_step() -> u64 {
++    std::env::var("AUDIT_STEP").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000_000_000_000)
++}
++
++fn sample_actions(actor: &Net, obs: &[&Vec<f32>], dev: &Device, rng: &mut SmallRng) -> Vec<usize> {
++    let flat: Vec<f32> = obs.iter().flat_map(|o| o.iter().copied()).collect();
++    let x = Tensor::<2>::from_data(TensorData::new(flat, [obs.len(), obs_size()]), dev);
++    let logits = actor.forward(x).into_data().try_to_vec::<f32>().expect("logits");
++    logits
++        .chunks(N_ACTIONS)
++        .map(|row| {
++            let m = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
++            let p: Vec<f64> = row.iter().map(|&l| f64::from(l - m).exp()).collect();
++            let z: f64 = p.iter().sum();
++            let mut u = rng.random::<f64>() * z;
++            for (k, &pk) in p.iter().enumerate() {
++                u -= pk;
++                if u <= 0.0 {
++                    return k;
++                }
++            }
++            N_ACTIONS - 1
++        })
++        .collect()
++}
++
++fn reward_audit(reward_toml: &Path, setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize) {
++    #[derive(Deserialize)]
++    struct Mix {
++        state_setters: Vec<WeightedSetter>,
++    }
++    init_from_default(true).expect("load collision meshes");
++    indococo_bot::team::set_step_source(audit_step);
++    indococo_bot::obs::set_obs_shuffle(true);
++    indococo_bot::rewards::combined::audit::ON.store(true, std::sync::atomic::Ordering::Relaxed);
++    let cfg = RewardConfig::from_file(reward_toml).expect("reward config");
++    let text = std::fs::read_to_string(setters_toml).expect("read setters");
++    let mix: Mix = toml::from_str(&text).expect("parse setters");
++    let per = steps.div_ceil(threads);
++    let t0 = std::time::Instant::now();
++    let res: Vec<[u64; 4]> = std::thread::scope(|s| {
++        let hs: Vec<_> = (0..threads)
++            .map(|t| {
++                let (cfg, mix) = (&cfg, &mix.state_setters);
++                s.spawn(move || {
++                    const ENVS: usize = 8;
++                    let dev = Device::flex();
++                    let na = load_actor(ckpt, &dev);
++                    let mut rng = SmallRng::seed_from_u64(4242 + t as u64);
++                    let mut envs: Vec<(BotEnv, GameState, Vec<Vec<f32>>)> = (0..ENVS)
++                        .map(|_| {
++                            let mut env = create_env(cfg, mix);
++                            let (st, obs, _) = env.reset();
++                            (env, st, obs)
++                        })
++                        .collect();
++                    let mut out = [0u64; 4];
++                    let mut done_steps = 0usize;
++                    while done_steps < per {
++                        let all: Vec<&Vec<f32>> = envs.iter().flat_map(|e| e.2.iter()).collect();
++                        let acts = sample_actions(&na, &all, &dev, &mut rng);
++                        let mut k = 0;
++                        for e in envs.iter_mut() {
++                            let n = e.2.len();
++                            let a = acts[k..k + n].to_vec();
++                            k += n;
++                            let r = e.0.step(&e.1, &a);
++                            out[0] += 1;
++                            if r.is_terminal || r.truncated {
++                                let v = e.0.get_shared_info().view(&r.state);
++                                if v.scoring_team().is_some() { out[1] += 1; } else { out[2] += 1; }
++                                let (st, obs, _) = e.0.reset();
++                                e.1 = st;
++                                e.2 = obs;
++                            } else {
++                                e.1 = r.state;
++                                e.2 = r.obs;
++                            }
++                        }
++                        done_steps += ENVS;
++                    }
++                    out
++                })
++            })
++            .collect();
++        hs.into_iter().map(|h| h.join().expect("worker")).collect()
++    });
++    let mut tot = [0u64; 4];
++    for r in &res { for i in 0..4 { tot[i] += r[i]; } }
++    let agg = indococo_bot::rewards::combined::audit::AGG.lock().unwrap();
++    let flags = indococo_bot::rewards::combined::audit::FLAGS.lock().unwrap();
++    let rows: Vec<serde_json::Value> = agg.iter().map(|((n, role, phase, term), v)| serde_json::json!({
++        "n": n, "role": role, "phase": phase, "term": term,
++        "cnt": v[0], "sum_pre": v[1], "abs_pre": v[2], "sum_post": v[3], "abs_post": v[4], "absdev_post": v[5],
++    })).collect();
++    let fl: serde_json::Map<String, serde_json::Value> = flags.iter().map(|(k, (i, f))| (k.clone(), serde_json::json!({"individual": i, "full": f}))).collect();
++    let out = serde_json::json!({
++        "reward": reward_toml, "setters": setters_toml, "ckpt": ckpt, "team_size": indococo_bot::obs::team_size(),
++        "audit_step": audit_step(), "env_steps": tot[0], "goals": tot[1], "timeouts": tot[2],
++        "seconds": t0.elapsed().as_secs_f64(), "flags": fl, "rows": rows,
++    });
++    println!("{out}");
++}

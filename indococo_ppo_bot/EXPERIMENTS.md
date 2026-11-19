@@ -3386,3 +3386,74 @@ Team stats from the h2h finals (TM6 final vs TM4 cut):
 Spacing improved vs the TM4 cut but remains well above Nexto (0.06 / 0.13).
 
 TM7 was already running and read `$BT` (the TM4 cut, `exp_TM4/checkpoints/1794862892`) at its start. `team_launch_tm7.sh` also asserts `$BT` must stay that path, so a TM7 restart will refuse rather than silently switch to TM6. TM7's remaining mids, the 2-chunk guard and the PASSIVE_ALARM (h2h vs BEST-team < 0.50 for 2 mids) therefore still compare against the TM4 cut. The switch applies from TM8 (or the next launcher started without that pin). TM7 itself was not modified, restarted, or swapped. The TM6 final is 270-wide and is not in the RLBot pack.
+
+## TM6/TM7 team audit: kickoffs, double commits, reward distribution, Nexto gap (2026-11-19)
+
+This was a read-only audit, so no training code, configs, runs or team_best were changed. The scripts are in `tools/team/tm8_audit/`. The reward-share numbers come from a scratch `reward-audit` mode (`tm8_reward_audit.patch`, which was not merged). Evals use kickoff starts and first goal wins. Nexto plays its scripted speedflip kickoff and its spawns are jittered. Models: TM6 = `exp_TM6/checkpoints/1795044069`, TM7 = the checkpoint at 40.88B.
+
+### Kickoffs and non-takers vs Nexto
+
+| | TM6 2v2 | Nexto 2v2 | TM7 2v2 | TM6 3v3 | Nexto 3v3 | TM7 3v3 |
+|---|---|---|---|---|---|---|
+| win (first goal) | 53.1% (1008) | 46.9% | 59.3% (504) | 38.2% (1008) | 61.8% | 40.3% (504) |
+| first touch alone | 9% | 63% | 7% | 5% | 64% | 2% |
+| kickoff won/lost at 1.5s | 30/24 | 24/30 | 20/32 | 21/38 | 38/21 | 15/44 |
+| non-taker to own-corner big boost | 48% | 0% | 84% | 92% | 2% | 93% |
+| two non-takers on the SAME big pad | - | - | - | 55% | 0% | 71% |
+| non-taker dist to ball at touch / +1.5s | 3366/4440 | 1929/2934 | 4383/5458 | 4482/5205 | 2392/3879 | 4487/4631 |
+
+The behaviour from kickoff spawns is fixed: every non-taker retreats to an own-corner big boost. In 3v3 the two non-takers end up on the same pad most of the time, which is the "both go for the same boost" the user reported. In TM6 self-play 3v3 the rate is 36%. Nexto's non-takers take small pads up the middle or follow the taker.
+
+### Live play (from 1s after the first touch)
+
+| | TM6 2v2 | Nexto 2v2 | TM6 3v3 | Nexto 3v3 | TM7 3v3 |
+|---|---|---|---|---|---|
+| 2 cars <1000 of ball and closing >500 (double commit) | 4.3% | 0.9% | 6.3% | 1.5% | 5.2% |
+| 2 cars <800 of ball | 7.2% | 2.1% | 9.7% | 3.8% | 8.4% |
+| pair800 | 15.2% | 6.1% | 29.0% | 13.4% | 25.1% |
+| teammate re-touch <1s per min | 0.81 | 0.10 | 0.74 | 0.20 | 0.66 |
+| boost gained / car-min | 441 | 507 | 346 | 452 | 342 |
+| supersonic share | 16.8% | 9.5% | 13.8% | 7.5% | 12.3% |
+
+### Goals conceded (per game; first goal ends the game)
+
+| | TM6 2v2 | Nexto 2v2 | TM6 3v3 | Nexto 3v3 | TM7 3v3 |
+|---|---|---|---|---|---|
+| open-play concedes (>15s) | 0.345 | 0.307 | **0.508** | 0.265 | 0.484 |
+| kickoff-phase concedes (<15s) | 0.124 | 0.224 | 0.110 | 0.117 | 0.113 |
+| 0 cars goal-side 1s before | 60% | 38% | 31% | 23% | 33% |
+| deepest car to own goal 1s before | 2100 | 1360 | 1221 | 890 | 1118 |
+| double commit in last 3s | 15% | 10% | 31% | 26% | 27% |
+
+The 3v3 gap is almost entirely open play: we concede 1.9x as often as Nexto. Kickoff-phase goals are even.
+
+### Reward distribution (self-play, sampled actions, 480k steps, TM7 setter mix)
+
+"dev" is a term's deviation from the team mean, which is the part that tells teammates apart (after team_spirit 0.9).
+
+- TM6 2v2: outcome terms are 72.8% of |r| but 0.6% of dev. goal is 28.4% (>25%), vel_ball_to_goal 19.9%, goal_dist 13.0%. Dev is approach 34%, boost/energy 28%, contact_quality 21% and positioning 13.5%.
+- TM6 3v3: outcome is 75.5% of |r| (goal 25.8%) and positioning is 2.7% of |r| / 16% of dev. Mean reward per step: first +1.58, second -0.24, last -0.01.
+- TM7 2v2 / 3v3: positioning is 6.3% / 8.4% of |r| and 27% / 33% of dev. teammate_spacing is -0.59 per step for non-first cars. First +1.44 vs last -0.71 (2v2); first +1.42, second -1.06, last -0.77 (3v3). That is a ~2 per step incentive to become first man, and touching makes you first instantly.
+- Kickoff pending: face_ball is 50-52% and speed_to_ball 20%. Positioning is 0 because every positioning term is exempt during the kickoff. The only signals a non-taker can act on are boost_keep (+0.13-0.14), energy, boost_change and safe_boost. The non-taker also gets about -0.47 face_ball / -0.19 speed_to_ball per step (3v3). That comes from ZeroSum of the opponents' role-gated first-man terms and is noise it cannot act on.
+- Kickoff-pending steps are 0.32% of car-steps in the training mix (kickoff setter weight 0.05).
+
+### Bugs and issues
+
+1. Kickoff tie-break mismatch. RoleTracker picks the lower car index on exact distance ties (team.rs:335, RoleTracker::update `min_by`, which returns the first of equal minima). Obs `team_ranks` / taker flag picks the LEFT car (obs.rs:653 `team_ranks`, flag at obs.rs:698). Exact ties happen on 20% (2v2) and 40% (3v3) of kickoffs, and the two disagree on 55% / ~48% of those. On those kickoffs, rewards pay a different car as "first" than the one the policy is told is the taker.
+2. ZeroSum is applied to role-gated terms (rewards/config.rs:423 gate wiring inside the zero-sum wrap, zero_sum.rs). Non-first cars receive -mean(opponent first-man reward), which is pure noise. In TM6 that noise is larger than all of their positioning terms combined.
+3. Non-takers get no positioning signal at kickoff: kickoff_exempt plus internal kickoff_pending checks (team_rewards.rs TeammateSpacing :413, LastMan :595, SupportRole :653, KickoffMask :683-727). Energy's boost potential (energy.rs:8 PER_BOOST_POTENTIAL, a full tank is valued like 3000 uu/s of speed) then dominates, so the learned answer is "both go to the nearest big pad".
+4. First vs non-first reward asymmetry (+1.4-1.6 vs -0.7 to -1.1 per step in TM7) plus "touch makes you first instantly" rewards role-stealing. This is consistent with 3-4x Nexto's double-commit rate.
+5. Some 1v1 rewards assume a single opponent: safe_boost_collect.rs:30, opponent_possession_space.rs:49, aerial_front_bump_setup.rs:56.
+6. contact_quality (w250, role_scale 0.25) is ~21% of a goal per hard nose bump near the ball, and +0.6 per step for the first man. It is 18-21% of dev.
+
+Orange mirroring in the role, spacing and support code was checked and is correct.
+
+### Proposed TM8 changes (not implemented; ranked)
+
+1. Defensive positioning for 3v3: add a goal-side/defender-count term for the last man and the second man, rather than spacing alone. We concede 0.51 open-play goals per game vs Nexto's 0.27.
+2. Remove the role-steal incentive: flatten the first vs non-first per-step gap. Possible ways are to stop role-gating approach terms inside ZeroSum, apply zero-sum only between first men, or make a touch only take first after a short hysteresis when a teammate was already first and closer in ETA. Target: double commit <2%, pair800 3v3 <0.20.
+3. Kickoff roles instead of a blanket exemption: reward a second-man "follow/cheat" spot and a back-post/defensive pad for the third, add a same-pad penalty for teammates, and raise kickoff setter weight to 0.2-0.3. Target: same-pad <10% and kickoff loss rate at Nexto's level.
+4. Make tie-breaks consistent (RoleTracker uses the obs left-car rule). This is training-side only.
+5. Reduce energy's boost value and boost_keep at kickoff.
+6. Lower contact_quality (250 to ~100) or gate it to the first man.
+7. Longer-term: an ETA-based role/taker in obs, or a critic role one-hot. Any obs change needs a new RLBot pack export.
