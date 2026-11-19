@@ -305,6 +305,9 @@ impl StepReward for TermRamp {
 /// (TM8 final, the air-dribble audit's loose rule) every living opponent is
 /// at least `behind` uu behind the ball relative to our attacking goal;
 /// with `behind` = 0, `advantage_clear_lane(lane_radius, min_lead)` (strict).
+/// `or_lane` (with `behind` > 0): beaten if EITHER rule holds. In 2v2 / 3v3
+/// the all-defenders-behind rule alone is narrower than the lane rule (a wide
+/// goal-side defender blocks it), so `or_lane` is the superset of both.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct OpenNetParams {
@@ -314,6 +317,7 @@ pub struct OpenNetParams {
     pub lane_radius: f64,
     pub min_lead: f64,
     pub behind: f64,
+    pub or_lane: bool,
 }
 
 pub struct OpenNetGate {
@@ -352,11 +356,14 @@ impl OpenNetGate {
                 }
                 if self.p.behind > 0.0 {
                     let s = c.attack_sign();
-                    return state
+                    let beaten = state
                         .cars
                         .iter()
                         .filter(|o| o.team != c.team && !o.is_demoed())
                         .all(|o| s * (state.ball.pos.y - o.pos.y) >= self.p.behind);
+                    if beaten || !self.p.or_lane {
+                        return beaten;
+                    }
                 }
                 advantage_clear_lane(a, state, state.ball.pos, self.p.lane_radius, self.p.min_lead).0
             })
@@ -433,7 +440,7 @@ mod tests {
             fn reset(&mut self, _i: &StateView) {}
             fn get_rewards(&mut self, s: &StateView) -> Vec<f64> { vec![1.0; s.cars.len()] }
         }
-        let p = OpenNetParams { terms: vec![], scale: 0.05, max_dist: 4000.0, lane_radius: 1100.0, min_lead: 900.0, behind: 0.0 };
+        let p = OpenNetParams { terms: vec![], scale: 0.05, max_dist: 4000.0, lane_radius: 1100.0, min_lead: 900.0, behind: 0.0, or_lane: false };
         let mut g = OpenNetGate::new(Box::new(One), p);
         // Blue attacks +y; ball at y 2500 (2620 from the line), defender behind blue at y 0.
         let mut a = car(0, 0.0, 2400.0);
@@ -454,7 +461,7 @@ mod tests {
             fn reset(&mut self, _i: &StateView) {}
             fn get_rewards(&mut self, s: &StateView) -> Vec<f64> { vec![1.0; s.cars.len()] }
         }
-        let p = OpenNetParams { terms: vec![], scale: 0.05, max_dist: 4000.0, lane_radius: 1100.0, min_lead: 900.0, behind: 200.0 };
+        let p = OpenNetParams { terms: vec![], scale: 0.05, max_dist: 4000.0, lane_radius: 1100.0, min_lead: 900.0, behind: 200.0, or_lane: false };
         let mut g = OpenNetGate::new(Box::new(One), p);
         // Blue attacks +y, ball at y 2500. Defender 250 uu behind the ball (y 2250), wide: open.
         let mut a = car(0, 0.0, 2400.0);
@@ -472,5 +479,17 @@ mod tests {
         // Ball 4500 uu from the line: off.
         let s = st(0.0, 620.0, vec![car(0, 0.0, 500.0), car(1, 0.0, -1000.0)]);
         assert_eq!(g.get_rewards(&s)[0], 1.0);
+        // or_lane: a wide goal-side defender fails the behind rule but not the lane rule.
+        let p = OpenNetParams { terms: vec![], scale: 0.05, max_dist: 4000.0, lane_radius: 1100.0, min_lead: 900.0, behind: 200.0, or_lane: true };
+        let mut g = OpenNetGate::new(Box::new(One), p);
+        let mut a = car(0, 0.0, 2400.0);
+        a.ball_touches = 1;
+        let s = st(0.0, 2500.0, vec![a, car(1, 2000.0, 3500.0)]);
+        g.reset(&s);
+        let lane = advantage_clear_lane(0, &s, s.ball.pos, 1100.0, 900.0).0;
+        assert_eq!(g.get_rewards(&s)[0] < 1.0, lane, "or_lane follows the lane rule when the behind rule fails");
+        // Behind rule alone still opens it.
+        let s = st(0.0, 2500.0, vec![car(0, 0.0, 2400.0), car(1, 1500.0, 2250.0)]);
+        assert!((g.get_rewards(&s)[0] - 0.05).abs() < 1e-9);
     }
 }
