@@ -1618,6 +1618,13 @@ fn main() {
             args.get(5).map(Path::new),
         ),
         "speed-bench" => speed_bench(Path::new(arg(1)), arg(2).parse().expect("iters")),
+        "reward-audit" => reward_audit(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            Path::new(arg(3)),
+            arg(4).parse().expect("steps"),
+            args.get(5).map_or(6, |t| t.parse().expect("threads")),
+        ),
         other => panic!("unknown mode {other:?}"),
     }
 }
@@ -2766,7 +2773,7 @@ mod role_metric_tests {
     }
 }
 
-const N_H2H: usize = 47;
+const N_H2H: usize = 55;
 
 fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
     init_from_default(true).expect("load collision meshes");
@@ -2825,6 +2832,11 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
             "touch_share_last": tot[41 + k] as f64 / (tot[37 + k] + tot[39 + k] + tot[41 + k]).max(1) as f64,
             "no_challenger_ratio": tot[43 + k] as f64 / steps,
             "opp_ball_own_half_ratio": tot[45 + k] as f64 / steps,
+            // TM8 passivity (as reward-audit's behaviour block; live play, no pending kickoff):
+            // ball touches per car-minute and the mean distance of the team's deepest living
+            // car from its own back wall (lower = sitting deeper).
+            "touches_per_car_min": tot[47 + k] as f64 / tot[49 + k].max(1) as f64 * 15.0 * 60.0,
+            "deepest_car_depth_uu": tot[53 + k] as f64 / tot[51 + k].max(1) as f64,
         });
         out["team"] = serde_json::json!({"a": side(0), "b": side(1), "steps": tot[19], "kickoffs": tot[22]});
     }
@@ -2963,6 +2975,21 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
                     if let Some((ob, nc)) = opp_ball_own_half(&view, team) {
                         out[45 + k] += u64::from(ob);
                         out[43 + k] += u64::from(nc);
+                    }
+                    // TM8 passivity metrics.
+                    if !indococo_bot::team::kickoff_pending(&view) {
+                        let mut depth = f64::INFINITY;
+                        for c in view.cars.iter().filter(|c| c.team == team) {
+                            out[49 + k] += 1;
+                            out[47 + k] += u64::from(c.ball_touches > 0);
+                            if !c.is_demoed() {
+                                depth = depth.min(c.attack_sign() * c.pos.y + 5120.0);
+                            }
+                        }
+                        if depth.is_finite() {
+                            out[51 + k] += 1;
+                            out[53 + k] += depth.max(0.0).round() as u64;
+                        }
                     }
                 }
                 out[19] += 1;
@@ -3275,4 +3302,168 @@ fn ripple_dump(rdir: &Path, steps: usize, out: &Path) {
 #[cfg(not(feature = "ripple"))]
 fn ripple_dump(_rdir: &Path, _steps: usize, _out: &Path) {
     panic!("ripple-dump requires --features ripple");
+}
+
+
+// ---------------------------------------------------------------------------
+// TM8 AUDIT (scratch only): `reward-audit <reward.toml> <setters.toml> <ckpt>
+// <steps> [threads]`. Self-play of <ckpt> (both teams, actions SAMPLED from
+// the policy softmax as in training rollouts) over the setter mix of
+// <setters.toml> (a train_tm.toml works: only [[state_setters]] is read),
+// with the run's real reward config. The learner step for team-spirit /
+// ramp schedules is AUDIT_STEP (default 1e12 = every ramp at its end).
+// Prints the per (team size, role, phase, term) sums from
+// `rewards::combined::audit` as JSON.
+fn audit_step() -> u64 {
+    std::env::var("AUDIT_STEP").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000_000_000_000)
+}
+
+fn sample_actions(actor: &Net, obs: &[&Vec<f32>], dev: &Device, rng: &mut SmallRng) -> Vec<usize> {
+    let flat: Vec<f32> = obs.iter().flat_map(|o| o.iter().copied()).collect();
+    let x = Tensor::<2>::from_data(TensorData::new(flat, [obs.len(), obs_size()]), dev);
+    let logits = actor.forward(x).into_data().try_to_vec::<f32>().expect("logits");
+    logits
+        .chunks(N_ACTIONS)
+        .map(|row| {
+            let m = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let p: Vec<f64> = row.iter().map(|&l| f64::from(l - m).exp()).collect();
+            let z: f64 = p.iter().sum();
+            let mut u = rng.random::<f64>() * z;
+            for (k, &pk) in p.iter().enumerate() {
+                u -= pk;
+                if u <= 0.0 {
+                    return k;
+                }
+            }
+            N_ACTIONS - 1
+        })
+        .collect()
+}
+
+static BEH: std::sync::Mutex<[f64; 8]> = std::sync::Mutex::new([0.0; 8]);
+
+fn reward_audit(reward_toml: &Path, setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize) {
+    #[derive(Deserialize)]
+    struct Mix {
+        state_setters: Vec<WeightedSetter>,
+    }
+    init_from_default(true).expect("load collision meshes");
+    indococo_bot::team::set_step_source(audit_step);
+    indococo_bot::obs::set_obs_shuffle(true);
+    indococo_bot::rewards::combined::audit::ON.store(true, std::sync::atomic::Ordering::Relaxed);
+    let cfg = RewardConfig::from_file(reward_toml).expect("reward config");
+    let text = std::fs::read_to_string(setters_toml).expect("read setters");
+    let mix: Mix = toml::from_str(&text).expect("parse setters");
+    let per = steps.div_ceil(threads);
+    let t0 = std::time::Instant::now();
+    let res: Vec<[u64; 4]> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..threads)
+            .map(|t| {
+                let (cfg, mix) = (&cfg, &mix.state_setters);
+                s.spawn(move || {
+                    const ENVS: usize = 8;
+                    let dev = Device::flex();
+                    let na = load_actor(ckpt, &dev);
+                    let mut rng = SmallRng::seed_from_u64(4242 + t as u64);
+                    let mut envs: Vec<(BotEnv, GameState, Vec<Vec<f32>>)> = (0..ENVS)
+                        .map(|_| {
+                            let mut env = create_env(cfg, mix);
+                            let (st, obs, _) = env.reset();
+                            (env, st, obs)
+                        })
+                        .collect();
+                    let mut out = [0u64; 4];
+                    // TM8 passivity metrics: [car-steps, touches, team-steps, deepest-car depth sum,
+                    // closest-car ball dist sum, pair800 team-steps, double-commit team-steps, live steps]
+                    let mut beh = [0f64; 8];
+                    let mut done_steps = 0usize;
+                    while done_steps < per {
+                        let all: Vec<&Vec<f32>> = envs.iter().flat_map(|e| e.2.iter()).collect();
+                        let acts = sample_actions(&na, &all, &dev, &mut rng);
+                        let mut k = 0;
+                        for e in envs.iter_mut() {
+                            let n = e.2.len();
+                            let a = acts[k..k + n].to_vec();
+                            k += n;
+                            let r = e.0.step(&e.1, &a);
+                            out[0] += 1;
+                            {
+                                let v = indococo_bot::state::StateView::from_game_state(&r.state);
+                                if !indococo_bot::team::kickoff_pending(&v) {
+                                    beh[7] += 1.0;
+                                    for c in &v.cars {
+                                        beh[0] += 1.0;
+                                        if c.ball_touches > 0 { beh[1] += 1.0; }
+                                    }
+                                    for team in [0u8, 1u8] {
+                                        let ids: Vec<usize> = (0..v.cars.len()).filter(|&i| v.cars[i].team == team && !v.cars[i].is_demoed()).collect();
+                                        if ids.is_empty() { continue; }
+                                        beh[2] += 1.0;
+                                        let depth = ids.iter().map(|&i| v.cars[i].attack_sign() * v.cars[i].pos.y + 5120.0).fold(f64::INFINITY, f64::min);
+                                        beh[3] += depth;
+                                        let bd = ids.iter().map(|&i| v.cars[i].pos.distance(v.ball.pos)).fold(f64::INFINITY, f64::min);
+                                        beh[4] += bd;
+                                        let mut p800 = false;
+                                        let mut dc = 0;
+                                        for (k, &i) in ids.iter().enumerate() {
+                                            let c = &v.cars[i];
+                                            let d = v.ball.pos - c.pos;
+                                            let dist = d.length();
+                                            if dist < 1000.0 && dist > 1e-6 && c.vel.dot(d / dist) > 500.0 { dc += 1; }
+                                            for &j in &ids[k + 1..] {
+                                                if c.pos.distance(v.cars[j].pos) < 800.0 { p800 = true; }
+                                            }
+                                        }
+                                        if p800 { beh[5] += 1.0; }
+                                        if dc >= 2 { beh[6] += 1.0; }
+                                    }
+                                }
+                            }
+                            if r.is_terminal || r.truncated {
+                                let v = e.0.get_shared_info().view(&r.state);
+                                if v.scoring_team().is_some() { out[1] += 1; } else { out[2] += 1; }
+                                let (st, obs, _) = e.0.reset();
+                                e.1 = st;
+                                e.2 = obs;
+                            } else {
+                                e.1 = r.state;
+                                e.2 = r.obs;
+                            }
+                        }
+                        done_steps += ENVS;
+                    }
+                    for (k, b) in beh.iter().enumerate() {
+                        BEH.lock().unwrap()[k] += b;
+                    }
+                    out
+                })
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().expect("worker")).collect()
+    });
+    let mut tot = [0u64; 4];
+    for r in &res { for i in 0..4 { tot[i] += r[i]; } }
+    let agg = indococo_bot::rewards::combined::audit::AGG.lock().unwrap();
+    let flags = indococo_bot::rewards::combined::audit::FLAGS.lock().unwrap();
+    let rows: Vec<serde_json::Value> = agg.iter().map(|((n, role, phase, term), v)| serde_json::json!({
+        "n": n, "role": role, "phase": phase, "term": term,
+        "cnt": v[0], "sum_pre": v[1], "abs_pre": v[2], "sum_post": v[3], "abs_post": v[4], "absdev_post": v[5],
+    })).collect();
+    let fl: serde_json::Map<String, serde_json::Value> = flags.iter().map(|(k, (i, f))| (k.clone(), serde_json::json!({"individual": i, "full": f}))).collect();
+    let b = *BEH.lock().unwrap();
+    let behaviour = serde_json::json!({
+        "touches_per_car_min": b[1] / b[0].max(1.0) * indococo_bot::consts::STEPS_PER_SECOND * 60.0,
+        "deepest_car_depth_uu": b[3] / b[2].max(1.0),
+        "closest_car_ball_dist_uu": b[4] / b[2].max(1.0),
+        "pair800": b[5] / b[2].max(1.0),
+        "double_commit": b[6] / b[2].max(1.0),
+        "live_steps": b[7],
+    });
+    let out = serde_json::json!({
+        "reward": reward_toml, "setters": setters_toml, "ckpt": ckpt, "team_size": indococo_bot::obs::team_size(),
+        "audit_step": audit_step(), "env_steps": tot[0], "goals": tot[1], "timeouts": tot[2],
+        "seconds": t0.elapsed().as_secs_f64(), "flags": fl, "rows": rows,
+        "behaviour": behaviour,
+    });
+    println!("{out}");
 }

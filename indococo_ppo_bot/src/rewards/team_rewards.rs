@@ -339,6 +339,9 @@ pub struct SpacingParams {
     /// TM7 far penalty starts at far_start and saturates after far_span.
     pub far_start: f64,
     pub far_span: f64,
+    /// TM8: `last_man_goalside` / `support_role` stay on while the kickoff
+    /// is pending (non-taker positioning); false = off (TM6/TM7).
+    pub kickoff_positioning: bool,
 }
 
 impl Default for SpacingParams {
@@ -363,6 +366,7 @@ impl Default for SpacingParams {
             support_falloff: 700.0,
             far_start: 4500.0,
             far_span: 1500.0,
+            kickoff_positioning: false,
         }
     }
 }
@@ -592,7 +596,7 @@ impl StepReward for LastManGoalside {
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let n = state.cars.len();
         let role_last: Option<Vec<bool>> = self.roles.as_mut().map(|r| r.update(state).iter().map(|x| *x == Role::Last).collect());
-        if crate::team::kickoff_pending(state) {
+        if crate::team::kickoff_pending(state) && !self.p.kickoff_positioning {
             return vec![0.0; n];
         }
         let alive = alive_team_counts(state);
@@ -650,7 +654,7 @@ impl StepReward for SupportRole {
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let n = state.cars.len();
         let roles = self.roles.update(state).to_vec();
-        if crate::team::kickoff_pending(state) {
+        if crate::team::kickoff_pending(state) && !self.p.kickoff_positioning {
             return vec![0.0; n];
         }
         let alive = alive_team_counts(state);

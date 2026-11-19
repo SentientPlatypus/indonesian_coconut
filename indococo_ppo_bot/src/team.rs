@@ -260,12 +260,43 @@ pub struct RoleParams {
     pub margin: f64,
     /// ... for at least this many consecutive steps.
     pub hold: u32,
+    /// TM8: pick the closest car with the obs `team_ranks` key (10 uu
+    /// distance buckets, then the car further left in its team's frame,
+    /// then index), so the reward's first man / kickoff taker is the car
+    /// the obs taker flag names. False = exact distance, lower index (TM6/TM7).
+    pub obs_tiebreak: bool,
+    /// TM8: how a touch moves first man. "instant" (TM6/TM7): the toucher
+    /// is first at once. "hysteresis": a touch is not special; the toucher
+    /// must win the margin/hold test like any challenger. "eta": the toucher
+    /// is first at once only if, on the previous step, its time-to-ball was
+    /// no worse than the current first man's; otherwise hysteresis.
+    pub touch_mode: String,
 }
 
 impl Default for RoleParams {
     fn default() -> Self {
-        Self { margin: 300.0, hold: 8 }
+        Self { margin: 300.0, hold: 8, obs_tiebreak: false, touch_mode: "instant".into() }
     }
+}
+
+/// TM8: the obs `team_ranks` order key of car `i` (lower = closer).
+#[must_use]
+pub fn obs_rank_key(state: &StateView, i: usize) -> (i64, i64, usize) {
+    let c = &state.cars[i];
+    let mx = c.attack_sign() * c.pos.x;
+    let d = (c.pos.distance(state.ball.pos) / 10.0).round() as i64;
+    (d, (mx * 10.0).round() as i64, i)
+}
+
+/// TM8: crude time-to-ball (s): distance over closing speed, floored at
+/// 500 uu/s so a parked car still has a finite ETA.
+#[must_use]
+pub fn eta_to_ball(state: &StateView, i: usize) -> f64 {
+    let c = &state.cars[i];
+    let d = state.ball.pos - c.pos;
+    let dist = d.length();
+    let closing = if dist > 1e-6 { c.vel.dot(d / dist) } else { 0.0 };
+    dist / closing.max(500.0)
 }
 
 /// TM6 team role of one car (see [`RoleTracker`]).
@@ -299,12 +330,14 @@ pub struct RoleTracker {
     roles: Vec<Role>,
     /// First-man changes since the last reset, per team.
     pub swaps: [u64; 2],
+    /// TM8 `touch_mode = "eta"`: each car's ETA on the previous step.
+    prev_eta: Vec<f64>,
 }
 
 impl RoleTracker {
     #[must_use]
     pub fn new(p: RoleParams) -> Self {
-        Self { p, first: [None; 2], streak: Vec::new(), roles: Vec::new(), swaps: [0; 2] }
+        Self { p, first: [None; 2], streak: Vec::new(), roles: Vec::new(), swaps: [0; 2], prev_eta: Vec::new() }
     }
 
     pub fn reset(&mut self) {
@@ -312,6 +345,7 @@ impl RoleTracker {
         self.streak.clear();
         self.roles.clear();
         self.swaps = [0; 2];
+        self.prev_eta.clear();
     }
 
     /// Roles of the last [`RoleTracker::update`].
@@ -327,7 +361,16 @@ impl RoleTracker {
             self.streak = vec![0; n];
         }
         let dist = |i: usize| state.cars[i].pos.distance(state.ball.pos);
-        let cmp = |a: &usize, b: &usize| dist(*a).partial_cmp(&dist(*b)).unwrap_or(std::cmp::Ordering::Equal);
+        let obs_tb = self.p.obs_tiebreak;
+        let cmp = |a: &usize, b: &usize| {
+            if obs_tb {
+                obs_rank_key(state, *a).cmp(&obs_rank_key(state, *b))
+            } else {
+                dist(*a).partial_cmp(&dist(*b)).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        };
+        let eta_now: Vec<f64> = (0..n).map(|i| eta_to_ball(state, i)).collect();
+        let prev_eta = if self.prev_eta.len() == n { self.prev_eta.clone() } else { eta_now.clone() };
         let mut roles = vec![Role::Out; n];
         for team in [0u8, 1u8] {
             let t = usize::from(team);
@@ -336,8 +379,15 @@ impl RoleTracker {
                 self.first[t] = None;
                 continue;
             };
-            let toucher = alive.iter().copied().filter(|&i| state.cars[i].ball_touches > 0).min_by(|a, b| cmp(a, b));
             let cur = self.first[t].filter(|i| alive.contains(i));
+            let toucher = alive.iter().copied().filter(|&i| state.cars[i].ball_touches > 0).min_by(|a, b| cmp(a, b));
+            // TM8: a touch takes first man at once only per `touch_mode`.
+            let toucher = match (self.p.touch_mode.as_str(), toucher, cur) {
+                (_, None, _) | (_, Some(_), None) | ("instant", Some(_), _) => toucher,
+                (_, Some(tc), Some(f)) if tc == f => toucher,
+                ("eta", Some(tc), Some(f)) if prev_eta[tc] <= prev_eta[f] => toucher,
+                _ => None,
+            };
             let new_first = match (toucher, cur) {
                 (Some(tc), _) => tc,
                 (None, None) => closest,
@@ -377,6 +427,7 @@ impl RoleTracker {
             }
         }
         self.roles = roles;
+        self.prev_eta = eta_now;
         &self.roles
     }
 }
@@ -945,7 +996,7 @@ mod tests {
     }
     #[test]
     fn role_tracker_hysteresis_touch_and_demo() {
-        let mut t = RoleTracker::new(RoleParams { margin: 300.0, hold: 3 });
+        let mut t = RoleTracker::new(RoleParams { margin: 300.0, hold: 3, ..RoleParams::default() });
         let ball = DVec3::new(0.0, 0.0, 93.0);
         // Blue 0 at 1000 uu, blue 2 at 1200 uu: blue 0 first, blue 2 last; orange alone = first.
         let mk = |y0: f64, y2: f64| vec![car(0, 0.0, y0, 17.0), car(1, 0.0, 3000.0, 17.0), car(0, 0.0, y2, 17.0)];

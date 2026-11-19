@@ -34,6 +34,9 @@ pub struct AirDribbleSeqParams {
     pub max_chain_touches: u32,
     /// Carry counts only ball progress toward the opponent goal (AUD).
     pub goalward_carry: bool,
+    /// TM8: a step with any CarHitBall event is a touch (`ball_touches` is
+    /// a per-step count, so `touches > prev` missed back-to-back touches).
+    pub any_touch: bool,
 }
 
 impl Default for AirDribbleSeqParams {
@@ -43,6 +46,7 @@ impl Default for AirDribbleSeqParams {
             chain_decay: 1.0,
             max_chain_touches: 0,
             goalward_carry: false,
+            any_touch: false,
         }
     }
 }
@@ -135,7 +139,7 @@ impl StepReward for AirDribbleSequence {
                 self.alive_until[a] = DEAD;
             }
 
-            let just_touched = touches > self.prev_touches[a];
+            let just_touched = if self.p.any_touch { touches > 0 } else { touches > self.prev_touches[a] };
             self.prev_touches[a] = touches;
             if !(just_touched && bpos.z >= self.min_air_z) {
                 continue;
@@ -257,6 +261,7 @@ mod tests {
             chain_decay: 0.8,
             max_chain_touches: 6,
             goalward_carry: true,
+            any_touch: false,
         };
         let v = chain(p, 8, 0.0);
         assert!((v[0] - 0.02).abs() < 1e-9);

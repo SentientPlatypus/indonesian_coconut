@@ -285,6 +285,122 @@ impl<SI: SharedInfoRng> StateSetter<SI> for BackboardDoubleTap {
     }
 }
 
+/// TM8 breakaway: a random attacking team's car just behind a grounded or
+/// bouncing ball 1500-4500 uu from the attacked goal line, both moving
+/// goalward; every defender 1200-3000 uu behind the ball and out of the
+/// 1100 uu lane (the defender is beaten); attacker teammates at support spots.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Breakaway {
+    pub goal_dist: [f32; 2],
+    pub speed: [f32; 2],
+    pub defender_behind: [f32; 2],
+    pub boost: [f32; 2],
+}
+
+impl Default for Breakaway {
+    fn default() -> Self {
+        Self { goal_dist: [1500.0, 4500.0], speed: [1000.0, 1800.0], defender_behind: [1200.0, 3000.0], boost: [20.0, 80.0] }
+    }
+}
+
+impl<SI: SharedInfoRng> StateSetter<SI> for Breakaway {
+    fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
+        arena.reset_to_random_kickoff(None);
+        let rng = shared_info.rng();
+        let n = arena.num_cars();
+        let att = usize::from(rng.random_range(0.0f32..1.0) < 0.5);
+        let s = attack_sign(att);
+        let gd = range(rng, self.goal_dist);
+        let ball = Vec3A::new(rng.random_range(-1500.0..1500.0), s * (BACK_WALL_Y - gd), rng.random_range(93.0..300.0));
+        let speed = range(rng, self.speed);
+        // Aim roughly at the net with some spread.
+        let aim = Vec3A::new(rng.random_range(-600.0..600.0), s * BACK_WALL_Y, 0.0) - Vec3A::new(ball.x, ball.y, 0.0);
+        let dir = aim.normalize_or_zero();
+        arena.set_ball_state(ball_at(ball, dir * speed + Vec3A::new(0.0, 0.0, rng.random_range(0.0..250.0))));
+        let mut placed = Vec::new();
+        for idx in 0..n {
+            let mine = idx % 2 == att;
+            let (pos, vel, face) = if mine && idx == att {
+                let p = ball - dir * rng.random_range(250.0..450.0);
+                (Vec3A::new(p.x, p.y, CAR_REST_HEIGHT), dir * (speed * rng.random_range(0.9..1.05)), dir)
+            } else if mine {
+                let p = free_spot(rng, &placed, ball, 900.0, |u| Vec3A::new((u() - 0.5) * 5000.0, ball.y - s * (1500.0 + 2500.0 * u()), CAR_REST_HEIGHT));
+                (p, dir * 800.0, dir)
+            } else {
+                let behind = range(rng, self.defender_behind);
+                let p = free_spot(rng, &placed, ball, 1000.0, |u| {
+                    let side = if u() < 0.5 { -1.0 } else { 1.0 };
+                    Vec3A::new(ball.x + side * (1200.0 + 1500.0 * u()), ball.y - s * behind, CAR_REST_HEIGHT)
+                });
+                (p, dir * rng.random_range(800.0..1600.0), dir)
+            };
+            let mut car = grounded(pos, face, range(rng, self.boost));
+            car.phys.vel = vel;
+            arena.set_car_state(idx, car.core());
+            placed.push(pos);
+        }
+    }
+}
+
+/// TM8 goalie practice (Necto GoaliePracticeState style): a shot already
+/// travelling at a random team's net from 2000-4500 uu out; that team's last
+/// car in or near its goal mouth, the others upfield recovering; the
+/// shooting team's cars following the ball.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GoalieShot {
+    pub shot_dist: [f32; 2],
+    pub shot_speed: [f32; 2],
+    pub boost: [f32; 2],
+}
+
+impl Default for GoalieShot {
+    fn default() -> Self {
+        Self { shot_dist: [2000.0, 4500.0], shot_speed: [1400.0, 2600.0], boost: [20.0, 100.0] }
+    }
+}
+
+impl<SI: SharedInfoRng> StateSetter<SI> for GoalieShot {
+    fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
+        arena.reset_to_random_kickoff(None);
+        let rng = shared_info.rng();
+        let n = arena.num_cars();
+        let def = usize::from(rng.random_range(0.0f32..1.0) < 0.5);
+        let s = attack_sign(def); // defender attacks +s, defends -s.
+        let d = range(rng, self.shot_dist);
+        let ball = Vec3A::new(rng.random_range(-2500.0..2500.0), -s * (BACK_WALL_Y - d), rng.random_range(100.0..900.0));
+        let target = Vec3A::new(rng.random_range(-850.0..850.0), -s * BACK_WALL_Y, rng.random_range(100.0..550.0));
+        let dir = (target - ball).normalize_or_zero();
+        let speed = range(rng, self.shot_speed);
+        arena.set_ball_state(ball_at(ball, dir * speed + Vec3A::new(0.0, 0.0, 150.0)));
+        let mut placed = Vec::new();
+        let mut first_def = true;
+        for idx in 0..n {
+            let (pos, face) = if idx % 2 == def {
+                if first_def {
+                    first_def = false;
+                    let p = Vec3A::new(rng.random_range(-1000.0..1000.0), -s * (BACK_WALL_Y - rng.random_range(150.0..900.0)), CAR_REST_HEIGHT);
+                    (p, ball - p)
+                } else {
+                    let p = free_spot(rng, &placed, ball, 800.0, |u| Vec3A::new((u() - 0.5) * 6000.0, ball.y + s * (500.0 + 3000.0 * u()), CAR_REST_HEIGHT));
+                    (p, Vec3A::new(0.0, -s, 0.0))
+                }
+            } else {
+                let p = free_spot(rng, &placed, ball, 500.0, |u| {
+                    let back = 700.0 + 2500.0 * u();
+                    Vec3A::new(ball.x + (u() - 0.5) * 2000.0, ball.y + s * back, CAR_REST_HEIGHT)
+                });
+                (p, ball - p)
+            };
+            let mut car = grounded(pos, face, range(rng, self.boost));
+            car.phys.vel = face.normalize_or_zero() * rng.random_range(0.0..1400.0);
+            arena.set_car_state(idx, car.core());
+            placed.push(pos);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

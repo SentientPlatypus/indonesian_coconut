@@ -18,6 +18,7 @@ use super::ball_travel::BallTravel;
 use super::boost_change::BoostChange;
 use super::boost_keep::BoostKeep;
 use super::clear_path_finish::ClearPathFinish;
+use super::tm8::{CoverParams, KickoffSamePad, KickoffTaker, OpenNetGate, OpenNetParams, PhaseScale, ShadowCover, TermRamp};
 use super::contact_quality::ContactQuality;
 use super::contest_high_ball::ContestHighBall;
 use super::demo::{Demo, DemoParams};
@@ -152,6 +153,12 @@ pub struct RewardWeights {
     pub teammate_far: f64,
     /// TM7: role-scaled, team-normalized concede penalty (`[team.concede_role]`).
     pub concede_role: f64,
+    /// TM8: exactly-one-cover goal-side term for non-first cars (`[team.cover]`).
+    pub shadow_cover: f64,
+    /// TM8: kickoff-pending penalty, two non-takers at the same big pad.
+    pub kickoff_same_pad: f64,
+    /// TM8: kickoff-pending time penalty for the taker.
+    pub kickoff_taker: f64,
 }
 
 /// `[team]`: TM1 team-mode settings. All empty / unused by default, so
@@ -221,6 +228,18 @@ pub struct TeamRewardConfig {
     pub role_metrics: Vec<String>,
     /// TM7 `concede_role` scales and role lag.
     pub concede_role: ConcedeRoleParams,
+    /// TM8 `shadow_cover` parameters.
+    pub cover: CoverParams,
+    /// TM8 `kickoff_same_pad` radius around a big pad (uu) and how long after
+    /// the first kickoff touch it stays on (s).
+    pub kickoff_pad_radius: f64,
+    pub kickoff_pad_grace_s: f64,
+    /// TM8: `{term: scale}` multipliers during the kickoff phase (pending +
+    /// `kickoff_grace_s`); e.g. energy / boost_keep 0.25.
+    pub kickoff_scale: BTreeMap<String, f64>,
+    /// TM8: `{term: [[step, scale], ...]}` per-term schedules relative to
+    /// `spirit_origin` (e.g. contact_quality 1.0 -> 0.4 over 200M).
+    pub term_ramp: BTreeMap<String, Vec<[f64; 2]>>,
 }
 
 /// `[team.commit_order]` (TM5r).
@@ -268,6 +287,11 @@ impl Default for TeamRewardConfig {
             kickoff_grace_s: 1.0,
             role_metrics: Vec::new(),
             concede_role: ConcedeRoleParams::default(),
+            cover: CoverParams::default(),
+            kickoff_pad_radius: 1500.0,
+            kickoff_pad_grace_s: 3.0,
+            kickoff_scale: BTreeMap::new(),
+            term_ramp: BTreeMap::new(),
         }
     }
 }
@@ -309,6 +333,18 @@ impl Default for SafeBoostParams {
 pub struct ClearPathParams {
     pub min_lead: f64,
     pub lane_radius: f64,
+    /// Minimum goalward ball speed after the touch (E8B2 600; TM8 1500).
+    pub min_goalward: f64,
+    /// TM8: ball within this distance of the attacked net centre (0 = any).
+    pub max_dist: f64,
+    /// TM8: pay at most once per team possession (until an opponent touch).
+    pub once_per_possession: bool,
+    /// TM8: any step with a CarHitBall counts as a touch (see airdribble_seq).
+    pub any_touch: bool,
+    /// TM8: extra `goal_bonus x payout` if the payer's team scores within
+    /// `goal_window_s` of the paid touch.
+    pub goal_bonus: f64,
+    pub goal_window_s: f64,
 }
 
 impl Default for ClearPathParams {
@@ -316,6 +352,12 @@ impl Default for ClearPathParams {
         Self {
             min_lead: 900.0,
             lane_radius: 1100.0,
+            min_goalward: 600.0,
+            max_dist: 0.0,
+            once_per_possession: false,
+            any_touch: false,
+            goal_bonus: 0.0,
+            goal_window_s: 2.0,
         }
     }
 }
@@ -343,6 +385,8 @@ pub struct RewardConfig {
     pub reset_align: ResetAlignParams,
     pub shadow_box: ShadowBoxParams,
     pub musty: MustyParams,
+    /// TM8 open-net gate on air-dribble shaping (`[open_net]`; empty = off).
+    pub open_net: OpenNetParams,
     /// TM1 team settings (team spirit, gates, pass / double-touch params).
     pub team: TeamRewardConfig,
     /// `{setter kind: {term: scale}}`: term weights multiplied by `scale` in
@@ -564,14 +608,11 @@ impl RewardConfig {
             (
                 "clear_path",
                 w.clear_path,
-                Box::new(ClearPathFinish::new(
-                    self.clear_path.min_lead,
-                    self.clear_path.lane_radius,
-                )),
+                Box::new(ClearPathFinish::with_params(&self.clear_path)),
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 19] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 22] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -642,6 +683,9 @@ impl RewardConfig {
             ("support_role", w.support_role, Box::new(SupportRole::new(support_p.clone(), role_p.clone()))),
             ("teammate_far", w.teammate_far, Box::new(TeammateFar::new(tm.spacing.clone(), role_p.clone()))),
             ("concede_role", w.concede_role, Box::new(ConcedeRole::new(tm.concede_role.clone(), role_p.clone()))),
+            ("shadow_cover", w.shadow_cover, Box::new(ShadowCover::new(tm.cover.clone(), role_p.clone()))),
+            ("kickoff_same_pad", w.kickoff_same_pad, Box::new(KickoffSamePad::new(tm.kickoff_pad_radius, role_p.clone(), (tm.kickoff_pad_grace_s * crate::consts::STEPS_PER_SECOND).round().max(0.0) as u32))),
+            ("kickoff_taker", w.kickoff_taker, Box::new(KickoffTaker::new(role_p.clone()))),
         ];
         terms.extend(
             experiment
@@ -653,9 +697,12 @@ impl RewardConfig {
             assert!(!self.zero_sum.contains_key("concede_role"), "concede_role is a penalty, not zero-sum");
         }
         let role_scale_keys: Vec<String> = tm.role_scale.keys().cloned().collect();
+        let ko_scale_keys: Vec<String> = tm.kickoff_scale.keys().cloned().collect();
+        let ramp_keys: Vec<String> = tm.term_ramp.keys().cloned().collect();
         for list in [
             &tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate, &tm.no_second_commit_gate, &tm.spirit_full,
             &tm.role_first_gate, &tm.role_not_first_gate, &role_scale_keys, &tm.kickoff_exempt, &tm.role_metrics,
+            &ko_scale_keys, &ramp_keys, &self.open_net.terms,
         ] {
             for key in list {
                 assert!(
@@ -672,6 +719,16 @@ impl RewardConfig {
                 let mut reward = if wrapped.borrow().iter().any(|k| k == name) { reward } else { gate(name, reward) };
                 if tm.kickoff_exempt.iter().any(|k| k == name) {
                     reward = Box::new(KickoffMask::new(reward, grace));
+                }
+                // TM8 wrappers (all off unless configured).
+                if self.open_net.terms.iter().any(|k| k == name) {
+                    reward = Box::new(OpenNetGate::new(reward, self.open_net.clone()));
+                }
+                if let Some(&s) = tm.kickoff_scale.get(name) {
+                    reward = Box::new(PhaseScale::new(reward, grace, s));
+                }
+                if let Some(pts) = tm.term_ramp.get(name) {
+                    reward = Box::new(TermRamp::new(reward, abs(pts)));
                 }
                 Term { name, weight, reward }
             })
@@ -1009,7 +1066,7 @@ mod extends_tests {
         use glam::DVec3;
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
         let c = RewardConfig::from_file(&dir.join("tm6.toml")).unwrap();
-        assert_eq!(c.team.roles, Some(RoleParams { margin: 300.0, hold: 8 }));
+        assert_eq!(c.team.roles, Some(RoleParams { margin: 300.0, hold: 8, ..RoleParams::default() }));
         assert_eq!((c.weights.support_role, c.weights.support_band, c.weights.last_man_goalside), (0.2, 0.0, 0.3));
         assert_eq!(c.team.role_scale.get("contact_quality"), Some(&0.25));
         assert_eq!(c.team.closest_gate, vec!["shadow_space".to_string()]);
@@ -1108,7 +1165,7 @@ mod extends_tests {
         assert_eq!(c.team.pass.receiver_min_sep, 1200.0);
         assert_eq!(c.team.concede_role, ConcedeRoleParams::default());
         // TM6 kept: role gates, support / last man, double commit, spirit.
-        assert_eq!(c.team.roles, Some(RoleParams { margin: 300.0, hold: 8 }));
+        assert_eq!(c.team.roles, Some(RoleParams { margin: 300.0, hold: 8, ..RoleParams::default() }));
         assert_eq!((c.weights.support_role, c.weights.last_man_goalside, c.weights.double_commit), (0.2, 0.3, 4.0));
         assert_eq!(c.team.spirit, vec![[0.0, 0.9]]);
         assert!(c.team.no_second_commit_gate.iter().any(|k| k == "touch"));

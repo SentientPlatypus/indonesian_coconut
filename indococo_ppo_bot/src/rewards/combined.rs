@@ -16,6 +16,24 @@ pub struct Term {
     pub reward: Box<dyn StepReward>,
 }
 
+
+/// TM8 AUDIT (scratch only, not training code): per (team size, role,
+/// phase, term) sums of the weighted value before and after the team-spirit
+/// blend, plus the |deviation from the car's team mean| after the blend
+/// (the part of the term that differs between teammates).
+pub mod audit {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    pub static ON: AtomicBool = AtomicBool::new(false);
+    /// key: (cars per team, role 0 first / 1 second / 2 last / 3 out-or-1v1,
+    /// phase 0 live / 1 kickoff pending, term) -> [n, sum_pre, abs_pre,
+    /// sum_post, abs_post, absdev_post]
+    pub static AGG: Mutex<BTreeMap<(usize, usize, usize, String), [f64; 6]>> = Mutex::new(BTreeMap::new());
+    pub static FLAGS: Mutex<BTreeMap<String, (bool, bool)>> = Mutex::new(BTreeMap::new());
+    pub fn on() -> bool { ON.load(Ordering::Relaxed) }
+}
+
 /// TM1 team spirit: per term (unless `individual`), each car's weighted
 /// value becomes `(1 - tau) r_i + tau * mean(r over its team)`, with `tau`
 /// from the piecewise-linear `points` over the learner's cumulative steps
@@ -71,6 +89,7 @@ pub struct CombinedReward {
     /// car-step of the first man / the other cars, teams of 2+ cars only).
     role_report: Option<(crate::team::RoleTracker, Vec<bool>)>,
     last_roles: Vec<crate::team::Role>,
+    audit_roles: Option<crate::team::RoleTracker>,
 }
 
 impl CombinedReward {
@@ -84,6 +103,7 @@ impl CombinedReward {
             last_spirit: None,
             role_report: None,
             last_roles: Vec::new(),
+            audit_roles: None,
         }
     }
 
@@ -113,6 +133,9 @@ impl CombinedReward {
             t.reward.reset(initial);
         }
         if let Some((r, _)) = &mut self.role_report {
+            r.reset();
+        }
+        if let Some(r) = &mut self.audit_roles {
             r.reset();
         }
     }
@@ -183,6 +206,18 @@ impl CombinedReward {
                 }
             }
         }
+        let audit_on = audit::on();
+        let (aud_roles, aud_n, aud_phase): (Vec<usize>, usize, usize) = if audit_on {
+            let tr = self.audit_roles.get_or_insert_with(|| crate::team::RoleTracker::new(crate::team::RoleParams::default()));
+            let counts = crate::team::team_counts(state);
+            let roles = tr.update(state).to_vec();
+            let rs = roles.iter().zip(&state.cars).map(|(r, c)| {
+                if counts[usize::from(c.team.min(1))] < 2 { return 3; }
+                match r { crate::team::Role::First => 0, crate::team::Role::Second => 1, crate::team::Role::Last => 2, crate::team::Role::Out => 3 }
+            }).collect();
+            (rs, counts[0].max(counts[1]), usize::from(crate::team::kickoff_pending(state)))
+        } else { (Vec::new(), 0, 0) };
+        let mut aud_rows: Vec<(String, Vec<f64>, Vec<f64>)> = Vec::new();
         let mut shift = 0.0;
         for (i, t) in self.terms.iter_mut().enumerate() {
             let r = t.reward.get_rewards(state);
@@ -196,12 +231,45 @@ impl CombinedReward {
                     shift += before.iter().zip(&weighted).map(|(a, b)| (a - b).abs()).sum::<f64>();
                 }
             }
+            if audit_on {
+                let pre: Vec<f64> = r.iter().map(|x| x * weight).collect();
+                aud_rows.push((t.name.to_string(), pre, weighted.clone()));
+                if let Some(sp) = &self.spirit {
+                    let ind = sp.individual.get(i).copied().unwrap_or(false);
+                    let full = sp.full.get(i).copied().unwrap_or(false);
+                    audit::FLAGS.lock().unwrap().entry(t.name.to_string()).or_insert((ind, full));
+                }
+            }
             for (acc, w) in total.iter_mut().zip(&weighted) {
                 *acc += w;
             }
             self.last.push(weighted);
         }
         self.last_spirit = tau.map(|t| (t, shift / state.cars.len().max(1) as f64));
+        if audit_on {
+            let teams: Vec<u8> = state.cars.iter().map(|c| c.team.min(1)).collect();
+            let mut agg = audit::AGG.lock().unwrap();
+            let mut tot_rows: Vec<(String, Vec<f64>, Vec<f64>)> = Vec::new();
+            let mut tpre = vec![0.0; total.len()];
+            for (_, pre, _) in &aud_rows { for (a, x) in tpre.iter_mut().zip(pre) { *a += x; } }
+            tot_rows.push(("__total__".to_string(), tpre, total.clone()));
+            for (name, pre, post) in aud_rows.iter().chain(tot_rows.iter()) {
+                let mut sum = [0.0f64; 2];
+                let mut cnt = [0usize; 2];
+                for (x, &t) in post.iter().zip(&teams) { sum[usize::from(t)] += x; cnt[usize::from(t)] += 1; }
+                for c in 0..post.len() {
+                    let t = usize::from(teams[c]);
+                    let mean = sum[t] / cnt[t].max(1) as f64;
+                    let e = agg.entry((aud_n, aud_roles[c], aud_phase, name.clone())).or_insert([0.0; 6]);
+                    e[0] += 1.0;
+                    e[1] += pre[c];
+                    e[2] += pre[c].abs();
+                    e[3] += post[c];
+                    e[4] += post[c].abs();
+                    e[5] += (post[c] - mean).abs();
+                }
+            }
+        }
         total
     }
 

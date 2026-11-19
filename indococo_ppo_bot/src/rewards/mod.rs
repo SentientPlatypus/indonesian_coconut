@@ -50,12 +50,13 @@ pub mod safe_boost_collect;
 pub mod shadow_box;
 pub mod speed_toward_ball;
 pub mod team_rewards;
+pub mod tm8;
 pub mod touch;
 pub mod velocity_ball_to_goal;
 pub mod wall_pop_setup;
 pub mod zero_sum;
 
-mod combined;
+pub mod combined;
 mod config;
 
 pub use combined::{CombinedReward, Term};

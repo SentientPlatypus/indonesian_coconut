@@ -144,6 +144,10 @@ pub enum SetterKind {
     /// TM2: a car in the air with its flip and the ball on its roof, moving
     /// toward the opponent goal (air musty starts).
     MustySetup(MustySetup),
+    /// TM8: open-lane breakaway (defender beaten), see `team_setters`.
+    Breakaway(crate::team_setters::Breakaway),
+    /// TM8: shot on net with a goalie (Necto GoaliePracticeState style).
+    GoalieShot(crate::team_setters::GoalieShot),
 }
 
 impl SetterKind {
@@ -167,6 +171,8 @@ impl SetterKind {
             Self::BackboardDoubleTap(_) => "backboard_double_tap",
             Self::ResetShot(_) => "reset_shot",
             Self::MustySetup(_) => "musty_setup",
+            Self::Breakaway(_) => "breakaway",
+            Self::GoalieShot(_) => "goalie_shot",
         }
     }
 
@@ -376,6 +382,8 @@ impl SetterKind {
             Self::BackboardDoubleTap(ref s) => Box::new(s.clone()),
             Self::ResetShot(ref s) => Box::new(s.clone().as_reset_shot()),
             Self::MustySetup(ref s) => Box::new(s.clone()),
+            Self::Breakaway(ref s) => Box::new(s.clone()),
+            Self::GoalieShot(ref s) => Box::new(s.clone()),
         }
     }
 }
