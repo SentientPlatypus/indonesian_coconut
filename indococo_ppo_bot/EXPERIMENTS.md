@@ -3567,3 +3567,164 @@ same gate also cuts teammates' open-net dribbles):
    1-3 don't move the near-net AD share.
 5. Not recommended: lowering gamma for ST. It would make delay cost more, but it changes
    every long-horizon behaviour (defence, boost).
+
+## TM8 — Cross-exam note: rotation cover, kickoff roles, open-net finishing, PFSP (staged 2026-11-19, auto-starts after TM7)
+
+User report (Nov 19): TM6 kickoffs are weak (one car goes, the other two often
+go for the same boost), crowding and double commits, losses to Nexto in 2v2
+and 3v3; and in 1v1 (ST25, TM6) air dribbles after the defender is already
+beaten. Sources: "TM6/TM7 team audit" and "Air-dribble overuse audit" above.
+Approved by the user Nov 19 2026, 5:05 PM ET: "Auto-start TM8 (tm8v2 + your
+three tweaks) when TM7 finishes". TM7 is not touched (no binary swap, no
+config edit); TM8 warm-starts from TM7's last checkpoint at its 5B END.
+
+### Cross-exam (three legs, per the Nov 12 rule)
+
+- **Discord (read-only):** Vermatten: a rotation reward made his bot so
+  hesitant it "never goes for the ball anymore" -> measure touch rate and
+  first-man aggression, keep goal-side terms small. Vermatten and Ghost
+  penalize double commits directly. PigMasta fixed 2v2/3v3 kickoff double
+  commits with an obs "you should go for the kickoff" flag (we have a taker
+  flag; the tie-break must agree with the rewards). nullptr: open-net air
+  dribbles faded once episodes allowed several goals; others decay
+  air-dribble reward per touch or scale it with goal proximity; a goal-speed
+  bonus works but over-weighting causes fast-goal over-optimization (nullptr
+  cut his by ~20%). Demo / bump rewards are kept at ~1% of reward share.
+- **Outside research:** goal-side term as "shadow the ball" (on the
+  ball-to-own-net line at a ball-relative distance), not distance to goal;
+  second / last man only, exactly one cover (pay 1, penalize 0, do not pay 2
+  campers), individual, outside per-term zero-sum, small (mid-single-digit
+  share), 200M ramp; 5% goalie / shot-on-net setter (Necto GoaliePracticeState
+  style). Zero-sum once after mixing (Necto / OpenAI style), or at least keep
+  role-gated and positioning terms out of per-term subtraction; a touch must
+  not bypass hysteresis. Kickoff setter 0.15; same-pad penalty and boost /
+  energy cut in the kickoff phase only; restore non-taker positioning at
+  kickoff; taker timeout penalty ~0.1 (Opti / Kaiyo style); one shared
+  deterministic tie-break for reward, obs and RoleTracker. Air-dribble gate
+  only with possession, lane clear, within ~4000 uu, scale 0-0.05x;
+  clear_path 150 with +50% for a goal within 2 s; breakaway setter 5%;
+  contested-aerial and wall setters untouched. contact_quality 250 -> 100
+  over 200M. Opponent mix 65 latest / 20 past / 15 fixed with PFSP f_hard
+  over the fixed pool and a per-bot cap. Keep team_spirit 0.9 and the TM7
+  spacing / far / concede terms. Add a passivity / goal-hang alarm.
+- **Code + logs (scratch worktree, reward-audit on the frozen TM7 40.88B
+  checkpoint, 480k steps, sampled actions):** episodes end at the first goal
+  (env.rs OnGoalCondition), so multi-goal episodes are an env change. The
+  per-term zero-sum on speed_to_ball / face_ball only handed non-first cars
+  -mean(opponent first-man reward). A touch bypassed the RoleTracker
+  hysteresis and the reward-side role and the obs taker flag could disagree
+  on ties. Self-play kickoffs in the audit mix almost never duplicate (0-1%),
+  so the kickoff terms fire rarely there; the weak kickoffs show vs Nexto
+  (TM7 3v3: two non-takers on the same big pad 71%, kickoff won/lost at 1.5 s
+  15/44). The strict open-net gate fired on ~2% of 1v1 air-dribble reward.
+
+### Reconciliation (what TM8 does)
+
+Adopted from the research leg: shadow cover (exactly one, individual, 200M
+ramp 0.25 -> 1, x0.5 in the kickoff phase); speed_to_ball / face_ball out of
+per-term zero-sum; obs tie-break shared by RoleTracker, rewards and the obs
+taker flag; touch_mode = hysteresis; kickoff setter 0.15, same-pad penalty
+(kickoff phase + 3 s), taker time penalty 0.1, energy / boost_keep /
+boost_change x0.25 in the kickoff phase, last_man_goalside / support_role /
+shadow_cover on at the pending kickoff; open-net gate x0.05 on airdribble /
+airdribble_seq / aerial_distance; clear_path once per possession, >= 1500
+uu/s goalward, ball < 5000 uu from the net, +50% for a goal within 2 s;
+breakaway 5% and goalie_shot 5% setters; contact_quality 250 -> 100 over
+200M; PFSP 65 self / 20 past / 15 league (Nexto, Galactus, TM3 final; Nexto
+clamp 5-10%, Galactus <= 6%, TM3 <= 6% of all rollouts; f_hard = 1 - x with
+the variance form below x = 0.25). Team spirit 0.9 and TM7 spacing / far /
+concede_role unchanged; TM7's spacing / last-man / support ramps are held at
+their end values (they are relative to spirit_origin and would otherwise
+re-ramp from TM7's start values).
+
+The three user tweaks (Nov 19, 5:05 PM ET) on top of the v2 prototype:
+1. open-net gate loosened to the air-dribble audit's rule: team possession,
+   ball < 4000 uu from the attacked goal line, every living defender >= 200
+   uu behind the ball (relative to our attacking goal); x0.05 kept
+   (`[open_net] behind = 200`).
+2. clear_path 150 -> 300 (rest unchanged).
+3. shadow_cover 2.0 -> 1.5 (same ramp and kickoff x0.5).
+
+Deferred: zero-sum subtracted once after mixing (changes every term's scale;
+needs its own audit); multi-goal episodes (env change); raising the explicit
+double-commit penalty (already ~0.6% of reward; revisit after TM8's first
+evals); TeamMaxing; ETA roles (RLBot pack change); critic role one-hot
+(vendoring rlgymppo-model); a team_spirit schedule. Obs stays 270 and the
+action space is unchanged, so no RLBot pack change is needed.
+
+### Evidence
+
+Reward shares, % of sum |reward| after mixing, frozen TM7 40.88B, 480k steps,
+end-of-ramp weights (v2 = prototype before the tweaks, TM8 = final):
+
+| term | 1v1 TM7 / v2 / TM8 | 2v2 TM7 / v2 / TM8 | 3v3 TM7 / v2 / TM8 |
+|---|---|---|---|
+| clear_path | 0.33 / 0.39 / 0.77 | 0.24 / 0.36 / 0.69 | 0.15 / 0.22 / 0.51 |
+| shadow_cover | - | - / 5.72 / 4.22 | - / 5.99 / 4.40 |
+| airdribble | 3.33 / 3.41 / 3.25 | 1.06 / 0.98 / 1.00 | 0.55 / 0.50 / 0.52 |
+| airdribble_seq | 1.80 / 1.86 / 1.78 | 0.61 / 0.60 / 0.62 | 0.28 / 0.28 / 0.30 |
+| contact_quality | 5.75 / 2.44 / 2.41 | 3.23 / 1.23 / 1.21 | 2.36 / 0.92 / 0.93 |
+| goal | 24.75 / 26.38 / 26.69 | 25.72 / 25.40 / 27.10 | 24.02 / 23.05 / 25.37 |
+| touches / car-min | 44.5 / 44.8 / 44.8 | 13.3 / 13.5 / 13.7 | 7.14 / 7.16 / 7.32 |
+| deepest-car depth uu | 4822 / 4822 / 4823 | 2605 / 2606 / 2608 | 1555 / 1546 / 1548 |
+
+Open-net gate fire rate (scratch counter build, 240k steps): share of the
+gated terms' |reward| collected while the gate is open, loose (TM8) vs
+strict (v2): 1v1 5.2% vs 2.2% (car-steps 5.8% vs 1.7%), 2v2 3.0% vs 5.4%,
+3v3 1.9% vs 5.0%. The loose rule is ~2.4x broader in 1v1 but narrower in
+team modes (one wide goal-side defender blocks it). Code 5005500 adds
+`or_lane` (beaten by either rule; off in TM8): 1v1 4.3%, 2v2 6.1%, 3v3
+4.8% (240k-step audits, about +-1 point of noise). Turning it on is a
+one-line tm8.toml change (`[open_net] or_lane = true`) before TM8 starts.
+
+2M-step smoke from the TM7 40.88B checkpoint (self-play, 100 games per mode
+vs the start checkpoint; +-10 wins is noise): control (TM7 config) 2v2 56-44,
+3v3 53-47; TM8 v1 55-45, 44-55 (1 draw); v2 52-48, 46-54. Both TM8 arms trail
+the control in 3v3 by ~1 sigma each (watch item: h2h alarm). v2 3v3 pair800
+0.235 (ctl 0.244), double commit 0.017 (0.022), passes/min 1.75 (1.55).
+Touches and deepest-car depth flat in all arms (no passivity sign).
+
+### Spec
+
+Code 86e8858 + 5005500; binary
+/opt/dlami/nvme/ippo_bins/indococo-train-tm8-5005500 sha256
+544de3023bb184917ffc1d2edccbdb29f62369a3cbcdad73781d5c6f25a43ff3. Tests: lib 170 / bin 12 /
+reward_parity 33 / team_obs 1 / pred_obs 1 / obs_ext 1 passed; launch dry run
+(the launcher's train_tm.toml build, league + PFSP, 3 iterations) clean.
+tm8.toml (extends tm7.toml), train_tm8.toml, tm_TM8.env, team_launch_tm8.sh,
+tm8_window.sh, tm8_after_tm7.sh. RUN=TM8, warm start = TM7's last checkpoint
+at END (START_IS_TEAM=1, obs 270 copied as is), 5B steps, CHUNK 100M, 1 PPO
+epoch, no bf16, critic warm-up 20M, LR 5e-5 held to STEPS-1B then 1B cosine
+to 0.4x, nice 19. BT = team_best = TM6 final (exp_TM6/checkpoints/1795044069),
+read once at launch and asserted (BT_PIN) like TM7 pinned the TM4 cut.
+Fallback: if TM8 dies before its first chunk, tm8_window.sh continues TM7 as
+TM7r (TM7 binary, tm7.toml, train_tm7.toml) through team_launch_tm8.sh.
+TEAM_NO_FOLLOWUP stays set (no TM7r / TM8r chain); TEAM_QUEUE must be empty.
+
+PASSIVE_ALARM (any rule in the same mode for 2 mids in a row -> exp_TM8/PASSIVE_ALARM):
+TM7's rules and thresholds (passes/min 2v2 < 0.85, 3v3 < 1.30; deep last man
+2v2 > 0.56 / 3v3 > 0.73 with h2h < 0.48; Nexto 2v2 < 0.40, 3v3 < 0.20; near2
+2v2 < 0.06, 3v3 < 0.10; no-challenger > 1.5 x 0.0404 / 0.0329 = 0.061 /
+0.049), h2h vs BEST-team (TM6 final) < 0.50, plus passivity vs TM7's final
+(tm8_work/cut/passive_base.json, TM7 final vs TM6 final 200 games per mode
+with the TM8 binary, measured by the waiter at cut-over): touches per
+car-minute < 0.85 x base, or deepest-car distance to the own back wall <
+0.80 x base (the deepest car sits >20% deeper).
+
+Waiter tm8_after_tm7.sh (log tm8_work/cut/cutover.log): waits for TM7's
+latest checkpoint >= END, no TM7 trainer and exp_TM7/mid/<END>; BLOCKED and
+exit if TM7's launcher dies early or train.log has FATAL. Then TM8 in tmux
+ippo_team window tm8, the passivity baseline, push of
+checkpoints_to_test/tm7_<N>M.bpk (not promoted), TM7 finals after TM7's
+launcher exits (h2h vs TM6 400 per mode, Nexto / Necto 300 per mode, nice 19,
+cut/finals/finals.json), and the kickoff eval of TM8's first mid vs Nexto in
+2v2 / 3v3 (504 games each, tm8_audit_traces.py: same-pad rate, kickoff
+won / lost, first touch, goals within 8 s -> cut/kickoff/kickoff_eval.json;
+compare with the TM6 / TM7 rows of the team audit).
+
+### Watch
+
+3v3 h2h vs TM6 in the first mids (smoke dip); touches / depth vs the base;
+kickoff same-pad rate vs Nexto (TM7 3v3 71%); PFSP shares in train.log
+(Nexto should sit at its 5-10% clamp); clear_path share rising without
+fast-goal over-optimization (nullptr's warning).

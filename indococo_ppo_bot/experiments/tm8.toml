@@ -1,0 +1,93 @@
+# TM8 reward config (EXPERIMENTS.md "TM8 — Cross-exam note"). TM7
+# (tm7.toml) plus the TM8 audit fixes, the research-leg modifications and
+# the three user-approved tweaks (Nov 19 2026, 5:05 PM ET):
+# * shadow_cover 1.5: exactly-one goal-side cover for non-first cars (ball ->
+#   own-net line, ball-relative band), individual, 200M ramp (0.25 -> 1),
+#   x0.5 during the kickoff phase.
+# * zero-sum off for the role-gated approach terms (speed_to_ball, face_ball):
+#   it only handed non-first cars -mean(opponent first-man reward).
+# * roles: obs tie-break (matches the obs taker flag), a touch no longer
+#   bypasses the margin/hold hysteresis.
+# * kickoff: support_role / last_man_goalside / shadow_cover active at the
+#   pending kickoff, same-pad penalty (kickoff phase + 3 s), taker time
+#   penalty 0.1, energy / boost_keep / boost_change x0.25 in the kickoff phase.
+# * contact_quality 250 -> 100 over 200M (term_ramp 1.0 -> 0.4).
+# * air dribble: open-net gate x0.05 on airdribble / airdribble_seq /
+#   aerial_distance while the team has possession, the ball is < 4000 uu
+#   from the attacked goal line and every living defender is >= 200 uu
+#   behind the ball (the air-dribble audit's loose rule); any-touch counting;
+#   clear_path 300 once per possession, >= 1500 uu/s goalward, ball < 5000 uu
+#   from the net, +50% if the team scores within 2 s.
+# Team spirit 0.9 and TM7 spacing / far / concede_role unchanged (ramps held
+# at TM7's end values). Obs 270, action space unchanged.
+extends = "tm7.toml"
+
+[weights]
+shadow_cover = 1.5
+kickoff_same_pad = 0.5
+kickoff_taker = 0.1
+clear_path = 300.0
+
+[zero_sum]
+speed_to_ball = 0.0
+face_ball = 0.0
+
+[airdribble_seq]
+any_touch = true
+
+[clear_path]
+min_goalward = 1500.0
+max_dist = 5000.0
+once_per_possession = true
+any_touch = true
+goal_bonus = 0.5
+goal_window_s = 2.0
+
+[open_net]
+terms = ["airdribble", "airdribble_seq", "aerial_distance"]
+scale = 0.05
+max_dist = 4000.0
+lane_radius = 1100.0
+min_lead = 900.0
+behind = 200.0
+
+[team]
+kickoff_exempt = ["teammate_spacing", "double_commit", "teammate_far"]
+role_metrics = ["contact_quality", "speed_to_ball", "face_ball", "support_role", "last_man_goalside", "teammate_spacing", "teammate_far", "concede_role", "pass", "shadow_cover"]
+individual = [
+  "speed_to_ball", "face_ball", "energy", "boost_keep", "boost_change",
+  "aerial_boost", "in_air", "ang_vel", "safe_boost", "overextend",
+  "contact_quality", "recover", "double_commit",
+  "flip_reset", "flip_reset_use", "air_double_touch", "musty",
+  "teammate_spacing", "last_man_goalside", "shadow_box", "support_role",
+  "teammate_far", "concede_role",
+  "shadow_cover", "kickoff_same_pad", "kickoff_taker",
+]
+kickoff_pad_radius = 1500.0
+kickoff_pad_grace_s = 3.0
+kickoff_scale = { energy = 0.25, boost_keep = 0.25, boost_change = 0.25, shadow_cover = 0.5 }
+term_ramp = { contact_quality = [[0.0, 1.0], [200_000_000.0, 0.4]], shadow_cover = [[0.0, 0.25], [200_000_000.0, 1.0]] }
+
+[team.roles]
+obs_tiebreak = true
+touch_mode = "hysteresis"
+
+[team.spacing]
+kickoff_positioning = true
+# TM7's ramps are relative to spirit_origin, so a TM8 launch would re-ramp
+# spacing 2.0 -> 4.0, last_man 0.2 -> 0.3 and support_role 0 -> 0.2 over
+# 200M. Hold them at TM7's end values instead ("TM7 spacing unchanged").
+spacing_ramp = [[0.0, 1.0]]
+last_ramp = [[0.0, 1.0]]
+support_ramp = [[0.0, 1.0]]
+
+[team.cover]
+min_dist = 800.0
+max_dist = 4500.0
+net_gap = 600.0
+falloff = 600.0
+width = 700.0
+width_slope = 0.3
+covered_q = 0.3
+miss_penalty = 0.5
+at_kickoff = true
