@@ -3457,3 +3457,113 @@ Orange mirroring in the role, spacing and support code was checked and is correc
 5. Reduce energy's boost value and boost_keep at kickoff.
 6. Lower contact_quality (250 to ~100) or gate it to the first man.
 7. Longer-term: an ETA-based role/taker in obs, or a critic role one-hot. Any obs change needs a new RLBot pack export.
+
+## Air-dribble overuse audit (2026-11-19, read-only)
+
+User report (Nov 19): in 1v1, ST25 and TM6 air dribble after they have
+already beaten the defender, when a flick or a hard shot would score
+sooner. No training change; scripts in `tools/airdribble_audit/`, tables
+in `docs/airdribble_audit/summary_{strict,loose}.txt`.
+
+### Method
+
+1v1 trajectories via `TRAJ_DUMP` with the TM6 binary (`indococo-train-tm6-a922fb6`,
+greedy, kickoff, first goal wins, both sides): ST25 (`exp_ST25/checkpoints/1794413355`)
+vs Nexto 1000 g (89.7% won), ST25 self 1000 g, TM6 (`exp_TM6/checkpoints/1795044069`,
+`INDOCOCO_OBS_PRED=1`) vs Nexto 1000 g (90.7%), TM6 self 1000 g; ST25 vs Galactus
+from the existing `viz/positions/st25_vs_galactus.jsonl` (200 g, Python).
+"Beaten" (strict) = mech.rs `advantage_clear_lane`: we are last toucher within
+600 uu of the ball, lead >= 900 uu, nobody in the 1100 uu lane. Loose = defender
+>= 200 uu behind the ball. An episode starts at the first beaten step and ends on
+a goal, an opponent touch or 8 s; it is an air dribble (AD) when it has >= 2 air
+touches (ball z > 320, car z > 250).
+
+### Behaviour (strict)
+
+| Beaten, ball < 3000 uu from the net | AD n | AD goal | AD t_goal | no-AD n | no-AD goal | no-AD t_goal |
+|---|---|---|---|---|---|---|
+| ST25 vs Nexto | 62 | 35.5% | 2.9 s | 228 | 80.3% | 1.1 s |
+| ST25 self | 37 | 40.5% | 1.8 s | 158 | 69.6% | 0.5 s |
+| ST25 vs Galactus | 14 | 14.3% | 2.5 s | 22 | 36.4% | 1.5 s |
+| TM6 vs Nexto | 65 | 53.8% | 2.9 s | 326 | 79.8% | 1.1 s |
+| TM6 self | 39 | 51.3% | 1.4 s | 223 | 64.6% | 0.9 s |
+
+- ST25 turns 33% (vs Nexto), 39% (self) and 43% (Galactus) of beaten episodes into an
+  AD; TM6 21% (vs Nexto) and 33% (self). From a ground start ST25 vs Nexto converts
+  45.9% with an AD (5.5 s) vs 81.3% without (2.0 s); self 40% vs 75%.
+- AD episodes give the defender time back: vs Nexto 31% end in an opponent touch near
+  the net (no-AD 17%) and 34% stall 8 s without a result (no-AD 3%).
+- AD is not bad everywhere: from our own half (ball >= 6000 uu from the net) ST25 self
+  converts 41% with an AD vs 12% without, TM6 self 61% vs 45%. At 3000-6000 uu the two are
+  within noise. The overuse is in the attacking third. AD episodes also start 1.4-3.5k uu
+  farther out on average, so the all-distance comparison overstates the gap; use the
+  distance-bucketed rows.
+- Nexto almost never air dribbles (0.12 chains/min, air carry 0.9% of time; ST25 3.2/min,
+  20.5% of time vs Nexto, 11.9% in self-play; TM6 2.7/min, 15.1%).
+
+### Rewards (root causes, ranked)
+
+1. **AD shaping pays ~127 reward/s (~10.6% of a goal per second) and is not cut when the
+   lane is open.** ST25 = aud.toml: `airdribble` 50, `airdribble_seq` 50, `aerial_distance`
+   38 (experiments/aud.toml:12-15). Measured (last 50 iters, metrics.jsonl): `airdribble`
+   5.13 per carry step (77/s), `airdribble_seq` ~38/s, `aerial_distance` ~12/s. The trio is
+   46.5% of the positive non-zero-sum reward and 75% of a car's own goal reward per step
+   (0.92 vs 1.23); TM6 26% (35 / 35 / 38, tm2.toml:11-12). The only open-lane fade is
+   `advantage_ad_mult` (mech.rs:203-210): floor 0.25, linear to 3000 uu lead, so at the
+   measured 1.2-1.5k lead it is ~0.65. It is computed **once** at carry / chain start
+   (air_dribble.rs:241-251, air_dribble_sequence.rs:147-162), so a dribble started before
+   the defender was passed keeps x1.0 after he is beaten. `pressure_ad_mult` is 1.0 once
+   committed (mech.rs:228). The finish-zone fade only hits balls above ~500 uu
+   (air_dribble.rs:225), so a low carry at the net pays in full.
+2. **Delay is nearly free at gamma 0.998 and the goal is flat.** `goal` is +/-1200 with no
+   speed or time term (goal.rs:18; e8b2_1v1.toml:7). At 15 steps/s, gamma 0.998 costs
+   36/s of a sure goal in the first second (120 for 3.5 s), less than one second of AD
+   shaping (127/s). TM6 gamma 0.995: 87/s vs ~92/s of 1v1 AD shaping (TM6 weights).
+   With measured outcomes (ball < 3000 uu), shooting is still worth more, but the shaping
+   cancels 41-55% of the AD's conversion loss for ST25 (vs Nexto: shot 933 vs AD 391 + 220)
+   and 44-70% for TM6, so the advantage signal for "finish now" is small.
+3. **The finishing term is tiny and doesn't tell a dribble apart from a shot.**
+   `clear_path` 42 is 1.2% of positive shaping (25 per payout, 0.09% of steps). It pays any
+   touch in the open lane with >= 600 uu/s goalward (clear_path_finish.rs:25,51-59), so
+   AD touches at ~700 uu/s also collect it.
+4. **Practice mix.** ST25: 15% of episodes are `replay` snapshots (`fr7_snap/train.f32`,
+   11,786 FR6-era states recorded 0-1 s before a car is airborne under a high ball,
+   train.rs:2603-2607). Only 11% have the defender behind the ball and 2.6% an open lane in
+   the attacking half; there is no ground-breakaway / open-net setter. TM6: ~49% of episodes
+   are aerial or mechanic drills (aerial_pass 14%, backboard_double_tap 11.8%, replay 11%,
+   reset_shot 6%, musty 2.8%, air_near_ball 2.3%, air_reset 1.5%), with no per-mode
+   override in train_tm6.toml. The lineage (ADB `wall_air_dribble` 25% -> FR -> ST)
+   built the habit in, too.
+5. (Minor, unverified impact) `ball_touches` is the per-step CarHitBall count
+   (state.rs:181-185), but `airdribble_seq` and `clear_path` treat a touch as
+   `touches > prev` (air_dribble_sequence.rs:138, clear_path_finish.rs:45). A step with
+   the same or fewer hits than the previous step is not a touch.
+
+### Proposed fixes (not applied)
+
+Solo (next ST run) and TM8 (1v1 share; in 2v2/3v3 the AD terms are spirit-mixed, so the
+same gate also cuts teammates' open-net dribbles):
+1. **Live open-net gate** on `airdribble`, `airdribble_seq`, `aerial_distance`: each
+   step / touch, if `advantage_clear_lane` holds and the ball is within ~4000 uu (y) of the
+   net, scale by 0.1 (config keys, default off; min with the locked takeoff mult).
+   Expected: removes ~127/s exactly where AD converts 36-54% vs 65-80% for a shot. Leaves
+   contested and own-half ADs (where AD converts better) and every flip-reset / musty /
+   double-touch term untouched. Risk: low.
+2. **Make finishing pay.** Rework `clear_path` to one payout per possession (not per
+   touch), > 0 only above ~1500 uu/s goalward, ball < 5000 uu from the net, weight ~150
+   (+50% if the goal lands within 2 s). Optional goal-speed bonus (+<=25% of the goal at
+   >= 4000 uu/s). Expected: a first-time hard shot or flick from an open lane is worth
+   ~+150-190 over carrying it, and an AD finished with a flick still earns it. Risk:
+   low-percentage long blasts. The aim factor and the distance cap limit that.
+3. **`breakaway` setter**, 5-8% of starts: ball on the ground or bouncing 1500-4500 uu from
+   the attacked net, car just behind it moving goalward 1000-1800 uu/s, defender 1200-3000 uu
+   behind and out of the lane. Take it from `replay` (15% -> 10%) in ST. In TM8, take it
+   from aerial_pass / backboard_double_tap. Gate: re-run this audit, AD share of beaten
+   episodes < 3000 uu below 10% (now 21-43%), conversion >= 75%. Risk: fewer aerial reps,
+   so keep `replay` >= 10%.
+4. Fallback only (ST): AD weights 50/50/38 -> 35/35/27 (TM levels). TM6 at those weights and
+   gamma 0.995 uses AD in 21% (vs Nexto) of beaten episodes vs ST25's 33%. Risk: ADs are a
+   main weapon (72% of ST25's AD chains vs Nexto end in a goal), so cut globally only if
+   1-3 don't move the near-net AD share.
+5. Not recommended: lowering gamma for ST. It would make delay cost more, but it changes
+   every long-horizon behaviour (defence, boost).

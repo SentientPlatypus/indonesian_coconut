@@ -1,0 +1,64 @@
+## ST25_vs_Nexto  games 1000, air-carry 20.5% of time, AD chains 3.20/min (3.25 s, goal 0.716), beaten eps 471 (1.76/min), AD share of beaten 32.9%, AD-started-after-beaten 0.246
+   all                  AD: n=155 goal 0.497 t 4.33 opp 0.271        | noAD: n=316 goal 0.753 t 1.33 opp 0.19
+   ground start         AD: n=61 goal 0.459 t 5.53 opp 0.311         | noAD: n=91 goal 0.813 t 2.0 opp 0.132
+   ball <3000 from net  AD: n=62 goal 0.355 t 2.87 opp 0.306         | noAD: n=228 goal 0.803 t 1.07 opp 0.167
+   ground & <3000       AD: n=11 goal 0.091 t 5.2 opp 0.364          | noAD: n=46 goal 0.87 t 0.93 opp 0.13
+   3000-4500            AD: n=22 goal 0.545 t 3.33 opp 0.182         | noAD: n=36 goal 0.528 t 2.33 opp 0.389
+   4500-6000            AD: n=61 goal 0.541 t 5.53 opp 0.311         | noAD: n=50 goal 0.68 t 3.47 opp 0.16
+   >=6000               AD: n=10 goal 1.0 t 4.87 opp 0.0             | noAD: n=2 goal 1.0 t 4.73 opp 0.0
+## Nexto_vs_ST25  games 1000, air-carry 0.9% of time, AD chains 0.12/min (0.17 s, goal 0.032), beaten eps 51 (0.19/min), AD share of beaten 0.0%, AD-started-after-beaten None
+   all                  AD: n=0                                      | noAD: n=51 goal 0.588 t 2.0 opp 0.373
+   ground start         AD: n=0                                      | noAD: n=34 goal 0.588 t 1.67 opp 0.353
+   ball <3000 from net  AD: n=0                                      | noAD: n=21 goal 0.714 t 0.6 opp 0.286
+   ground & <3000       AD: n=0                                      | noAD: n=15 goal 0.733 t 0.53 opp 0.267
+   3000-4500            AD: n=0                                      | noAD: n=17 goal 0.588 t 2.6 opp 0.412
+   4500-6000            AD: n=0                                      | noAD: n=0
+   >=6000               AD: n=0                                      | noAD: n=13 goal 0.385 t 3.93 opp 0.462
+## TM6_vs_Nexto  games 1000, air-carry 15.1% of time, AD chains 2.74/min (2.29 s, goal 0.707), beaten eps 529 (2.30/min), AD share of beaten 21.2%, AD-started-after-beaten 0.149
+   all                  AD: n=112 goal 0.634 t 3.47 opp 0.161        | noAD: n=417 goal 0.779 t 1.33 opp 0.197
+   ground start         AD: n=28 goal 0.643 t 5.87 opp 0.179         | noAD: n=56 goal 0.75 t 0.8 opp 0.196
+   ball <3000 from net  AD: n=65 goal 0.538 t 2.93 opp 0.215         | noAD: n=326 goal 0.798 t 1.07 opp 0.19
+   ground & <3000       AD: n=10 goal 0.5 t 4.07 opp 0.3             | noAD: n=39 goal 0.769 t 0.2 opp 0.179
+   3000-4500            AD: n=20 goal 0.7 t 2.6 opp 0.1              | noAD: n=73 goal 0.726 t 2.13 opp 0.233
+   4500-6000            AD: n=21 goal 0.762 t 5.67 opp 0.095         | noAD: n=18 goal 0.667 t 3.6 opp 0.167
+   >=6000               AD: n=6 goal 1.0 t 4.73 opp 0.0              | noAD: n=0
+## Nexto_vs_TM6  games 1000, air-carry 1.0% of time, AD chains 0.14/min (0.11 s, goal 0.03), beaten eps 51 (0.22/min), AD share of beaten 0.0%, AD-started-after-beaten None
+   all                  AD: n=0                                      | noAD: n=51 goal 0.549 t 2.07 opp 0.392
+   ground start         AD: n=0                                      | noAD: n=32 goal 0.531 t 1.87 opp 0.438
+   ball <3000 from net  AD: n=0                                      | noAD: n=22 goal 0.545 t 1.33 opp 0.364
+   ground & <3000       AD: n=0                                      | noAD: n=16 goal 0.562 t 1.33 opp 0.375
+   3000-4500            AD: n=0                                      | noAD: n=8 goal 0.75 t 2.2 opp 0.25
+   4500-6000            AD: n=0                                      | noAD: n=3 goal 0.333 t 2.07 opp 0.667
+   >=6000               AD: n=0                                      | noAD: n=18 goal 0.5 t 4.0 opp 0.444
+## ST25_vs_Galactus  games 200, air-carry 9.4% of time, AD chains 1.88/min (2.49 s, goal 0.309), beaten eps 61 (0.93/min), AD share of beaten 42.6%, AD-started-after-beaten 0.295
+   all                  AD: n=26 goal 0.423 t 4.6 opp 0.423          | noAD: n=35 goal 0.457 t 2.6 opp 0.543
+   ground start         AD: n=9 goal 0.333 t 6.13 opp 0.444          | noAD: n=17 goal 0.471 t 2.87 opp 0.529
+   ball <3000 from net  AD: n=14 goal 0.143 t 2.53 opp 0.571         | noAD: n=22 goal 0.364 t 1.53 opp 0.636
+   ground & <3000       AD: n=3 goal 0.0 t None opp 0.333            | noAD: n=7 goal 0.286 t 1.67 opp 0.714
+   3000-4500            AD: n=3 goal 0.333 t 3.2 opp 0.667           | noAD: n=9 goal 0.667 t 3.0 opp 0.333
+   4500-6000            AD: n=1 goal 1.0 t 6.13 opp 0.0              | noAD: n=4 goal 0.5 t 3.0 opp 0.5
+   >=6000               AD: n=8 goal 0.875 t 5.07 opp 0.125          | noAD: n=0
+## Galactus_vs_ST25  games 200, air-carry 2.4% of time, AD chains 1.21/min (0.37 s, goal 0.38), beaten eps 45 (0.69/min), AD share of beaten 8.9%, AD-started-after-beaten None
+   all                  AD: n=4 goal 0.0 t None opp 0.75             | noAD: n=41 goal 0.732 t 2.0 opp 0.171
+   ground start         AD: n=0                                      | noAD: n=28 goal 0.786 t 1.87 opp 0.143
+   ball <3000 from net  AD: n=3 goal 0.0 t None opp 1.0              | noAD: n=19 goal 0.895 t 0.27 opp 0.105
+   ground & <3000       AD: n=0                                      | noAD: n=14 goal 0.929 t 0.2 opp 0.071
+   3000-4500            AD: n=0                                      | noAD: n=3 goal 0.667 t 2.87 opp 0.333
+   4500-6000            AD: n=0                                      | noAD: n=1 goal 1.0 t 3.47 opp 0.0
+   >=6000               AD: n=1 goal 0.0 t None opp 0.0              | noAD: n=18 goal 0.556 t 4.53 opp 0.222
+## ST25_self  games 2000, air-carry 11.9% of time, AD chains 2.03/min (3.08 s, goal 0.239), beaten eps 462 (0.34/min), AD share of beaten 39.0%, AD-started-after-beaten 0.147
+   all                  AD: n=180 goal 0.467 t 4.2 opp 0.178         | noAD: n=282 goal 0.567 t 1.27 opp 0.284
+   ground start         AD: n=40 goal 0.4 t 4.47 opp 0.325           | noAD: n=104 goal 0.75 t 1.53 opp 0.192
+   ball <3000 from net  AD: n=37 goal 0.405 t 1.8 opp 0.324          | noAD: n=158 goal 0.696 t 0.53 opp 0.209
+   ground & <3000       AD: n=7 goal 0.0 t None opp 0.714            | noAD: n=63 goal 0.746 t 0.47 opp 0.222
+   3000-4500            AD: n=13 goal 0.769 t 2.67 opp 0.231         | noAD: n=31 goal 0.903 t 2.0 opp 0.065
+   4500-6000            AD: n=9 goal 1.0 t 3.0 opp 0.0               | noAD: n=12 goal 1.0 t 3.07 opp 0.0
+   >=6000               AD: n=121 goal 0.413 t 5.07 opp 0.14         | noAD: n=81 goal 0.123 t 4.4 opp 0.556
+## TM6_self  games 2000, air-carry 9.4% of time, AD chains 1.99/min (1.98 s, goal 0.258), beaten eps 586 (0.61/min), AD share of beaten 32.9%, AD-started-after-beaten 0.184
+   all                  AD: n=193 goal 0.637 t 3.67 opp 0.192        | noAD: n=393 goal 0.623 t 1.53 opp 0.341
+   ground start         AD: n=62 goal 0.581 t 4.2 opp 0.21           | noAD: n=129 goal 0.752 t 2.07 opp 0.233
+   ball <3000 from net  AD: n=39 goal 0.513 t 1.4 opp 0.282          | noAD: n=223 goal 0.646 t 0.87 opp 0.318
+   ground & <3000       AD: n=7 goal 0.143 t 4.47 opp 0.571          | noAD: n=65 goal 0.692 t 0.8 opp 0.308
+   3000-4500            AD: n=23 goal 0.739 t 2.73 opp 0.217         | noAD: n=51 goal 0.725 t 2.13 opp 0.235
+   4500-6000            AD: n=32 goal 0.812 t 3.27 opp 0.156         | noAD: n=32 goal 0.781 t 2.73 opp 0.188
+   >=6000               AD: n=99 goal 0.606 t 4.4 opp 0.162          | noAD: n=87 goal 0.448 t 4.2 opp 0.517
