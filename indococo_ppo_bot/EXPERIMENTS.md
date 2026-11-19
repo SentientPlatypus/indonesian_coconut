@@ -3359,3 +3359,30 @@ until TM6 reaches 37956.7M with a normal exit, then starts TM7 in tmux
 `checkpoints_to_test/tm6_<N>M.bpk` (not promoted) and runs TM6 finals at nice 19.
 `TEAM_NO_FOLLOWUP` is set, so TM6 does not chain into TM6r. Untested
 fallbacks, if 2v2 regresses: TM7 minus teammate_far, or TM6 spacing plus far.
+
+## TM6 results: team BEST = TM6 final (2026-11-18)
+
+Final checkpoint `exp_TM6/checkpoints/1795044069` (37886.6M steps; selected as the best mid-eval chunk, score 0.563; training ended at 37956.8M, `exp_TM6/checkpoints/1795045952`, which is also TM7's warm start). Exported latest as `checkpoints_to_test/tm6_37957M.bpk` @ 150f7c5 (the end-of-run model, not the selected finals candidate). Team gate (`tm6_final/TEAM_PROMOTE.json`, recommendation only) said promote (score 0.537). The user approved it on 2026-11-18 at 8:23 PM ET, and `team_best/FINAL_CKPT` was switched by hand at 8:29 PM ET to the TM6 final. The previous value, the TM4 cut `exp_TM4/checkpoints/1794862892`, is kept in `team_best/HISTORY`. Finals are in `~/ippo_runs/tm6_final/`. All games are decisive (0 draws).
+
+| Eval | TM6 final | Old team BEST (TM4 cut) |
+|---|---|---|
+| h2h 2v2 vs old BEST (504 games) | **57.9%** (292-212) | - |
+| h2h 3v3 vs old BEST (504 games) | **60.3%** (304-200) | - |
+| Nexto 2v2 (504) | **54.0%** (272-232) | 52.2% (263-241) |
+| Nexto 3v3 (504) | **38.5%** (194-310) | 28.6% (144-360) |
+| Necto 2v2 (504) | **90.9%** (458-46) | 87.9% (443-61) |
+| Necto 3v3 (504) | **90.3%** (455-49) | 81.3% (410-94) |
+| Galactus 2v2 (256) | 7.8% (20-236) | 7.8% (20-236) |
+| Galactus 3v3 (256) | 7.8% (20-236) | 5.5% (14-242) |
+| Galactus 1v1 (504) | 42.9% (216-288) | - |
+| Megabyte 2v2 (256) | 12.5% (32-224) | - |
+| 1v1 vs ST25 (504) | 51.8% (261-243) | - |
+
+Team stats from the h2h finals (TM6 final vs TM4 cut):
+
+- 2v2: pair800 0.138 vs 0.199, near2 0.187 vs 0.253, no-challenger 0.049 vs 0.049, passes/min 1.10 vs 1.04, role swaps/min 8.67 vs 9.50, last man back 0.916 vs 0.876, double commit 1.9% vs 2.7%.
+- 3v3: pair800 0.280 vs 0.369, near2 0.289 vs 0.359, no-challenger 0.035 vs 0.039, passes/min 1.63 vs 1.67, role swaps/min 14.06 vs 15.14, last man back 0.963 vs 0.936, double commit 2.8% vs 3.7%.
+
+Spacing improved vs the TM4 cut but remains well above Nexto (0.06 / 0.13).
+
+TM7 was already running and read `$BT` (the TM4 cut, `exp_TM4/checkpoints/1794862892`) at its start. `team_launch_tm7.sh` also asserts `$BT` must stay that path, so a TM7 restart will refuse rather than silently switch to TM6. TM7's remaining mids, the 2-chunk guard and the PASSIVE_ALARM (h2h vs BEST-team < 0.50 for 2 mids) therefore still compare against the TM4 cut. The switch applies from TM8 (or the next launcher started without that pin). TM7 itself was not modified, restarted, or swapped. The TM6 final is 270-wide and is not in the RLBot pack.
