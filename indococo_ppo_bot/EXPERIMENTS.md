@@ -3735,3 +3735,27 @@ compare with the TM6 / TM7 rows of the team audit).
 kickoff same-pad rate vs Nexto (TM7 3v3 71%); PFSP shares in train.log
 (Nexto should sit at its 5-10% clamp); clear_path share rising without
 fast-goal over-optimization (nullptr's warning).
+
+## TM7 results: team BEST = TM7 final (2026-11-20)
+
+Final checkpoint `exp_TM7/checkpoints/1795170349` (42956.9M steps; last checkpoint at END, also TM8's warm start and `checkpoints_to_test/tm7_42957M.bpk` @ d12b8ca). The launcher's 504-game panel (`tm7_final/`) used the selected mid-eval chunk `exp_TM7/checkpoints/1795156750` (42385.7M; team gate score 0.5735) and compared h2h against the TM4 cut, because `team_launch_tm7.sh` had pinned `$BT` to that path at TM7's start. After the launcher exited, `tm8_after_tm7.sh` ran a second panel on the END checkpoint vs the current team BEST (TM6 final, `exp_TM6/checkpoints/1795044069`) at `/opt/dlami/nvme/tm8_work/cut/finals/` (h2h 400 games per mode, Nexto / Necto 300). Team gate (`tm7_final/TEAM_PROMOTE.json`, recommendation only) said promote (score 0.5735). The user approved it on 2026-11-20 at 2:30 PM ET, and `team_best/FINAL_CKPT` was switched by hand to the TM7 END checkpoint. The previous value, the TM6 final `exp_TM6/checkpoints/1795044069`, is kept in `team_best/HISTORY` and remains on disk (TM8's BT and a league opponent). All games are decisive (0 draws).
+
+| Eval | TM7 final (42956.9M) | Old team BEST (TM6 final) |
+|---|---|---|
+| h2h 2v2 vs old BEST (400 games) | **53.0%** (212-188) | - |
+| h2h 3v3 vs old BEST (400 games) | **55.75%** (223-177) | - |
+| Nexto 2v2 (300) | **53.0%** (159-141) | - |
+| Nexto 3v3 (300) | **36.3%** (109-191) | - |
+| Necto 2v2 (300) | **95.3%** (286-14) | - |
+| Necto 3v3 (300) | **89.0%** (267-33) | - |
+
+Team stats from the h2h finals (TM7 final vs TM6 final, 400 games):
+
+- 2v2: pair800 0.115 vs 0.144, near2 0.160 vs 0.192, no-challenger 0.049 vs 0.048, passes/min 1.10 vs 1.13, role swaps/min 8.87 vs 8.92, last man back 0.923 vs 0.908, double commit 1.5% vs 1.9%.
+- 3v3: pair800 0.234 vs 0.287, near2 0.247 vs 0.295, no-challenger 0.037 vs 0.040, passes/min 1.77 vs 1.59, role swaps/min 13.70 vs 14.78, last man back 0.968 vs 0.952, double commit 2.1% vs 2.7%.
+
+Spacing improved vs the TM6 final in both modes (pair800 and near2 down) and is still well above Nexto (0.06 / 0.13).
+
+The launcher panel (`tm7_final/`, 42385.7M vs the TM4 cut, 504 games unless noted) is kept for the record: h2h 2v2 **60.5%** (305-199), h2h 3v3 **68.5%** (345-159); Nexto 2v2 58.9% (297-207) vs TM4 48.4%, Nexto 3v3 38.9% (196-308) vs TM4 22.8%; Necto 2v2 92.5% (466-38) vs TM4 88.7%, Necto 3v3 91.1% (459-45) vs TM4 80.2%; Galactus 2v2 10.5% (27-229 of 256) vs TM4 8.6%, Galactus 3v3 9.4% (24-232 of 256) vs TM4 5.1%; Galactus 1v1 47.2% (238-266); Megabyte 2v2 9.0% (23-233 of 256); 1v1 vs ST25 51.6% (260-244).
+
+TM8 was already running and read `$BT` (the TM6 final, `exp_TM6/checkpoints/1795044069`) at its start. `team_launch_tm8.sh` also asserts `$BT` must stay that path, so a TM8 restart will refuse rather than silently switch to TM7. TM8's remaining mids, the 2-chunk guard and the PASSIVE_ALARM (h2h vs BEST-team < 0.50 for 2 mids) therefore still compare against the TM6 final. The switch applies from TM9 (or the next launcher started without that pin). TM8 itself was not modified, restarted, or swapped; its BT stays pinned to TM6 (intentional). `TEAM_NO_FOLLOWUP` is set. The TM7 final is 270-wide and is not in the RLBot pack.
