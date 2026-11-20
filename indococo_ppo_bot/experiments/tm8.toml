@@ -14,8 +14,10 @@
 # * contact_quality 250 -> 100 over 200M (term_ramp 1.0 -> 0.4).
 # * air dribble: open-net gate x0.05 on airdribble / airdribble_seq /
 #   aerial_distance while the team has possession, the ball is < 4000 uu
-#   from the attacked goal line and every living defender is >= 200 uu
-#   behind the ball (the air-dribble audit's loose rule); any-touch counting;
+#   from the attacked goal line and the defence is beaten by EITHER rule:
+#   every living defender >= 200 uu behind the ball (the air-dribble audit's
+#   loose rule) OR the clear-lane rule (or_lane = true, user Nov 19 9:28 PM
+#   ET); any-touch counting;
 #   clear_path 300 once per possession, >= 1500 uu/s goalward, ball < 5000 uu
 #   from the net, +50% if the team scores within 2 s.
 # Team spirit 0.9 and TM7 spacing / far / concede_role unchanged (ramps held
@@ -50,6 +52,8 @@ max_dist = 4000.0
 lane_radius = 1100.0
 min_lead = 900.0
 behind = 200.0
+# User decision Nov 19 2026, 9:28 PM ET: either rule opens the gate (behind >= 200 uu OR the clear-lane rule).
+or_lane = true
 
 [team]
 kickoff_exempt = ["teammate_spacing", "double_commit", "teammate_far"]

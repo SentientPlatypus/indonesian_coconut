@@ -3641,7 +3641,8 @@ The three user tweaks (Nov 19, 5:05 PM ET) on top of the v2 prototype:
 1. open-net gate loosened to the air-dribble audit's rule: team possession,
    ball < 4000 uu from the attacked goal line, every living defender >= 200
    uu behind the ball (relative to our attacking goal); x0.05 kept
-   (`[open_net] behind = 200`).
+   (`[open_net] behind = 200`). Superseded Nov 19 9:28 PM ET by the
+   either-rule gate (`or_lane = true`, see Evidence).
 2. clear_path 150 -> 300 (rest unchanged).
 3. shadow_cover 2.0 -> 1.5 (same ramp and kickoff x0.5).
 
@@ -3673,9 +3674,15 @@ gated terms' |reward| collected while the gate is open, loose (TM8) vs
 strict (v2): 1v1 5.2% vs 2.2% (car-steps 5.8% vs 1.7%), 2v2 3.0% vs 5.4%,
 3v3 1.9% vs 5.0%. The loose rule is ~2.4x broader in 1v1 but narrower in
 team modes (one wide goal-side defender blocks it). Code 5005500 adds
-`or_lane` (beaten by either rule; off in TM8): 1v1 4.3%, 2v2 6.1%, 3v3
-4.8% (240k-step audits, about +-1 point of noise). Turning it on is a
-one-line tm8.toml change (`[open_net] or_lane = true`) before TM8 starts.
+`or_lane` (beaten by either rule): 1v1 4.3%, 2v2 6.1%, 3v3 4.8%
+(240k-step audits, about +-1 point of noise).
+
+**Decision (user, Nov 19 2026, 9:28 PM ET): `or_lane` enabled for TM8.**
+The gate now fires when EITHER the >= 200 uu behind-ball rule OR the
+clear-lane rule holds (`[open_net] behind = 200, or_lane = true` in
+tm8.toml), ~4.3% / 6.1% / 4.8% of the gated air-dribble reward in
+1v1 / 2v2 / 3v3. Same binary (indococo-train-tm8-5005500 already has
+`or_lane`); config-only change, made before TM8 started.
 
 2M-step smoke from the TM7 40.88B checkpoint (self-play, 100 games per mode
 vs the start checkpoint; +-10 wins is noise): control (TM7 config) 2v2 56-44,
