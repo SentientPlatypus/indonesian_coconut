@@ -3896,8 +3896,8 @@ stop-the-arming bug was found.
 
 ### Spec
 
-Code @COMMIT@; binary /opt/dlami/nvme/ippo_bins/indococo-train-tm9-@SHA@
-sha256 @SHA256@. Tests: lib 176 / bin 12 / reward_parity 33 / team_obs 1
+Code fb49992; binary /opt/dlami/nvme/ippo_bins/indococo-train-tm9-fb49992
+sha256 125aca14679d32ea470506fe97535223e54ffa8acbad623d53874e4585af4c57. Tests: lib 176 / bin 12 / reward_parity 33 / team_obs 1
 / pred_obs 1 / obs_ext 1 passed (unit tests cover 2v2 one_corner no-op,
 3v3 any-own-corner penalty, orange `attack_sign` mirroring, mid-pad ok,
 and tm9.toml parse / hold ramps). Smoke: 2.0M steps per arm (8 x 250k),

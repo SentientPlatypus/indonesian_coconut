@@ -35,8 +35,8 @@
 set -u
 R=/home/ubuntu/ippo_runs; X8=$R/exp_TM8; X9=$R/exp_TM9; C=$R/code_tm/indococo_ppo_bot/experiments
 REPO=/opt/dlami/nvme/ic_ppo; D=/opt/dlami/nvme/tm9_work/cut; F=$D/finals; K=$D/kickoff
-B9=${B9:-/opt/dlami/nvme/ippo_bins/indococo-train-tm9-PLACEHOLDER}
-B9SHA=${B9SHA:-PLACEHOLDER_SHA}
+B9=${B9:-/opt/dlami/nvme/ippo_bins/indococo-train-tm9-fb49992}
+B9SHA=${B9SHA:-125aca14679d32ea470506fe97535223e54ffa8acbad623d53874e4585af4c57}
 CORES=${CORES:-28-31}
 TM7=$R/exp_TM7/checkpoints/1795170349
 TM6=$R/exp_TM6/checkpoints/1795044069

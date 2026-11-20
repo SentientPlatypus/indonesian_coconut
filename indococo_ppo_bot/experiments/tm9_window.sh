@@ -11,7 +11,7 @@
 set -u
 ck=$1
 R=/home/ubuntu/ippo_runs; C=$R/code_tm/indococo_ppo_bot/experiments; D=/opt/dlami/nvme/tm9_work/cut
-B9=${B9:-/opt/dlami/nvme/ippo_bins/indococo-train-tm9-PLACEHOLDER}
+B9=${B9:-/opt/dlami/nvme/ippo_bins/indococo-train-tm9-fb49992}
 B8=/opt/dlami/nvme/ippo_bins/indococo-train-tm8-5005500
 cd $R
 RUN=TM9 VARIANT=TM9 START_CK=$ck START_IS_TEAM=1 B0=$B9 bash $C/team_launch_tm9.sh 2>&1 | tee -a $R/team_driver.log
