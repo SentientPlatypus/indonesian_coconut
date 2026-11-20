@@ -234,8 +234,16 @@ pub struct TeamRewardConfig {
     /// the first kickoff touch it stays on (s).
     pub kickoff_pad_radius: f64,
     pub kickoff_pad_grace_s: f64,
+    /// TM9: if set, `kickoff_scale` ([`PhaseScale`]) uses this grace (s)
+    /// instead of `kickoff_grace_s`. `kickoff_exempt` still uses
+    /// `kickoff_grace_s`. None = `kickoff_grace_s`.
+    pub kickoff_scale_grace_s: Option<f64>,
+    /// TM9: at most one non-taker may take or head to an own-corner big pad
+    /// during the kickoff phase (2v2 is a no-op).
+    pub kickoff_one_corner: bool,
     /// TM8: `{term: scale}` multipliers during the kickoff phase (pending +
-    /// `kickoff_grace_s`); e.g. energy / boost_keep 0.25.
+    /// `kickoff_grace_s`, or `kickoff_scale_grace_s` when set); e.g. energy /
+    /// boost_keep 0.25.
     pub kickoff_scale: BTreeMap<String, f64>,
     /// TM8: `{term: [[step, scale], ...]}` per-term schedules relative to
     /// `spirit_origin` (e.g. contact_quality 1.0 -> 0.4 over 200M).
@@ -290,6 +298,8 @@ impl Default for TeamRewardConfig {
             cover: CoverParams::default(),
             kickoff_pad_radius: 1500.0,
             kickoff_pad_grace_s: 3.0,
+            kickoff_scale_grace_s: None,
+            kickoff_one_corner: false,
             kickoff_scale: BTreeMap::new(),
             term_ramp: BTreeMap::new(),
         }
@@ -684,7 +694,7 @@ impl RewardConfig {
             ("teammate_far", w.teammate_far, Box::new(TeammateFar::new(tm.spacing.clone(), role_p.clone()))),
             ("concede_role", w.concede_role, Box::new(ConcedeRole::new(tm.concede_role.clone(), role_p.clone()))),
             ("shadow_cover", w.shadow_cover, Box::new(ShadowCover::new(tm.cover.clone(), role_p.clone()))),
-            ("kickoff_same_pad", w.kickoff_same_pad, Box::new(KickoffSamePad::new(tm.kickoff_pad_radius, role_p.clone(), (tm.kickoff_pad_grace_s * crate::consts::STEPS_PER_SECOND).round().max(0.0) as u32))),
+            ("kickoff_same_pad", w.kickoff_same_pad, Box::new(KickoffSamePad::new_with(tm.kickoff_pad_radius, role_p.clone(), (tm.kickoff_pad_grace_s * crate::consts::STEPS_PER_SECOND).round().max(0.0) as u32, tm.kickoff_one_corner))),
             ("kickoff_taker", w.kickoff_taker, Box::new(KickoffTaker::new(role_p.clone()))),
         ];
         terms.extend(
@@ -712,6 +722,7 @@ impl RewardConfig {
             }
         }
         let grace = (tm.kickoff_grace_s * crate::consts::STEPS_PER_SECOND).round().max(0.0) as u32;
+        let scale_grace = (tm.kickoff_scale_grace_s.unwrap_or(tm.kickoff_grace_s) * crate::consts::STEPS_PER_SECOND).round().max(0.0) as u32;
         let terms: Vec<Term> = terms
             .into_iter()
             .map(|(name, weight, reward)| {
@@ -725,7 +736,7 @@ impl RewardConfig {
                     reward = Box::new(OpenNetGate::new(reward, self.open_net.clone()));
                 }
                 if let Some(&s) = tm.kickoff_scale.get(name) {
-                    reward = Box::new(PhaseScale::new(reward, grace, s));
+                    reward = Box::new(PhaseScale::new(reward, scale_grace, s));
                 }
                 if let Some(pts) = tm.term_ramp.get(name) {
                     reward = Box::new(TermRamp::new(reward, abs(pts)));
@@ -1214,5 +1225,30 @@ mod extends_tests {
         let _ = b.step_view(&g1);
         assert!(get(&b, "concede_role").iter().all(|x| *x == 0.0));
         assert!(get(&b, "teammate_far").iter().all(|x| *x == 0.0));
+    }
+
+    /// TM9: tm8 plus kickoff_same_pad 5.0, kickoff_one_corner, boost-scale
+    /// grace 3s, contact_quality baked to 100, term_ramp held at 1.0.
+    /// tm8.toml keeps the pre-TM9 defaults.
+    #[test]
+    fn tm9_holds_tm8_end_ramps_and_one_corner() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm9.toml")).unwrap();
+        assert_eq!(c.weights.kickoff_same_pad, 5.0);
+        assert_eq!(c.weights.contact_quality, 100.0);
+        assert!(c.team.kickoff_one_corner);
+        assert_eq!(c.team.kickoff_scale_grace_s, Some(3.0));
+        assert_eq!(c.team.kickoff_grace_s, 1.0);
+        assert_eq!(c.team.kickoff_pad_grace_s, 3.0);
+        assert_eq!(c.team.term_ramp.get("contact_quality"), Some(&vec![[0.0, 1.0]]));
+        assert_eq!(c.team.term_ramp.get("shadow_cover"), Some(&vec![[0.0, 1.0]]));
+        assert_eq!(c.team.spirit, vec![[0.0, 0.9]]);
+        let names: Vec<_> = c.build().terms.iter().map(|t| t.name).collect();
+        assert!(names.contains(&"kickoff_same_pad"), "{names:?}");
+        let tm8 = RewardConfig::from_file(&dir.join("tm8.toml")).unwrap();
+        assert!(!tm8.team.kickoff_one_corner);
+        assert_eq!(tm8.team.kickoff_scale_grace_s, None);
+        assert_eq!(tm8.weights.kickoff_same_pad, 0.5);
+        assert_eq!(tm8.weights.contact_quality, 250.0);
     }
 }

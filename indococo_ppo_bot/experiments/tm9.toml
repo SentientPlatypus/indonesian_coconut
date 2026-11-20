@@ -1,0 +1,34 @@
+# TM9 reward config (EXPERIMENTS.md "TM9 — Cross-exam note"). TM8
+# (tm8.toml) plus the 3v3 kickoff same-pad / one-corner fix. Approved by the
+# user Nov 20 2026, 3:58 PM ET: "Yes, build TM9 as proposed and arm it to
+# start when TM8 finishes".
+# * kickoff_same_pad 0.5 -> 5.0 (still individual, not zero-sum). The TM8
+#   0.5 weight was ~-13.5 over a typical 1.8 s overlap, less than ~10 s of
+#   extra boost_keep after collecting a 100 pad (weight 5.0).
+# * kickoff_one_corner: at most one non-taker may take or head to an
+#   own-corner big pad during the kickoff phase. Once one has claimed a
+#   corner (inside kickoff_pad_radius of an own-corner pad), the other is
+#   penalized for heading to ANY own-corner pad. 2v2 (one non-taker) is a
+#   no-op, so the working 2v2 corner-boost habit is kept. Left/right locking
+#   was skipped (it would send a same-side center spawn across the field;
+#   Nexto's second non-taker cheats or takes small pads).
+# * kickoff_scale_grace_s = 3.0: energy / boost_keep / boost_change stay at
+#   x0.25 for the same 3 s grace as the pad term. Spacing / double_commit /
+#   teammate_far exemptions stay at kickoff_grace_s = 1 s.
+# * term_ramp flattened at the TM8 end values: contact_quality weight baked
+#   to 100 (was 250 x ramp 0.4) with ramp 1.0; shadow_cover ramp held at 1.0
+#   (weight 1.5). A new spirit_origin would otherwise re-ramp them.
+# Team spirit stays [[0.0, 0.9]] (tm2.toml). Obs 270, action space, PFSP,
+# setters and the rest of TM8 unchanged.
+extends = "tm8.toml"
+
+[weights]
+kickoff_same_pad = 5.0
+# Baked TM8 end-of-ramp value (base was 250, term_ramp ended at 0.4).
+contact_quality = 100.0
+
+[team]
+kickoff_one_corner = true
+kickoff_scale_grace_s = 3.0
+# Hold TM8 end-of-ramp scales (relative to the new spirit_origin).
+term_ramp = { contact_quality = [[0.0, 1.0]], shadow_cover = [[0.0, 1.0]] }

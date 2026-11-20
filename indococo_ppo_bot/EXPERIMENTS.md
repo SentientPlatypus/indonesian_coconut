@@ -3759,3 +3759,195 @@ Spacing improved vs the TM6 final in both modes (pair800 and near2 down) and is 
 The launcher panel (`tm7_final/`, 42385.7M vs the TM4 cut, 504 games unless noted) is kept for the record: h2h 2v2 **60.5%** (305-199), h2h 3v3 **68.5%** (345-159); Nexto 2v2 58.9% (297-207) vs TM4 48.4%, Nexto 3v3 38.9% (196-308) vs TM4 22.8%; Necto 2v2 92.5% (466-38) vs TM4 88.7%, Necto 3v3 91.1% (459-45) vs TM4 80.2%; Galactus 2v2 10.5% (27-229 of 256) vs TM4 8.6%, Galactus 3v3 9.4% (24-232 of 256) vs TM4 5.1%; Galactus 1v1 47.2% (238-266); Megabyte 2v2 9.0% (23-233 of 256); 1v1 vs ST25 51.6% (260-244).
 
 TM8 was already running and read `$BT` (the TM6 final, `exp_TM6/checkpoints/1795044069`) at its start. `team_launch_tm8.sh` also asserts `$BT` must stay that path, so a TM8 restart will refuse rather than silently switch to TM7. TM8's remaining mids, the 2-chunk guard and the PASSIVE_ALARM (h2h vs BEST-team < 0.50 for 2 mids) therefore still compare against the TM6 final. The switch applies from TM9 (or the next launcher started without that pin). TM8 itself was not modified, restarted, or swapped; its BT stays pinned to TM6 (intentional). `TEAM_NO_FOLLOWUP` is set. The TM7 final is 270-wide and is not in the RLBot pack.
+
+## TM9 — Cross-exam note: 3v3 kickoff same-pad / one-corner (staged 2026-11-20, auto-starts after TM8)
+
+User report (Nov 20): TM8's kickoff same-pad fix is 0% in 2v2 vs Nexto and
+still 67% in 3v3; 2v2 non-takers go to the own-corner pad even more than
+TM7, and 3v3 first-touch / 1.5 s W/L vs Nexto did not recover. Sources:
+the TM8 first-mid kickoff eval (`tm8_work/cut/kickoff/kickoff_eval.json`,
+ckpt 1795173441) and the TM6/TM7 team audit. Approved by the user Nov 20
+2026, 3:58 PM ET: "Yes, build TM9 as proposed and arm it to start when TM8
+finishes". TM8 is not touched (no binary swap, no config or script edit);
+TM9 warm-starts from TM8's last checkpoint at its 5B END (47,956.9M, not a
+mid-best).
+
+### Cross-exam (three legs, per the Nov 12 rule)
+
+- **Discord (read-only):** The kickoff split and the obs "you should go
+  for the kickoff" flag (PigMasta / the TM8 taker-flag work) are real
+  evidence that taker vs non-taker disagreement, not just a missing pad
+  penalty, can wreck a kickoff; TM8 already shares the RoleTracker
+  tie-break with the obs taker flag, and this run does not reopen that.
+  TeamMaxing (max over teammates instead of a mean blend) was raised as
+  a way to stop a weak kickoff role from being averaged away, with the
+  caveat that it is a 2v2-shaped idea: past 2v2, max(team) can hide a
+  lingering third man and conflict with team_spirit 0.9, the Vermatten
+  passivity risk. The pad-order hazard is the orange-side boost-pad
+  list: timers are 180°-mirrored by reversing the rlgym-order list, and
+  a typo or a missing RocketSim small pad would silently mis-bind an
+  orange timer (sanity-checked below; not a stop). Galactus remains the
+  yardstick for whether a team change is real, not just a Nexto-kickoff
+  overfit; mid and final hooks keep the Galactus games, and this run
+  does not retune the PFSP Galactus clamp.
+- **Outside research:** The durable kickoff fix in the literature and in
+  other bots is job / pad *assignment* (who takes, who cheats, who
+  gets which pad) rather than a post-hoc overlap slap. Exclusive
+  left/right locking is the obvious assignment rule; it was considered
+  and skipped (below). A small positive cheat / small-pad term for the
+  uncapped non-taker, a kickoff job in the obs, ETA roles, and a
+  TeamMaxing aggregator stay on the defer list. Zero-sum subtracted
+  once after mixing, multi-goal episodes, a stronger explicit
+  double-commit penalty, critic role one-hot (vendoring rlgymppo-model),
+  and a team_spirit schedule stay deferred from the TM8 note.
+- **Code + logs (scratch worktree, no trainer touch):** 2v2 same-pad
+  0% is a no-op, not a successful fix. `KickoffSamePad` only penalizes a
+  pair of living teammates when neither is First, and the audit metric
+  `same_pad_two_nontakers` is False unless there are two non-takers, so
+  2v2 cannot fire. `same_big_pad_two_cars` was already 0% on TM6 and TM7
+  2v2 vs Nexto (the taker goes to the ball). The 2v2 "fix" was never
+  evidenced; own-corner taking rose TM6 48.5% -> TM7 83.5% -> TM8 91.7%
+  and transfers into 3v3 (mode_mix 0.35 of training is 2v2). In 3v3 the
+  TM8 penalty does fire: every one of 338 same-pad metric events on the
+  TM8 vs Nexto traces also had a simultaneous 1500 uu overlap (median
+  27 steps, ~1.8 s). Weight 0.5 is drowned by `boost_keep` 5.0: -0.5 /
+  step for 1.8 s is about -13.5, while 33 -> 100 boost is about +0.142 /
+  step after `kickoff_scale` ends, already +21 in ~10 s. Grace mismatch:
+  the pad term stays on for 3 s after the first touch, but energy /
+  boost_keep / boost_change return to full weight at 1 s, which favors
+  the pad collector for the last 2 s of the penalty. Nexto almost never
+  sends a non-taker to a big own corner (small pads ~60%, cheat ~30%,
+  big_own_corner 1.9%).
+
+### Reconciliation (what TM9 does)
+
+- `kickoff_same_pad` 0.5 -> 5.0, still individual (no team_spirit blend,
+  not zero-sum). Same 1500 uu radius and 3 s pad grace. A typical 1.8 s
+  overlap is now about -135, larger than a short burst of boost_keep.
+- New knob `team.kickoff_one_corner = true`: at most one non-taker may
+  take or head to an own-corner big pad during the kickoff phase. The
+  first non-taker inside the radius of an own-corner pad (`pad.y *
+  attack_sign < 0` and `|y| > 2000`) is the claimant; any other
+  non-taker heading to *any* own-corner (inside the radius, or closing
+  > 200 uu/s on either own-corner, not only the nearest) is then paid
+  -1 (weight 5.0). 2v2 (one non-taker) is a no-op, so the working 2v2
+  corner-boost habit is kept; the original same-pad term stays as a
+  backstop. 1v1 is also a no-op.
+- `kickoff_scale_grace_s = 3.0` for the boost `PhaseScale` only (energy,
+  boost_keep, boost_change stay at x0.25, shadow_cover at x0.5, for the
+  same 3 s as the pad term). Spacing / double_commit / teammate_far
+  `kickoff_exempt` stays at `kickoff_grace_s = 1 s`.
+- Flatten `term_ramp` at the TM8 end values: `contact_quality` weight
+  baked to 100 (the e8b2 base is 250, TM8's ramp ended at 0.4, so a
+  naive flatten to 1.0 with the base 250 would have restored 250) and
+  ramp [[0.0, 1.0]]; `shadow_cover` ramp held at 1.0 (weight 1.5). A new
+  `spirit_origin` would otherwise re-ramp them. `critic_warmup_steps`
+  and the LR `hold_steps` are recomputed from TM8's END as the new
+  start (20M warmup, hold to STEPS-1B, 1B cosine to 0.4x, same shape as
+  TM8).
+- Team spirit stays [[0.0, 0.9]]. Obs 270, action space, PFSP 65/20/15
+  and clamps, and the setter mix (kickoff 0.15, breakaway 0.05,
+  goalie_shot 0.05) are unchanged, so the kickoff effect is not
+  confounded with a mix change and no RLBot pack change is needed.
+- PASSIVE_ALARM keeps TM8's rule shapes; h2h is vs BEST-team (now the
+  TM7 final). PASSIVE_BASE is rebuilt at cut-over from TM8's final vs
+  TM7 (200 games per mode, TM9 binary).
+- Mid evals add a Nexto same-pad audit (`tm8_audit_traces.py` on
+  TRAJ_DUMP traces from the existing Nexto mid games, 2v2 and 3v3):
+  `same_pad_two_nontakers`, `same_big_pad_two_cars`, non-taker
+  destinations, kickoff W/L at 1.5 s and 3 s, first touch, goal_8s,
+  written into mid.jsonl alongside the existing mid hooks.
+
+**Left/right locking was skipped.** Assigning the two 3v3 non-takers to
+exclusive corners would send a same-side center spawn across the field
+to the far pad; that is not what Nexto does (the second non-taker
+cheats or takes small pads) and can be a worse kickoff than leaving
+the far-side car to cheat. `one_corner` is the smaller rule: one
+non-taker may still take a corner, the other is pushed off *both*
+corners.
+
+Deferred (unchanged from the TM8 note, plus the research-leg job/pad
+assignment items above): post-mix zero-sum, multi-goal episodes,
+stronger double_commit, TeamMaxing, ETA roles / RLBot pack, critic
+role one-hot, a team_spirit schedule, a cheat/small-pad bonus, a
+kickoff-job obs flag.
+
+### Sanity checks (Discord pad-order hazard and the RocketSim small-pad fix)
+
+Run on this vendor tree (rocketsim 0.3.3, not a silent fix). No
+stop-the-arming bug was found.
+
+- Orange pad timers in `obs.rs` `build_head`: `pad_order` nearest-matches
+  each rlgym `BOOST_LOCATIONS` entry to a RocketSim pad, then orange
+  (`invert`) emits `timers.iter().rev()`. 32 of 34 list pairs are exact
+  180° counterparts (`(x, y)` <-> `(-x, -y)`). The only typo is rlgym
+  `BOOST_LOCATIONS[27] = (-940, 3310)` vs RocketSim `(-940, 3308)` (and
+  vs the 180° of index 6, `(940, -3308)`). `pad_order` still binds that
+  entry uniquely to the correct sim pad (2 uu; next pads are hundreds
+  of uu away), and after `.rev()` every orange timer tracks the
+  180°-rotated physical pad. Reward `BIG_PADS` and `is_own_corner_pad`
+  use world coordinates and `attack_sign()` (blue own-corners y =
+  -4096, orange y = +4096), not the obs list order, and match the six
+  RocketSim big pads exactly. The 3310 table quirk was not "fixed".
+- This RocketSim build has the standard soccar layout: 28 small + 6 big
+  pads, both +y small pads at y = 3308, `CYL_RAD_SMALL = 144`,
+  `COOLDOWN_SMALL = 4`, `BOOST_AMOUNT_SMALL = 12`. No missing or swapped
+  small-pad position was found.
+
+### Spec
+
+Code @COMMIT@; binary /opt/dlami/nvme/ippo_bins/indococo-train-tm9-@SHA@
+sha256 @SHA256@. Tests: lib 176 / bin 12 / reward_parity 33 / team_obs 1
+/ pred_obs 1 / obs_ext 1 passed (unit tests cover 2v2 one_corner no-op,
+3v3 any-own-corner penalty, orange `attack_sign` mirroring, mid-pad ok,
+and tm9.toml parse / hold ramps). Smoke: 2.0M steps per arm (8 x 250k),
+kickoff-only setters, 48 games / 4 threads, from TM8 mid 1795205170
+(44,580.2M), nice 19, cores 28-31, scratch `tm9_work/smoke` (not
+exp_TM9). 3v3: `Reward/kickoff_same_pad` mean -0.150, RewardNonzero
+0.0300 (mean/nonzero = -5.00, the new weight; all 8 iteration rows
+nonzero). 2v2: mean 0, RewardNonzero 0 on all 8 rows (no-op confirmed);
+`boost_keep` / `kickoff_taker` / `shadow_cover` still fired, so the
+reward stream was live. TM8's trainer and binaries were not touched.
+tm9.toml (extends tm8.toml), train_tm9.toml, tm_TM9.env,
+team_launch_tm9.sh, tm9_window.sh, tm9_after_tm8.sh. RUN=TM9, warm start
+= TM8's last checkpoint at END (START_IS_TEAM=1, obs 270 copied as is),
+5B steps, CHUNK 100M, 1 PPO epoch, no bf16, critic warm-up 20M, LR 5e-5
+held to STEPS-1B then 1B cosine to 0.4x, nice 19. BT = team_best = TM7
+final (exp_TM7/checkpoints/1795170349), read once at launch and asserted
+(BT_PIN). Fallback: if TM9 dies before its first chunk, tm9_window.sh
+continues TM8 as TM8r (TM8 binary, tm8.toml, train_tm8.toml) through
+team_launch_tm9.sh so BT stays the TM7 final (team_launch_tm8.sh would
+refuse, because it still pins the TM6 final). TEAM_NO_FOLLOWUP stays
+set (no TM8r / TM9r chain from a finished launcher); TEAM_QUEUE must be
+empty. team_best is not changed.
+
+PASSIVE_ALARM (any rule in the same mode for 2 mids in a row ->
+exp_TM9/PASSIVE_ALARM): TM8's rules and thresholds (passes/min 2v2 <
+0.85, 3v3 < 1.30; deep last man 2v2 > 0.56 / 3v3 > 0.73 with h2h <
+0.48; Nexto 2v2 < 0.40, 3v3 < 0.20; near2 2v2 < 0.06, 3v3 < 0.10;
+no-challenger > 1.5 x 0.0404 / 0.0329 = 0.061 / 0.049), h2h vs
+BEST-team (TM7 final) < 0.50, plus passivity vs TM8's final
+(tm9_work/cut/passive_base.json, TM8 final vs TM7 final 200 games per
+mode with the TM9 binary, measured by the waiter at cut-over): touches
+per car-minute < 0.85 x base, or deepest-car distance to the own back
+wall < 0.80 x base.
+
+Waiter tm9_after_tm8.sh (log tm9_work/cut/cutover.log): waits for TM8's
+latest checkpoint >= END, no TM8 trainer and exp_TM8/mid/<END>; BLOCKED
+and exit if TM8's launcher dies early or train.log has FATAL. Then TM9
+in tmux ippo_team window tm9 (from the END ckpt, not a mid-best), push
+of checkpoints_to_test/tm8_<N>M.bpk (not promoted), the passivity
+baseline, TM8 finals after TM8's launcher exits (h2h vs TM7 and vs TM6,
+400 per mode, Nexto / Necto 300 per mode, spacing / role / same-pad
+audit, nice 19, cut/finals/finals.json), and the kickoff eval of TM9's
+first mid vs Nexto in 2v2 / 3v3 (504 games each, tm8_audit_traces.py ->
+cut/kickoff/kickoff_eval.json).
+
+### Watch
+
+3v3 same-pad vs Nexto at the first mid (TM8 67%, TM7 71%; aim well under
+that, Nexto is ~9% / 0% same_big) without 2v2 Nexto WR or 2v2
+corner-taking collapsing; 1.5 s / 3 s kickoff W/L and first touch, not
+just the pad rate; `Reward/kickoff_same_pad` magnitudes in 3v3 vs a 2v2
+no-op; h2h vs TM7; touches / depth vs the new PASSIVE_BASE; Galactus
+mids as the overfit yardstick; PFSP shares (Nexto at its 5-10% clamp).

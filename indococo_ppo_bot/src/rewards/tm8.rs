@@ -5,7 +5,8 @@
 //!   band) is paid `q`; nobody covering costs every non-first car; a second
 //!   camper is paid nothing.
 //! * [`KickoffSamePad`]: kickoff-pending penalty for two non-taker teammates
-//!   heading for the same big pad.
+//!   heading for the same big pad. TM9 `one_corner`: at most one non-taker
+//!   may take or head to an own-corner big pad (2v2 is a no-op).
 //! * [`KickoffTaker`]: kickoff-pending time penalty for the taker (Opti-style).
 //! * [`PhaseScale`]: multiplies a term during the kickoff phase.
 //! * [`TermRamp`]: multiplies a term by a piecewise schedule over learner steps.
@@ -157,16 +158,76 @@ pub const BIG_PADS: [(f64, f64); 6] = [
 /// big pad (their nearest) while the kickoff is pending -> -1 each.
 /// Active through the kickoff phase (pending + `grace_steps` after the first
 /// touch): the non-takers usually reach the corner pads after the touch.
+///
+/// TM9 `one_corner`: at most one non-taker per team may take or head to an
+/// own-corner big pad. The first non-taker inside `radius` of an own-corner
+/// pad is the claimant; any other non-taker heading to *any* own-corner pad
+/// is then paid -1. 2v2 (one non-taker) is a no-op. Own-corner pads are the
+/// two big pads with `pad.y * attack_sign < 0` and `|y| > 2000` (not mid).
 pub struct KickoffSamePad {
     radius: f64,
     roles: RoleTracker,
     phase: KickoffPhase,
+    one_corner: bool,
+    /// First non-taker to claim an own-corner pad, per team.
+    claimant: [Option<usize>; 2],
+}
+
+/// Whether `pad` is an own-half corner boost for a car with `attack_sign`.
+#[must_use]
+pub fn is_own_corner_pad(pad: (f64, f64), attack_sign: f64) -> bool {
+    pad.1.abs() > 2000.0 && pad.1 * attack_sign < 0.0
+}
+
+fn pad_dist(pos: glam::DVec3, pad: (f64, f64)) -> f64 {
+    ((pos.x - pad.0).powi(2) + (pos.y - pad.1).powi(2)).sqrt()
+}
+
+fn nearest_own_corner(pos: glam::DVec3, attack_sign: f64) -> Option<((f64, f64), f64)> {
+    BIG_PADS
+        .iter()
+        .copied()
+        .filter(|&p| is_own_corner_pad(p, attack_sign))
+        .map(|p| (p, pad_dist(pos, p)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// Inside `radius` of an own-corner pad, or closing on *any* own-corner pad
+/// at more than 200 uu/s (the other corner may be the nearest by distance
+/// while the car is driving toward the far one).
+fn heading_to_own_corner(car: &crate::state::CarView, radius: f64) -> bool {
+    let sign = car.attack_sign();
+    for pad in BIG_PADS.iter().copied().filter(|&p| is_own_corner_pad(p, sign)) {
+        let d = pad_dist(car.pos, pad);
+        if d <= radius {
+            return true;
+        }
+        let dx = pad.0 - car.pos.x;
+        let dy = pad.1 - car.pos.y;
+        let len = (dx * dx + dy * dy).sqrt().max(1e-9);
+        let closing = car.vel.x * dx / len + car.vel.y * dy / len;
+        if closing > 200.0 {
+            return true;
+        }
+    }
+    false
 }
 
 impl KickoffSamePad {
     #[must_use]
     pub fn new(radius: f64, roles: RoleParams, grace_steps: u32) -> Self {
-        Self { radius, roles: RoleTracker::new(roles), phase: KickoffPhase::new(grace_steps) }
+        Self::new_with(radius, roles, grace_steps, false)
+    }
+
+    #[must_use]
+    pub fn new_with(radius: f64, roles: RoleParams, grace_steps: u32, one_corner: bool) -> Self {
+        Self {
+            radius,
+            roles: RoleTracker::new(roles),
+            phase: KickoffPhase::new(grace_steps),
+            one_corner,
+            claimant: [None; 2],
+        }
     }
 }
 
@@ -174,6 +235,7 @@ impl StepReward for KickoffSamePad {
     fn reset(&mut self, initial: &StateView) {
         self.roles.reset();
         self.phase.reset(initial);
+        self.claimant = [None; 2];
     }
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
@@ -203,6 +265,44 @@ impl StepReward for KickoffSamePad {
                         r[i] = -1.0;
                         r[j] = -1.0;
                     }
+                }
+            }
+        }
+        if !self.one_corner {
+            return r;
+        }
+        for team in [0u8, 1u8] {
+            let t = usize::from(team);
+            let others: Vec<usize> = (0..n)
+                .filter(|&i| state.cars[i].team == team && !state.cars[i].is_demoed() && roles[i] != Role::First && roles[i] != Role::Out)
+                .collect();
+            // 2v2 / 1v1: one or zero non-takers, no-op (same-pad above also
+            // cannot fire). Clear any stale claim.
+            if others.len() < 2 {
+                self.claimant[t] = None;
+                continue;
+            }
+            if self.claimant[t].is_some_and(|c| !others.contains(&c)) {
+                self.claimant[t] = None;
+            }
+            if self.claimant[t].is_none() {
+                // First non-taker inside the radius of an own-corner pad.
+                let mut best: Option<(f64, usize)> = None;
+                for &i in &others {
+                    if let Some((_, d)) = nearest_own_corner(state.cars[i].pos, state.cars[i].attack_sign()) {
+                        if d <= self.radius && best.is_none_or(|(bd, _)| d < bd || (d == bd && i < best.unwrap().1)) {
+                            best = Some((d, i));
+                        }
+                    }
+                }
+                self.claimant[t] = best.map(|(_, i)| i);
+            }
+            let Some(claim) = self.claimant[t] else {
+                continue;
+            };
+            for &i in &others {
+                if i != claim && heading_to_own_corner(&state.cars[i], self.radius) {
+                    r[i] = -1.0;
                 }
             }
         }
@@ -423,6 +523,12 @@ mod tests {
         assert_eq!(c1.get_rewards(&s), vec![0.0, 0.0]);
     }
 
+    fn car_vel(team: u8, x: f64, y: f64, vx: f64, vy: f64) -> CarView {
+        let mut c = car(team, x, y);
+        c.vel = DVec3::new(vx, vy, 0.0);
+        c
+    }
+
     #[test]
     fn same_pad_only_for_two_non_takers_at_kickoff() {
         let mut k = KickoffSamePad::new(1500.0, RoleParams::default(), 30);
@@ -431,6 +537,101 @@ mod tests {
         k.reset(&s);
         let r = k.get_rewards(&s);
         assert_eq!((r[0], r[2], r[4]), (0.0, -1.0, -1.0), "{r:?}");
+    }
+
+    #[test]
+    fn one_corner_is_noop_in_2v2() {
+        // Taker + one non-taker at the own corner: no penalty (the 2v2 habit).
+        let mut k = KickoffSamePad::new_with(1500.0, RoleParams::default(), 30, true);
+        let mut s = st(0.0, 0.0, vec![car(0, 0.0, -2000.0), car(1, 0.0, 2000.0), car(0, -3072.0, -4096.0), car(1, 3072.0, 4096.0)]);
+        s.ball.vel = DVec3::ZERO;
+        k.reset(&s);
+        assert_eq!(k.get_rewards(&s), vec![0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn one_corner_penalizes_the_other_on_any_own_corner() {
+        // Blue attacks +y: own corners are y = -4096. Taker at the ball, one
+        // non-taker already on the left corner (claimant), the other on the
+        // right own corner -> the second is -1, claimant unpaid (not stacking
+        // the same pad).
+        let mut k = KickoffSamePad::new_with(1500.0, RoleParams::default(), 30, true);
+        let mut s = st(0.0, 0.0, vec![
+            car(0, 0.0, -2000.0),
+            car(1, 0.0, 2000.0),
+            car(0, -3072.0, -4096.0),
+            car(1, 0.0, 4000.0),
+            car(0, 3072.0, -4096.0),
+            car(1, 500.0, 3500.0),
+        ]);
+        s.ball.vel = DVec3::ZERO;
+        k.reset(&s);
+        let r = k.get_rewards(&s);
+        assert_eq!(r[0], 0.0, "taker unpaid: {r:?}");
+        assert_eq!(r[2], 0.0, "claimant unpaid: {r:?}");
+        assert_eq!(r[4], -1.0, "other own-corner penalized: {r:?}");
+    }
+
+    #[test]
+    fn one_corner_uses_attack_sign_for_orange() {
+        // Orange attacks -y: own corners are y = +4096. Same geometry mirrored.
+        let mut k = KickoffSamePad::new_with(1500.0, RoleParams::default(), 30, true);
+        let mut s = st(0.0, 0.0, vec![
+            car(0, 0.0, -2000.0),
+            car(1, 0.0, 2000.0),
+            car(0, 3500.0, -1000.0),
+            car(1, 3072.0, 4096.0),
+            car(0, -3500.0, -1000.0),
+            car(1, -3072.0, 4096.0),
+        ]);
+        s.ball.vel = DVec3::ZERO;
+        k.reset(&s);
+        let r = k.get_rewards(&s);
+        assert_eq!(r[1], 0.0, "orange taker unpaid: {r:?}");
+        let paid = [r[3], r[5]];
+        assert!(paid.contains(&0.0) && paid.contains(&-1.0), "one orange claimant, one penalized: {r:?}");
+        assert_eq!((r[2], r[4]), (0.0, 0.0), "blue non-takers not in a corner: {r:?}");
+    }
+
+    #[test]
+    fn one_corner_heading_after_claim_and_mid_pad_ok() {
+        let mut k = KickoffSamePad::new_with(1500.0, RoleParams::default(), 30, true);
+        // Claimant already at left own corner. Other is on the mid-x line (equidistant
+        // from both own corners) driving toward the right own corner — heading must
+        // look at ANY own-corner, not only the nearest.
+        let mut s = st(0.0, 0.0, vec![
+            car(0, 0.0, -2000.0),
+            car(1, 0.0, 2000.0),
+            car(0, -3072.0, -4096.0),
+            car(1, 0.0, 4000.0),
+            car_vel(0, 0.0, -2500.0, 1400.0, -1400.0),
+            car(1, 500.0, 3500.0),
+        ]);
+        s.ball.vel = DVec3::ZERO;
+        k.reset(&s);
+        let r = k.get_rewards(&s);
+        assert_eq!(r[4], -1.0, "heading to an own corner after a claim: {r:?}");
+        // Same claimant, other sits on a mid pad: not an own-corner, no heading penalty.
+        let mut s2 = s.clone();
+        s2.cars[4] = car(0, 3584.0, 0.0);
+        // New tracker: need a fresh term so the claim still comes from car 2.
+        let mut k2 = KickoffSamePad::new_with(1500.0, RoleParams::default(), 30, true);
+        k2.reset(&s2);
+        let r2 = k2.get_rewards(&s2);
+        assert_eq!(r2[4], 0.0, "mid pad is not an own-corner: {r2:?}");
+        assert_eq!(r2[2], 0.0, "claimant still unpaid: {r2:?}");
+    }
+
+    #[test]
+    fn own_corner_pads_mirror_by_attack_sign() {
+        assert!(is_own_corner_pad((-3072.0, -4096.0), 1.0));
+        assert!(is_own_corner_pad((3072.0, -4096.0), 1.0));
+        assert!(!is_own_corner_pad((-3072.0, 4096.0), 1.0));
+        assert!(!is_own_corner_pad((-3584.0, 0.0), 1.0));
+        assert!(is_own_corner_pad((-3072.0, 4096.0), -1.0));
+        assert!(is_own_corner_pad((3072.0, 4096.0), -1.0));
+        assert!(!is_own_corner_pad((-3072.0, -4096.0), -1.0));
+        assert!(!is_own_corner_pad((3584.0, 0.0), -1.0));
     }
 
     #[test]
