@@ -1,0 +1,121 @@
+# TM10 (EXPERIMENTS.md "TM10 — Cross-exam note"): train_tm9.toml as is. The
+# TM10 change is the reward only (tm10.toml: support-car playmaking_demo /
+# playmaking_bump), so its effect is not confounded with a mix change.
+# Warm start = TM9's final checkpoint (START_CK from tm10_after_tm9.sh).
+#
+# TM9 (EXPERIMENTS.md "TM9 — Cross-exam note"): train_tm8.toml as is (mode
+# mix, setters kickoff 0.15 / breakaway 0.05 / goalie_shot 0.05, PPO, PFSP
+# 65 self / 20 past / 15 league with the same clamps). The TM9 change is the
+# reward (tm9.toml: kickoff_same_pad 5.0, kickoff_one_corner, boost
+# kickoff_scale grace 3 s, term_ramp held at TM8 end values). Kept so the
+# kickoff effect is not confounded with a mix change.
+# Warm start = TM8's final checkpoint (START_CK from tm9_after_tm8.sh).
+# 1 epoch, no bf16, ENT 0.016, lambda 0.95, CHUNK 100M; gamma 0.995;
+# critic warm-up 20M; 5B steps, LR 5e-5 held to STEPS-1B then 1B cosine to 0.4x.
+reward_config = "@RUN@/tm_rewards.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 384
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = @ENT@
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = false
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+[team]
+mode_mix = { "1" = 0.15, "2" = 0.35, "3" = 0.50 }
+obs_shuffle = true
+
+# Opponent team = ONE sampled version per rollout (teammates are always the
+# current policy). OPPCH of rollouts vs a frozen team: past selves (weight
+# PASTW) and the league (Galactus / Megabyte team ports, the 1v1 finals
+# widened on load). The launcher appends the external and fixed entries.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = @PASTW@
+
+# TM2 setter mix (sum 1.0). Mechanic drills 22% (TM1 10%): backboard_double_tap
+# 0.10, reset_shot 0.05 (air_near_ball in the attacking third, goalward
+# carry), musty_setup 0.03, air_near_ball 0.02, air_reset 0.02; taken from
+# team_play, replay and random. Cars 2.. of 2-car setters go to support spots.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.15
+[[state_setters]]
+kind = "random"
+weight = 0.05
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.05
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "team_play"
+weight = 0.15
+[[state_setters]]
+kind = "replay"
+weight = 0.09
+path = "@SNAP@"
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.08
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.04
+distance = [1800.0, 3000.0]
+[[state_setters]]
+kind = "aerial_pass"
+weight = 0.08
+[[state_setters]]
+kind = "backboard_double_tap"
+weight = 0.10
+[[state_setters]]
+kind = "reset_shot"
+weight = 0.04
+[[state_setters]]
+kind = "musty_setup"
+weight = 0.03
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.02
+[[state_setters]]
+kind = "air_reset"
+weight = 0.02
+[[state_setters]]
+kind = "breakaway"
+weight = 0.05
+[[state_setters]]
+kind = "goalie_shot"
+weight = 0.05
+
+[pfsp]
+self_share = 0.65
+past_share = 0.20
+floor = 0.03
+smooth = 0.25
+low_x = 0.25
+[pfsp.clamp]
+nexto = [0.05, 0.10]
+galactus = [0.0, 0.06]
+TM3_final = [0.0, 0.06]

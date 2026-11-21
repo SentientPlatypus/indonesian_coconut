@@ -3951,3 +3951,97 @@ corner-taking collapsing; 1.5 s / 3 s kickoff W/L and first touch, not
 just the pad rate; `Reward/kickoff_same_pad` magnitudes in 3v3 vs a 2v2
 no-op; h2h vs TM7; touches / depth vs the new PASSIVE_BASE; Galactus
 mids as the overfit yardstick; PFSP shares (Nexto at its 5-10% clamp).
+
+## TM10 — Cross-exam note: support-car playmaking demo / bump (staged 2026-11-21, auto-starts after TM9)
+
+User report (Nov 21, after trying `tm8_45582M.bpk`): "much better than
+before... some potential for playmaking. If the original person who takes
+the ball up doesn't score or the other person is going to get it, they
+should bump and demo the other team." Approved by the user Nov 21 2026:
+"Put that in tm10 and run tm10". TM9 (kickoff fix) is not touched (no
+binary swap, no config or script edit, not stopped) so its kickoff test is
+not confounded; TM10 warm-starts from TM9's last checkpoint at its 5B END
+(52,957.0M, not a mid-best).
+
+### Cross-exam (three legs, per the Nov 12 rule)
+
+- **Discord (read-only):** No direct recipe for a support man demoing to
+  set up a teammate. killerbox's ImprovedDemoReward: bump 0.15 + 0.35 x
+  speed^2, +1 per demo. PigMasta: keep demo at ~1% of the reward share and
+  measure what bumps actually do to results. Rolv: a demo habit, once
+  learned, is hard to unlearn. Several demo-farming warnings (bots chasing
+  demos instead of playing the ball). Seer gap noted by the community:
+  "teammate double demo to clear the net" is something top bots do not do.
+- **Outside research:** Every public team bot pays demos flat and ungated
+  by role: Necto demo 8 / goal 10, Kaiyo 6 / 10, Seer 0.3 vs ~1.3, Zealan
+  ~10% of a goal, CUCAI 5 / 300. Nobody conditions on support role or
+  attacking context, so there is no evidence either way for a gated term;
+  the gating below is our own design to avoid the farming failure mode.
+- **Code + logs:** `demo` = 50 (about 4% of goal 1200), ungated and
+  team-spirit blended at tau 0.9, so 90% of a demo's value is shared and
+  the first man and support car are paid the same. `role_scale` /
+  `role_*_gate` can only pay non-first cars LESS than the first man (scale
+  <= 1 relative to first), so it cannot upweight support; a new term is
+  needed. Eval demos are ~0.15-0.23 per game in TM8 vs TM6 h2h.
+
+### Reconciliation (what TM10 does)
+
+- Leave `demo` (50, flat, blended) alone; raising it mostly buys more demo
+  chasing (Rolv / farming warnings, flat in every public bot).
+- New `src/rewards/playmaking_demo.rs`, two terms with the same detection:
+  `playmaking_demo` 150 (~12.5% of a goal) per qualifying demo and
+  `playmaking_bump` 20 x `min(1, dv/900)^1.5` per qualifying bumper (nose)
+  bump with victim dv >= 400 uu/s and above the bumper's own dv (wheel /
+  side / roof / back contacts pay 0).
+- Paid only to the support car: 2v2 `Role::Last`, 3v3 `Role::Second`; the
+  3v3 last man gets 0 (stays home); first man 0; 1v1 no-op. Same
+  RoleTracker params as the other role terms (margin 300, hold 8, obs
+  tie-break, touch hysteresis).
+- Attacking context: ball in the offensive half, OR our first man is the
+  last toucher and the ball is out of our defensive third. Nothing pays
+  with the ball or the support car in our defensive third, or while the
+  kickoff is pending, or if no living teammate is first man.
+- Victim in the play (step before contact): closest living opponent to the
+  ball, OR victim ETA to ball <= our first man's ETA + 0.4 s, OR their last
+  defender (deepest opponent) while our first man has possession.
+- Contact within 4000 uu of the ball, except a last defender that is
+  shading the shot (goal-side, within 1200 uu of the ball -> net line)
+  while our first man has possession. Never a teammate.
+- Cap: 2 paid playmaking events (demos + bumps) per car per episode.
+- Individual (post team-spirit, like contact_quality), not zero-sum. Ramp
+  0.25 -> 1.0 over the first 200M of TM10 (`term_ramp`, relative to
+  spirit_origin). The optional pressure term is skipped for this cut.
+- Logged: `Reward*/playmaking_demo`, `Reward*/playmaking_bump`,
+  `RewardFirst/` / `RewardOther/` splits (role_metrics), and
+  `Events/Playmaking demos per min` / `Events/Playmaking bumps per min`
+  (per car-minute, same basis as `Events/Demos per min`).
+
+### Spec
+
+`experiments/tm10.toml` extends `tm9.toml` (all TM9 terms, the kickoff
+fix and held ramps unchanged); `train_tm10.toml` = `train_tm9.toml`;
+`tm_TM10.env` = `tm_TM9.env` with the TM10 binary / templates /
+`TM10_START_CK` / PASSIVE_BASE from TM9's final; `team_launch_tm10.sh` =
+`team_launch_tm9.sh` (BT pinned to the TM7 final). 1 epoch, no bf16,
+CHUNK 100M, 5B steps (52,957.0M -> 57,957.0M), LR 5e-5 held to STEPS-1B
+then 1B cosine to 0.4x. `tm10_after_tm9.sh` (armed under setsid, log
+`/opt/dlami/nvme/tm10_work/cut/cutover.log`) waits for TM9's normal exit
+at END, starts TM10 in tmux `ippo_team:tm10` (`tm10_window.sh`; falls back
+to TM9r with the TM9 binary if TM10 dies before its first chunk), pushes
+`checkpoints_to_test/tm9_<N>M.bpk` (not promoted), writes the passivity
+baseline (TM9 final vs TM7, TM10 binary), runs TM9 finals after TM9's
+launcher exits (h2h vs TM7 = team_best and vs TM8 final, 400 per mode,
+Nexto / Necto 300 per mode, Nexto kickoff audit 504 -> cut/finals/), and
+logs TM10's playmaking metrics at its first mid. Unit tests in
+`playmaking_demo.rs` cover support-only pay, teammate victims, out-of-play
+victims, defensive third, kickoff, the 4000 uu / shading exception, bump
+part / impact gates, the cap and 3v3 / 1v1 roles; `tm10_adds_playmaking_on_top_of_tm9`
+checks the config chain.
+
+### Watch
+
+`Events/Playmaking demos per min` vs `Events/Demos per min` (farming =
+total demos up while goals / h2h flat or down), `RewardOther/playmaking_*`
+vs `RewardFirst` (first must be 0), h2h vs TM7 and Nexto 2v2 / 3v3 WR, 3v3
+last-man depth and `deep_*` / no-challenger (support car leaving cover),
+double commits and pair800, Galactus mids as the overfit yardstick.
