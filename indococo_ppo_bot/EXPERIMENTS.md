@@ -4045,3 +4045,28 @@ total demos up while goals / h2h flat or down), `RewardOther/playmaking_*`
 vs `RewardFirst` (first must be 0), h2h vs TM7 and Nexto 2v2 / 3v3 WR, 3v3
 last-man depth and `deep_*` / no-challenger (support car leaving cover),
 double commits and pair800, Galactus mids as the overfit yardstick.
+
+## TM8 results: team BEST = TM8 final (2026-11-21)
+
+Final checkpoint `exp_TM8/checkpoints/1795278408` (47957.0M steps; last checkpoint at END, also TM9's warm start and `checkpoints_to_test/tm8_47957M.bpk` @ 406cd04). The launcher's 504-game panel (`tm8_final/`) used that same END checkpoint and compared h2h against the TM6 final, because `team_launch_tm8.sh` had pinned `$BT` to that path at TM8's start. After the launcher exited, `tm9_after_tm8.sh` ran a second panel on the END checkpoint vs the current team BEST (TM7 final, `exp_TM7/checkpoints/1795170349`) and vs the TM6 final at `/opt/dlami/nvme/tm9_work/cut/finals/` (h2h 400 games per mode, Nexto / Necto 300). Team gate (`tm8_final/TEAM_PROMOTE.json`, recommendation only) said promote (score 0.568). The user approved it on 2026-11-21 at 2:22 PM ET, and `team_best/FINAL_CKPT` was switched by hand to the TM8 END checkpoint. The previous value, the TM7 final `exp_TM7/checkpoints/1795170349`, is kept in `team_best/HISTORY` (and `team_best/FINAL_CKPT.bak_tm7_20261121`) and remains on disk (TM9's BT, the TM10 waiter's hardcoded BT, and a league opponent). All waiter h2h games are decisive (0 draws).
+
+| Eval | TM8 final (47957.0M) | Old team BEST (TM7 final) |
+|---|---|---|
+| h2h 2v2 vs old BEST (400 games) | **58.5%** (234-166) | - |
+| h2h 3v3 vs old BEST (400 games) | **55.25%** (221-179) | - |
+| h2h 2v2 vs TM6 final (400) | **62.0%** (248-152) | - |
+| h2h 3v3 vs TM6 final (400) | **60.75%** (243-157) | - |
+| Nexto 2v2 (300) | **60.3%** (181-119) | - |
+| Nexto 3v3 (300) | **50.0%** (150-150) | - |
+| Necto 2v2 (300) | **92.7%** (278-22) | - |
+| Necto 3v3 (300) | **91.3%** (274-26) | - |
+
+Team stats from the h2h finals (TM8 final vs TM7 final, 400 games; TM8's own rates):
+
+- 2v2: pair800 0.092, near2 0.140, no-challenger 0.048, passes/min 1.14, double commit 3.2%, deep last man 0.604, touches/car-min 15.81, deepest-car depth 2946.
+- 3v3: pair800 0.218, near2 0.234, no-challenger 0.038, passes/min 1.50, double commit 5.4%, deep last man 0.740, touches/car-min 8.30, deepest-car depth 1988.
+- Kickoff vs Nexto in this panel: same-pad 0% in 2v2, 29.96% in 3v3 (same-big 29.76%).
+
+The launcher panel (`tm8_final/`, 47957.0M vs the TM6 final, 504 games unless noted) is kept for the record: h2h 2v2 **58.1%** (293-211), h2h 3v3 **66.7%** (336-168); Nexto 2v2 58.3% (294-210) vs TM6 54.0%, Nexto 3v3 45.1% (227-276, 1 draw) vs TM6 35.1%; Necto 2v2 93.8% (473-31) vs TM6 91.9%, Necto 3v3 93.5% (471-33) vs TM6 88.7%; Galactus 2v2 9.4% (24-232 of 256) vs TM6 8.2%, Galactus 3v3 7.0% (18-238 of 256) vs TM6 5.5%; Galactus 1v1 50.4% (254-250); Megabyte 2v2 4.7% (12-244 of 256); 1v1 vs ST25 56.9% (287-217).
+
+TM9 was already running and read `$BT` (the TM7 final, `exp_TM7/checkpoints/1795170349`) once at its start. `team_launch_tm9.sh` also asserts `$BT` must stay that path, so a TM9 restart will refuse rather than silently switch to TM8. TM9's remaining mids, the 2-chunk guard and the PASSIVE_ALARM therefore still compare against the TM7 final. The TM10 waiter (`tm10_after_tm9.sh`, pid 4043816) had already passed its arm-time `team_best == TM7` check and uses a hardcoded TM7 path for the passivity baseline and TM9 finals, so it was not edited and was left running. `team_launch_tm10.sh` was changed to take `$BT` from `BT_PIN` (the TM7 final) instead of from the live `team_best/FINAL_CKPT` pointer, so TM10 will still start with BT=TM7 after TM9 and will not die because the pointer now names TM8. The switch applies from the next launcher started without that pin. TM9 itself was not modified, restarted, or swapped; its BT stays pinned to TM7 (intentional). `TEAM_NO_FOLLOWUP` is set. The TM8 final is 270-wide and is not in the RLBot pack.

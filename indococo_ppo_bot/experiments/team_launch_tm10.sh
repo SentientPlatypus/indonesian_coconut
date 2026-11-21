@@ -146,8 +146,10 @@ B=$X/indococo-train
 # default (B0 must then be tm4pre or later); EVAL_BIN=<binary> to override.
 EVAL_BIN=${EVAL_BIN:-$B}
 read _ START0 _ < $X/START; END=$((START0 + STEPS))
-BT=$(cat $R/team_best/FINAL_CKPT)
-[[ "$BT" == "${BT_PIN:-$R/exp_TM7/checkpoints/1795170349}" ]] || die "BT must stay the TM7 final (team_best), got $BT"
+# TM9/TM10 stay pinned to the TM7 final even if team_best is later promoted.
+# Read the pin, not the live pointer, so a team_best update cannot abort TM10.
+BT=${BT_PIN:-$R/exp_TM7/checkpoints/1795170349}
+[[ -s "$BT/actor.bpk" ]] || die "BT pin missing or empty: $BT"
 # Reward config: the team template with the team-spirit origin = run start.
 printf 'extends = "%s"\n[team]\nspirit_origin = %s.0\n' "$X/cfg/experiments/${REWARD_TMPL:-tm1.toml}" "$START0" > $X/tm_rewards.toml
 h2h_mode() { # n a b games -> json line
