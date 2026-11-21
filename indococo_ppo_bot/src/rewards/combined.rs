@@ -301,6 +301,16 @@ impl<SI: SharedInfoReport + TickResets> Reward<SI> for CombinedReward {
             report[format!("RewardAbs/{}", t.name).as_str()] += AvgTracker::from(abs as f32);
             report[format!("RewardNonzero/{}", t.name).as_str()] +=
                 AvgTracker::from(nonzero as f32);
+            // TM10: each playmaking event pays one car on one step, so the
+            // nonzero share x steps/min is events per car-minute (like Events/Demos per min).
+            let event = match t.name {
+                "playmaking_demo" => Some("Events/Playmaking demos per min"),
+                "playmaking_bump" => Some("Events/Playmaking bumps per min"),
+                _ => None,
+            };
+            if let Some(key) = event {
+                report[key] += AvgTracker::from((nonzero * crate::consts::STEPS_PER_SECOND * 60.0) as f32);
+            }
         }
         for (name, sum, cnt) in self.last_role_split() {
             if cnt[0] > 0 {

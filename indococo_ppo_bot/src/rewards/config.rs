@@ -38,6 +38,7 @@ use super::one_v_one_recover::OneVOneRecover;
 use super::opponent_possession_space::OpponentPossessionSpace;
 use super::possession::Possession;
 use super::possession_range_carry::{PossessionRangeCarry, TakeoffParams};
+use super::playmaking_demo::{PlayKind, Playmaking, PlaymakingParams};
 use super::pressure_flick::PressureFlick;
 use super::reset_align::{ResetAlign, ResetAlignParams};
 use super::shadow_box::{ShadowBox, ShadowBoxParams};
@@ -159,6 +160,10 @@ pub struct RewardWeights {
     pub kickoff_same_pad: f64,
     /// TM8: kickoff-pending time penalty for the taker.
     pub kickoff_taker: f64,
+    /// TM10: support-car demo / bump of the opponent in the play while
+    /// attacking (`[playmaking]`; individual, not zero-sum).
+    pub playmaking_demo: f64,
+    pub playmaking_bump: f64,
 }
 
 /// `[team]`: TM1 team-mode settings. All empty / unused by default, so
@@ -397,6 +402,8 @@ pub struct RewardConfig {
     pub musty: MustyParams,
     /// TM8 open-net gate on air-dribble shaping (`[open_net]`; empty = off).
     pub open_net: OpenNetParams,
+    /// TM10 `playmaking_demo` / `playmaking_bump` parameters.
+    pub playmaking: PlaymakingParams,
     /// TM1 team settings (team spirit, gates, pass / double-touch params).
     pub team: TeamRewardConfig,
     /// `{setter kind: {term: scale}}`: term weights multiplied by `scale` in
@@ -622,7 +629,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 22] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 24] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -696,6 +703,8 @@ impl RewardConfig {
             ("shadow_cover", w.shadow_cover, Box::new(ShadowCover::new(tm.cover.clone(), role_p.clone()))),
             ("kickoff_same_pad", w.kickoff_same_pad, Box::new(KickoffSamePad::new_with(tm.kickoff_pad_radius, role_p.clone(), (tm.kickoff_pad_grace_s * crate::consts::STEPS_PER_SECOND).round().max(0.0) as u32, tm.kickoff_one_corner))),
             ("kickoff_taker", w.kickoff_taker, Box::new(KickoffTaker::new(role_p.clone()))),
+            ("playmaking_demo", w.playmaking_demo, Box::new(Playmaking::new(self.playmaking.clone(), role_p.clone(), PlayKind::Demo))),
+            ("playmaking_bump", w.playmaking_bump, Box::new(Playmaking::new(self.playmaking.clone(), role_p.clone(), PlayKind::Bump))),
         ];
         terms.extend(
             experiment
@@ -1250,5 +1259,42 @@ mod extends_tests {
         assert_eq!(tm8.team.kickoff_scale_grace_s, None);
         assert_eq!(tm8.weights.kickoff_same_pad, 0.5);
         assert_eq!(tm8.weights.contact_quality, 250.0);
+    }
+
+    /// TM10: tm9 plus the support-car playmaking demo / bump terms, both
+    /// individual (post team spirit), not zero-sum, ramped 0.25 -> 1 over
+    /// 200M; the TM9 terms and ramps are unchanged.
+    #[test]
+    fn tm10_adds_playmaking_on_top_of_tm9() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm10.toml")).unwrap();
+        let tm9 = RewardConfig::from_file(&dir.join("tm9.toml")).unwrap();
+        assert_eq!(c.weights.playmaking_demo, 150.0);
+        assert_eq!(c.weights.playmaking_bump, 20.0);
+        assert_eq!(c.weights.demo, tm9.weights.demo);
+        assert_eq!(c.weights.contact_quality, 100.0);
+        assert_eq!(c.weights.kickoff_same_pad, 5.0);
+        assert_eq!(c.playmaking, PlaymakingParams::default());
+        for k in ["playmaking_demo", "playmaking_bump"] {
+            assert!(c.team.individual.iter().any(|x| x == k), "{k} individual");
+            assert!(c.team.role_metrics.iter().any(|x| x == k), "{k} role metric");
+            assert!(!c.zero_sum.contains_key(k), "{k} not zero-sum");
+            assert_eq!(c.team.term_ramp.get(k), Some(&vec![[0.0, 0.25], [200_000_000.0, 1.0]]));
+        }
+        for k in &tm9.team.individual {
+            assert!(c.team.individual.contains(k), "tm9 individual {k} kept");
+        }
+        for k in &tm9.team.role_metrics {
+            assert!(c.team.role_metrics.contains(k), "tm9 role metric {k} kept");
+        }
+        assert_eq!(c.team.term_ramp.get("contact_quality"), Some(&vec![[0.0, 1.0]]));
+        assert_eq!(c.team.term_ramp.get("shadow_cover"), Some(&vec![[0.0, 1.0]]));
+        assert!(c.team.kickoff_one_corner);
+        assert_eq!(c.team.spirit, vec![[0.0, 0.9]]);
+        let names: Vec<_> = c.build().terms.iter().map(|t| t.name).collect();
+        assert!(names.contains(&"playmaking_demo") && names.contains(&"playmaking_bump"), "{names:?}");
+        let n9: Vec<_> = tm9.build().terms.iter().map(|t| t.name).collect();
+        assert!(!n9.contains(&"playmaking_demo"));
+        assert_eq!(names.len(), n9.len() + 2);
     }
 }

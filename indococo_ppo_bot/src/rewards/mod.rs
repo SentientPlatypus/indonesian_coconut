@@ -44,6 +44,7 @@ pub mod one_v_one_recover;
 pub mod opponent_possession_space;
 pub mod possession;
 pub mod possession_range_carry;
+pub mod playmaking_demo;
 pub mod pressure_flick;
 pub mod reset_align;
 pub mod safe_boost_collect;

@@ -1,0 +1,51 @@
+# TM10 reward config (EXPERIMENTS.md "TM10 — Cross-exam note"). TM9
+# (tm9.toml) plus the support-car playmaking demo / bump terms. Approved by
+# the user Nov 21 2026: "Put that in tm10 and run tm10".
+# * playmaking_demo 150 (~12.5% of a goal) per qualifying demo and
+#   playmaking_bump 20 per qualifying bumper bump (x min(1, dv/900)^1.5),
+#   paid ONLY to the support car (2v2 last man, 3v3 second man; the 3v3 last
+#   man gets 0 so he stays home), while attacking (ball in their half, or our
+#   first man touched it last and the ball is out of our defensive third), on
+#   the opponent in the play (closest opponent to the ball, ETA within 0.4 s
+#   of our first man, or their last defender while our first man has it),
+#   within 4000 uu of the ball (a shading last defender is exempt), never in
+#   our defensive third, at most 2 paid events per car per episode
+#   (src/rewards/playmaking_demo.rs).
+# * Individual (post team-spirit), not zero-sum; ramp 0.25 -> 1.0 over the
+#   first 200M of TM10 (relative to spirit_origin).
+# * The flat demo term (50, team-spirit blended) and everything else in TM9
+#   (kickoff fix, contact_quality 100 baked, held ramps) are unchanged.
+extends = "tm9.toml"
+
+[weights]
+playmaking_demo = 150.0
+playmaking_bump = 20.0
+
+[playmaking]
+max_ball_dist = 4000.0
+eta_margin_s = 0.4
+cap = 2
+support_scale_2v2 = 1.0
+second_scale_3v3 = 1.0
+last_scale_3v3 = 0.0
+shade_width = 1200.0
+hard_target = 900.0
+hard_power = 1.5
+min_bump_dv = 400.0
+victim_gate = true
+
+[team]
+# Arrays replace on extends: tm8.toml's lists plus the two TM10 terms.
+role_metrics = ["contact_quality", "speed_to_ball", "face_ball", "support_role", "last_man_goalside", "teammate_spacing", "teammate_far", "concede_role", "pass", "shadow_cover", "playmaking_demo", "playmaking_bump"]
+individual = [
+  "speed_to_ball", "face_ball", "energy", "boost_keep", "boost_change",
+  "aerial_boost", "in_air", "ang_vel", "safe_boost", "overextend",
+  "contact_quality", "recover", "double_commit",
+  "flip_reset", "flip_reset_use", "air_double_touch", "musty",
+  "teammate_spacing", "last_man_goalside", "shadow_box", "support_role",
+  "teammate_far", "concede_role",
+  "shadow_cover", "kickoff_same_pad", "kickoff_taker",
+  "playmaking_demo", "playmaking_bump",
+]
+# Tables merge: tm9's contact_quality / shadow_cover holds stay.
+term_ramp = { playmaking_demo = [[0.0, 0.25], [200_000_000.0, 1.0]], playmaking_bump = [[0.0, 0.25], [200_000_000.0, 1.0]] }
