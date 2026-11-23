@@ -92,7 +92,7 @@ final_eval() {  # pool eval + keep-best of the newest checkpoint, if not yet log
   local run=$RUNS/exp_$1 newest steps
   newest=$(ls "$run/checkpoints" | grep -E '^[0-9]+$' | sort -n | tail -1)
   steps=$(steps_of "$run/checkpoints")
-  if grep -q "\"steps\": $steps[,}]" "$run/logs/evals.jsonl" 2>/dev/null; then return; fi
+  if grep -q "\"steps\": ${steps}[,}]" "$run/logs/evals.jsonl" 2>/dev/null; then return; fi
   local st=$run/logs/final_policy.safetensors log=$run/logs/final_keep_best.jsonl
   "$run/indococo-train" export "$run/checkpoints/$newest" "$st" > /dev/null
   rm -f "$log"
