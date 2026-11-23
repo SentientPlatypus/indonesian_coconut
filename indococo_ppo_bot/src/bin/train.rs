@@ -1687,16 +1687,34 @@ fn h2h_jitter(default: bool) -> bool {
 fn jittered_reset(env: &mut BotEnv, rng: Option<&mut SmallRng>) -> (GameState, Vec<Vec<f32>>) {
     use rlgymppo::rlgym::{Obs as _, SharedInfoProvider as _};
     let (state, obs, _) = env.reset();
-    let Some(rng) = rng else { return (state, obs) };
-    const UU: f32 = 60.0;
-    let yaw = 4.0f32.to_radians();
-    for i in 0..state.cars.len() {
-        let mut car = env.arena.get_car_state(i).clone();
-        car.phys.pos.x += rng.random_range(-UU..UU);
-        car.phys.pos.y += rng.random_range(-UU..UU);
-        let a = rng.random_range(-yaw..yaw);
-        car.phys.rot_mat = rlgymppo::rlgym::rocketsim::Mat3A::from_rotation_z(a) * car.phys.rot_mat;
-        env.arena.set_car_state(i, car.core());
+    // H2H_KICKOFF_FIX=1 (diagnostic, off by default; EXPERIMENTS.md "Eval
+    // fidelity"): undo two Rust-port reset artifacts the C++ engine does not
+    // have: wheel contacts unknown on the first tick after a state set, and
+    // flip_time = 0, which pitch-locks air control for 0.3 s (PITCHLOCK_EXTRA_TIME)
+    // although the car has not flipped.
+    let kickoff_fix = std::env::var("H2H_KICKOFF_FIX").map(|v| v == "1").unwrap_or(false);
+    if rng.is_none() && !kickoff_fix {
+        return (state, obs);
+    }
+    if let Some(rng) = rng {
+        const UU: f32 = 60.0;
+        let yaw = 4.0f32.to_radians();
+        for i in 0..state.cars.len() {
+            let mut car = env.arena.get_car_state(i).clone();
+            car.phys.pos.x += rng.random_range(-UU..UU);
+            car.phys.pos.y += rng.random_range(-UU..UU);
+            let a = rng.random_range(-yaw..yaw);
+            car.phys.rot_mat = rlgymppo::rlgym::rocketsim::Mat3A::from_rotation_z(a) * car.phys.rot_mat;
+            env.arena.set_car_state(i, car.core());
+        }
+    }
+    if kickoff_fix {
+        for i in 0..state.cars.len() {
+            env.arena.edit_car_state_full(i, |s| s.flip_time = 1.0);
+        }
+        for i in 0..state.cars.len() {
+            env.arena.refresh_car_contacts(i);
+        }
     }
     let state = env.current_state();
     env.shared_info.reset(&state);

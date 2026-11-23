@@ -4164,3 +4164,151 @@ Team stats from the h2h finals (TM9 final vs TM7 final, 400 games; TM9's own rat
 The launcher panel (`tm9_final/`, 52957.1M vs the TM7 final, 504 games unless noted) is kept for the record: h2h 2v2 **58.7%** (296-208), h2h 3v3 **67.7%** (341-163); Nexto 2v2 62.3% (314-190) vs TM7 57.5%, Nexto 3v3 47.4% (238-264, 2 draws) vs TM7 39.3%; Necto 2v2 93.7% (472-32) vs TM7 92.7%, Necto 3v3 93.3% (470-34) vs TM7 94.4%; Galactus 2v2 10.2% (26-230 of 256) vs TM7 9.8%, Galactus 3v3 10.2% (26-230 of 256) vs TM7 5.1%; Galactus 1v1 54.6% (275-229); Megabyte 2v2 12.5% (32-224 of 256); 1v1 vs ST25 56.5% (285-219).
 
 TM10 was already running and set `$BT` from `BT_PIN` (the TM7 final, `exp_TM7/checkpoints/1795170349`) once at its start; mid-evals, the 2-chunk guard, the PASSIVE_ALARM and TM10's own finals therefore still compare against the TM7 final. `team_launch_tm10.sh` does not re-read `team_best/FINAL_CKPT` for `$BT` (that change landed with the TM8 promotion in 883f173), so this pointer update cannot abort or silently retarget the running TM10 or a TM10 restart. TM10 itself was not modified, restarted, or swapped; its BT stays pinned to TM7 (intentional). The switch applies from the next launcher started without that pin. `TEAM_NO_FOLLOWUP` is set. The TM9 final is 270-wide and is not in the RLBot pack.
+
+## Eval fidelity: Galactus headline metric, diag fix, Rust vs C++ engine (2026-11-23)
+
+People beat Galactus in real Rocket League (C++-engine behaviour) while our
+Rust-trainer numbers said ST25 wins ~70% against it. This note covers what was
+built and measured. Everything here is report-only: no promotion rule, BEST or
+team_best was changed.
+
+### E1. Headline metric = Python harness, C++ RocketSim 2.1.1, exact spawns
+
+- `tools/pool_eval/gal_fidelity.py` + `experiments/gal_fidelity.sh` report three numbers per mode:
+  - `py_exact` (the headline): Python harness, C++ engine, exact kickoff spawns.
+  - `py_jitter`: the same with the old 60 uu / 4° jitter.
+  - `rust`: `galactus-h2h` with `H2H_JITTER=1`.
+  - `gap = rust - py_jitter` (same protocol on both engines). It alarms when the gap is over 5 points.
+- Output goes to `<final>/gal_fidelity.jsonl`.
+- `pool_eval.py` gained `--team-size {1,2,3}` and `--exact-spawns`.
+- `poolkit/team_obs.py` is a Python port of the 235/270-wide team obs (with the ball-prediction and big-pad extension), and kind `indococo_team` (`IndococoTeamPolicy`) uses it. Checked against Rust `indococo-train record` with `team_obs_parity.py`: argmax agreement is ≥ 99.83%, and the rest is the engine's ball-prediction difference.
+- Supported configurations:
+  - 1v1-only checkpoints (106-wide, e.g. ST25): 1v1.
+  - TM checkpoints (235/270): 1v1, 2v2 and 3v3.
+- Hook: `team_launch.sh` / `st_launch.sh` run it after finals, detached, when `GAL_FIDELITY=1` (off by default).
+  - `GAL_FID_RUST_BIN` picks a jitter-capable binary for the Rust leg. Older ST binaries ignore `H2H_JITTER`.
+
+400 games per cell (both sides, seed 424242). Rust = Python-jitter protocol on Rust rocketsim 0.3.3.
+
+| policy | mode | py_exact (headline) | py_jitter | rust | gap | alarm |
+|---|---|---|---|---|---|---|
+| ST25 final | 1v1 | 0.320 (500 g) | 0.408 | 0.690–0.698 | +0.285 | YES |
+| TM9 final (1795388102) | 1v1 | 0.360 | 0.335 | 0.533 | +0.198 | YES |
+| TM9 final | 2v2 | 0.125 | 0.110 | 0.125 | +0.015 | no |
+| TM9 final | 3v3 | 0.078 | 0.095 | 0.088 | -0.008 | no |
+| TM10 56283.8M (1795462497) | 1v1 | 0.300 | 0.343 | 0.470 | +0.128 | YES |
+| TM10 56283.8M | 2v2 | 0.110 | 0.103 | 0.110 | +0.008 | no |
+| TM10 56283.8M | 3v3 | 0.110 | 0.068 | 0.073 | +0.005 | no |
+
+Reading:
+- The Rust engine inflates 1v1 Galactus win rates by 13–29 points. 2v2/3v3 agree within noise.
+- In C++ no checkpoint beats Galactus: about 30–36% in 1v1 and 7–13% in teams.
+- The routine's check-in should quote `py_exact` from `gal_fidelity.jsonl`, plus the alarm, as the Galactus number. The Rust `gal_*` mid-eval fields stay as a cheap trend line only.
+
+### E2. diag_gal fixed: classify at the scorer's final touch, rotation logged
+
+- `tools/galactus/diag2.py` records touches, demos and the last 4 s of frames, with car forward/up, flip state and demo state. It uses exact spawns by default.
+- `tools/galactus/analyze2.py` classifies each goal at the scorer's last touch T. It separates causal demos (defender already demoed at T) from incidental ones (after T, which v1 counted as the cause).
+  - Roof carry: ball in the car frame |x| < 140, |y| < 100, 80 < z < 230, for ≥ 0.25 s of the 1.5 s before T.
+  - Flick: a flip started during, or ≤ 0.3 s after, the carry. Its direction comes from how the nose moved.
+
+ST25 vs Galactus, C++, exact spawns, 200 games: 75-125 (0.375).
+
+Goals conceded to Galactus (125):
+
+| shot type | goals | share |
+|---|---|---|
+| roof carry, pushed in without a flip | 74 | 59% |
+| aerial (ball z > 300) | 20 | 16% |
+| musty-style flick (carry + backflip) | 19 | 15% |
+| ground shot | 5 | 4% |
+| deflection off defender | 3 | 2% |
+| front flick | 2 | 2% |
+| unclassified | 2 | 2% |
+
+So 76% are carry-based.
+
+| ST25 (defender) at the shot | goals | share |
+|---|---|---|
+| goal-side far | 80 | 64% |
+| ball-side, out of position | 22 | 18% |
+| goal-side near (< 1200 uu) | 20 | 16% |
+| demoed at the shot (causal) | 1 | 1% |
+
+- ST25 was also demoed after the shot in 72 of these goals (58%). These are incidental, not the cause.
+- In short, Galactus scores mostly by dribbling the ball in on its roof, with musty flicks used to finish. ST25 is usually goal-side but loses to the carry. Demos almost never cause a goal.
+
+ST25's 75 goals:
+
+| shot type | goals | share |
+|---|---|---|
+| carry push | 25 | 33% |
+| kickoff (≤ 6 s) | 19 | 25% |
+| aerial | 10 | 13% |
+| ground shot | 10 | 13% |
+| deflection off defender | 5 | 7% |
+| unclassified | 6 | 8% |
+
+### E3. Rust rocketsim 0.3.3 vs C++ RocketSim 2.1.1
+
+How it was run:
+- `tools/galactus/engine_compare.py` generates 320 open-loop scenarios (8 families × 40, 2 s each). Each has an initial ball and car state plus per-tick controls.
+- Each scenario runs on the C++ engine through the Python bindings, and on the Rust crate through `tools/galactus/engine_replay` (standalone crate, `rocketsim =0.3.3`). The vendored copy only adds an opt-in quantize switch, so it behaves the same.
+- Both engines are deterministic: repeat runs are bit-identical.
+- Chaos baseline: C++ against itself with the car moved by 0.5 uu at the start.
+
+| family | ball err @1 s / @2 s, uu (med/p90) | car err @2 s | C++ vs C++ +0.5 uu (car / ball @2 s) |
+|---|---|---|---|
+| ball only | 0/0, 1/2 | – | 0 |
+| ground shot | 0/2, 1/12 | 4/33 | 1/4, 0/6 |
+| dribble (roof carry) | 8/32, 20/99 | 13/20 | 0/1, 8/21 |
+| flick off a carry | 28/268, 73/691 | 23/72 | 3/23, 10/43 |
+| random driving + jumps | – | 92/218 | 1/1 |
+| bump / demo | – | 174/297 | 1/1 |
+| wall drive | – | 23/54 | 4/11 |
+| aerial | 0/0, 0/1 | 11/78 | 1/71 |
+
+Findings:
+
+- Ball flight and simple shots match. Car physics does not.
+  - The gap is systematic: 1–2 orders of magnitude above the chaos baseline.
+  - rocketsim 0.3.5 is no closer, and its bumps are worse.
+- Single-mechanic isolation (`unit_mech.py`, `air_ctl.py`, `pitch_probe.py`):
+  - **Pitch lock bug (largest).** Rust zeroes pitch air-control torque while `flip_time < PITCHLOCK_EXTRA_TIME` (0.3 s) without checking that the car has flipped. `flip_time` is 0 after every state set or reset, so in Rust a car cannot pitch in the air for the first 0.3 s of every episode. Held pitch then lags C++ by 23° after 0.25 s and 75° after 0.5 s. Yaw and roll match exactly. Once the 0.3 s has passed, pitch matches C++ to 0.1°. The same check also applies after a landing mid-flip; that case was not measured separately.
+  - **Reset contact artifact.** After `set_car_state` the Rust car has no wheel contacts for one tick (`on_ground=false` in the first obs of every h2h kickoff), so a jump on that tick becomes a dodge. `refresh_car_contacts` fixes it, but no setter calls it.
+  - **Ground drive.** Throttle, brake and steer forces differ by 10–30 uu/s, and landing response by about 20 uu/s.
+  - **Dodges.** Impulses match within 8 uu/s across a 7×7 pitch/yaw grid.
+  - **Carries and contact.** Ball velocity diverges by > 20 uu/s during the roof carry itself, before any flick. Carry duration is the same on average (109 vs 108.5 ticks).
+    - Diagonal back flicks off a carry leave Rust's ball 153 uu/s faster (+13%) and 12° off. Pure front, back and side flicks are within 1–2%.
+  - **Bumps.** Post-bump speed is 7% higher in Rust, p90 |dv| is 1267 uu/s (outcomes flip), and there are 18 vs 17 demos out of 40.
+- Kickoff-artifact A/B (`H2H_KICKOFF_FIX=1` in `jittered_reset`: `flip_time=1` and `refresh_car_contacts`; diagnostic, off by default), ST25, 400 games, jitter, same binary:
+  - fix off: 0.745
+  - fix on: 0.683
+  - The reset artifacts explain about 6 of the ~30-point gap. The rest is the car-physics and contact differences above. Galactus's carry and flick control was learned in the C++ engine and degrades in Rust.
+- ST25's Rust-only wins (`coarse_goals.py`: one classifier with inferred touches on 8-tick samples for both engines; Rust from h2h decision dumps): 41 decided Rust games (6 dumps, 0.659) against the 200 C++ diag2 games (0.375). Rates are per game:
+
+| per game | Rust | C++ |
+|---|---|---|
+| Galactus goals | 0.34 | 0.63 |
+| Galactus carry/flick goals | 0.15 | 0.40 |
+| ST25 kickoff goals | 0.22 | 0.10 |
+| ST25 carry goals | 0.24 | 0.10 |
+| Galactus ball-side / out of position at ST25's shot | 74% | 47% |
+
+- In Rust, Galactus's main weapon, the roof carry, works less than half as often, and Galactus is more often caught out of position.
+- ST25 exploits this with kickoff goals and its own carries. Both win rates collapse in the C++ engine.
+
+### Recommendation
+
+Switch the training Galactus (and every Galactus number we act on) to the C++ engine. Fix the two cheap Rust bugs now regardless. Don't rely on randomization.
+
+1. **Fix the Rust port.**
+   - Cost: 1 day for the pitch-lock (`&& has_flipped` guard) and reset-contact fixes, about 6 points of the gap.
+   - The remaining car, contact and suspension divergence means re-porting Bullet and vehicle details against C++ RocketSim with `engine_compare.py` as the test. That is open-ended: weeks, with no guarantee.
+2. **Switch the trainer's Galactus games to C++.**
+   - Galactus can't run alone in another engine; the whole arena for those games has to be C++.
+   - Options: the rocketsim-rs C++ bindings as an alternate arena backend for the Galactus opponent slice, or the Python harness as a sidecar league stream.
+   - Cost: about 2–4 days of integration plus lower throughput on that slice. It removes the bias at the source.
+3. **Randomize** (physics or contact noise).
+   - Cost: about 1 day.
+   - It does not remove the systematic biases (pitch lock, ground forces). At best it makes policies robust and still leaves the Rust number untrustworthy.

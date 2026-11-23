@@ -1,0 +1,13 @@
+[package]
+name = "engine-replay"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rocketsim = "=0.3.3"
+serde_json = "1"
+
+[workspace]
+
+[profile.release]
+opt-level = 3
