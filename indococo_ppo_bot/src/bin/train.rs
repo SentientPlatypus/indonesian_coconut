@@ -409,6 +409,11 @@ fn device(backend: &str) -> Device {
         #[cfg(feature = "torch")]
         #[allow(deprecated)]
         "torch" => Device::libtorch_cuda(0),
+        // CPU LibTorch: used by the frozen-copy smoke so it can run while TM10
+        // holds the GPU. Production train templates stay on backend = "torch".
+        #[cfg(feature = "torch")]
+        #[allow(deprecated)]
+        "torch_cpu" => Device::libtorch(),
         #[cfg(feature = "cuda")]
         "cuda" => Device::cuda(0),
         other => panic!("backend {other:?} is not compiled in"),
