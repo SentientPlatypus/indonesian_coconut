@@ -70,6 +70,7 @@ Body sections below are in chronological-note order, not run order. This table i
 | TM8 | done | → 47957.0M final (`tm8_47957M.bpk`); mid export 45582M | yes (then team_best; user-approved 2026-11-21 2:22 PM ET) | [TM8 results](#tm8-results-team-best--tm8-final-2026-11-21) |
 | TM9 | done; **current team_best** | → 52957.1M | yes (user-approved 2026-11-22 7:45 PM ET) | [TM9 results](#tm9-results-team-best--tm9-final-2026-11-22) |
 | TM10 | **training** (as of 2026-11-23) | from TM9, +5B planned | not yet; BT pin is TM7, not TM9 | [TM10 cross-exam](#tm10--cross-exam-note-support-car-playmaking-demo--bump-staged-2026-11-21-auto-starts-after-tm9) |
+| Eval fidelity (E1–E3) | report-only tooling + findings (2026-11-23) | — | n/a (no promotion rule changed) | [Eval fidelity](#eval-fidelity-galactus-headline-metric-diag-fix-rust-vs-c-engine-2026-11-23) |
 
 Three arms, all warm-started from the full 430.8M checkpoint (actor, critic
 and optimizer state) and trained ~450M steps with identical learner settings
@@ -4187,6 +4188,8 @@ team_best was changed.
   - TM checkpoints (235/270): 1v1, 2v2 and 3v3.
 - Hook: `team_launch.sh` / `st_launch.sh` run it after finals, detached, when `GAL_FIDELITY=1` (off by default).
   - `GAL_FID_RUST_BIN` picks a jitter-capable binary for the Rust leg. Older ST binaries ignore `H2H_JITTER`.
+  - `GAL_FIDELITY=1` needs `experiments/gal_fidelity.sh` and `tools/pool_eval/gal_fidelity.py` (plus `poolkit/team_obs.py`) synced into the live `$C` code copy. If they are missing the hook logs `GAL_FIDELITY: ... missing, skipped`. It holds `flock -n $R/.gal_fidelity.lock`, so a second fidelity run never stacks on the first (the ≤ 2 heavy jobs rule).
+  - Failure handling: a failed or timed-out Rust leg writes `rust_error` and `"alarm": null`, never a silent `false`. Timeouts are `GAL_FID_TIMEOUT` (3h, whole run) and `GAL_FID_RUST_TIMEOUT` (3600 s per Rust leg). Each row records `seed` and `rust_bin`.
 
 400 games per cell (both sides, seed 424242). Rust = Python-jitter protocol on Rust rocketsim 0.3.3.
 
@@ -4214,6 +4217,8 @@ Reading:
 
 ST25 vs Galactus, C++, exact spawns, 200 games: 75-125 (0.375).
 
+Sample sizes differ: the E1 ST25 headline `py_exact` = 0.320 is over 500 games, while this diag2 run is 0.375 over 200 games (different seeds; the two are within about 2 SE). The Rust-only-wins table in E3 is from 41 decided games only.
+
 Goals conceded to Galactus (125):
 
 | shot type | goals | share |
@@ -4234,6 +4239,7 @@ So 76% are carry-based.
 | ball-side, out of position | 22 | 18% |
 | goal-side near (< 1200 uu) | 20 | 16% |
 | demoed at the shot (causal) | 1 | 1% |
+| unclassified (shot > 4 s before goal) | 2 | 2% |
 
 - ST25 was also demoed after the shot in 72 of these goals (58%). These are incidental, not the cause.
 - In short, Galactus scores mostly by dribbling the ball in on its roof, with musty flicks used to finish. ST25 is usually goal-side but loses to the carry. Demos almost never cause a goal.
@@ -4281,11 +4287,21 @@ Findings:
   - **Carries and contact.** Ball velocity diverges by > 20 uu/s during the roof carry itself, before any flick. Carry duration is the same on average (109 vs 108.5 ticks).
     - Diagonal back flicks off a carry leave Rust's ball 153 uu/s faster (+13%) and 12° off. Pure front, back and side flicks are within 1–2%.
   - **Bumps.** Post-bump speed is 7% higher in Rust, p90 |dv| is 1267 uu/s (outcomes flip), and there are 18 vs 17 demos out of 40.
-- Kickoff-artifact A/B (`H2H_KICKOFF_FIX=1` in `jittered_reset`: `flip_time=1` and `refresh_car_contacts`; diagnostic, off by default), ST25, 400 games, jitter, same binary:
-  - fix off: 0.745
-  - fix on: 0.683
-  - The reset artifacts explain about 6 of the ~30-point gap. The rest is the car-physics and contact differences above. Galactus's carry and flick control was learned in the C++ engine and degrades in Rust.
-- ST25's Rust-only wins (`coarse_goals.py`: one classifier with inferred touches on 8-tick samples for both engines; Rust from h2h decision dumps): 41 decided Rust games (6 dumps, 0.659) against the 200 C++ diag2 games (0.375). Rates are per game:
+- Kickoff-artifact A/B (`H2H_KICKOFF_FIX=1` in `jittered_reset`: `flip_time=1` and `refresh_car_contacts` for every car after the reset; diagnostic, off by default).
+  - Setup: ST25 (`exp_ST25/checkpoints/1794413355`) vs Galactus 1v1, 400 games per run, `H2H_JITTER=1`, 8 threads.
+  - Binary: `/opt/dlami/nvme/galgap/tgt_train/release/indococo-train`, built from this branch (sha256 `cf54747b…`; `strings` shows `H2H_KICKOFF_FIX`).
+  - Logs: `/opt/dlami/nvme/galgap/e3/ab_fix{0,1}.log` and `ab_fix{0,1}_r2.log`.
+
+| H2H_KICKOFF_FIX | run 1 | run 2 | pooled (800 g) |
+|---|---|---|---|
+| 0 (off) | 0.680 (272-128) | 0.6725 (269-131) | 0.676 ± 0.017 |
+| 1 (on) | 0.6625 (265-135) | 0.6675 (267-133) | 0.665 ± 0.017 |
+
+  - The difference is −0.011 ± 0.024: not significant. The two reset artifacts are real port bugs, but they explain about 0–1 point of the ~27-point gap (pooled 0.676 Rust vs 0.408 Python jitter), not 6.
+  - Correction of an earlier draft: it quoted 0.745 (fix off) vs 0.683 (fix on). Both runs were on `/home/ubuntu/galgap_tgt/release/indococo-train`. Sourcing `fr9_env.sh` changed directory, so that binary was built from `code_fr9`, does not contain the flag, and both runs were the same unpatched binary. The 6-point spread was run-to-run variation; those logs are `/home/ubuntu/galgap_h2h_fix{0,1}.log`.
+  - The earlier 0.690–0.698 baseline (TM10 and ST36 binaries) agrees with this binary's 0.676 within about 1 SE.
+  - The gap is therefore the car-physics and contact differences above. Galactus's carry and flick control was learned in the C++ engine and degrades in Rust.
+- ST25's Rust-only wins (`coarse_goals.py`: one classifier with inferred touches on 8-tick samples for both engines; Rust from h2h decision dumps of unpatched binaries: dumps 1–2 from `exp_TM10/indococo-train`, dumps 3–6 from the `code_fr9` build): 41 decided Rust games (6 dumps, 0.659) against the 200 C++ diag2 games (0.375). Rates are per game:
 
 | per game | Rust | C++ |
 |---|---|---|
@@ -4303,7 +4319,7 @@ Findings:
 Switch the training Galactus (and every Galactus number we act on) to the C++ engine. Fix the two cheap Rust bugs now regardless. Don't rely on randomization.
 
 1. **Fix the Rust port.**
-   - Cost: 1 day for the pitch-lock (`&& has_flipped` guard) and reset-contact fixes, about 6 points of the gap.
+   - Cost: 1 day for the pitch-lock (`&& has_flipped` guard) and reset-contact fixes. Measured value at kickoff: about 0–1 point (A/B above). They are still correct to fix, mostly for air resets mid-episode.
    - The remaining car, contact and suspension divergence means re-porting Bullet and vehicle details against C++ RocketSim with `engine_compare.py` as the test. That is open-ended: weeks, with no guarantee.
 2. **Switch the trainer's Galactus games to C++.**
    - Galactus can't run alone in another engine; the whole arena for those games has to be C++.

@@ -172,7 +172,14 @@ log "$RUN finals: $(cat $F/PROMOTE.json)"
 # Opt-in (GAL_FIDELITY=1), report-only: exact-spawn C++ Galactus headline + Rust gap
 # alarm -> $F/gal_fidelity.jsonl (EXPERIMENTS.md "Eval fidelity"). Detached, nice 19.
 if [[ "${GAL_FIDELITY:-0}" == 1 ]]; then
-  setsid nohup bash $C/experiments/gal_fidelity.sh $bestck $F 1v1 1 $B > $F/gal_fidelity.out 2>&1 < /dev/null &
+  GF="$C/experiments/gal_fidelity.sh"
+  if [[ -f "$GF" && -f "$C/tools/pool_eval/gal_fidelity.py" ]]; then
+    # flock -n: at most one fidelity run at a time (<= 2 heavy jobs on the box incl.
+    # the next training run); a second finals while one runs is skipped, not stacked.
+    setsid nohup flock -n "$R/.gal_fidelity.lock" bash "$GF" $bestck $F 1v1 1 $B > $F/gal_fidelity.out 2>&1 < /dev/null &
+  else
+    log "GAL_FIDELITY: $GF missing, skipped"
+  fi
 fi
 # Report-only demos-against (c4c56a0 h2h fields) vs BEST, 200 kickoff games,
 # with indococo-train-hunt (has the new fields). Never blocks the chain.

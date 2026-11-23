@@ -75,7 +75,7 @@ def classify(g):
                   and f["cars"][str(scorer)]["flip_time"] <= 0.1]
         starts = [t for t in starts if any(t - 36 <= r <= t for r in roof_t)]
         if starts:
-            t0 = starts[0]
+            t0 = starts[-1]  # the last flip started at or before T (win holds frames <= T)
             fl = [f for f in win if t0 <= f["t"] <= t0 + 30 and f["cars"][str(scorer)]["flipping"]]
             pitch = side = 0.0
             for a_, b_ in zip(fl, fl[1:]):

@@ -133,6 +133,9 @@ def main() -> None:
         pool = [o for o in pool if o["name"] in wanted]
     start = time.time()
     candidate = {"name": "candidate", "kind": a.candidate_kind, "path": a.candidate}
+    if a.team_size > 1 and a.candidate_kind == "indococo":
+        ap.error(f"--team-size {a.team_size} needs --candidate-kind indococo_team: kind 'indococo' "
+                 "(106-wide 1v1 obs, e.g. ST25) has no team layout and is 1v1-only")
     if a.no_air_clamp:
         candidate["clamp_air_time"] = False
     rows = run_pool(candidate, pool, a.games, a.procs, a.seed, team_size=a.team_size, jitter=not a.exact_spawns)

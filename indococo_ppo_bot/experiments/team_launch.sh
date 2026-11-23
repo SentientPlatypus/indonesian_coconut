@@ -163,7 +163,14 @@ touch $F/DONE; log "$RUN finals: $(cat $F/TEAM_PROMOTE.json)"
 # $F/gal_fidelity.jsonl (EXPERIMENTS.md "Eval fidelity"). Detached, nice 19; never gates.
 if [[ "${GAL_FIDELITY:-0}" == 1 ]]; then
   [[ "${OBS_PRED:-0}" == 1 ]] && GF_OBS=team || GF_OBS=team235
-  setsid nohup bash $C/experiments/gal_fidelity.sh $bestck $F $GF_OBS 1,2,3 $B > $F/gal_fidelity.out 2>&1 < /dev/null &
+  GF="$C/experiments/gal_fidelity.sh"
+  if [[ -f "$GF" && -f "$C/tools/pool_eval/gal_fidelity.py" ]]; then
+    # flock -n: at most one fidelity run at a time (<= 2 heavy jobs on the box incl.
+    # the next training run); a second finals while one runs is skipped, not stacked.
+    setsid nohup flock -n "$R/.gal_fidelity.lock" bash "$GF" $bestck $F $GF_OBS 1,2,3 $B > $F/gal_fidelity.out 2>&1 < /dev/null &
+  else
+    log "GAL_FIDELITY: $GF missing, skipped"
+  fi
 fi
 if [[ ! -f $R/TEAM_NO_FOLLOWUP ]]; then
   Q=$R/TEAM_QUEUE; next=$(head -1 $Q 2>/dev/null)

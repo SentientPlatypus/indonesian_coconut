@@ -8,7 +8,8 @@
 # $F/gal_fidelity.log. Never gates promotion. Env: GAL_FID_GAMES (400),
 # GAL_FID_PROCS (8), GAL_FID_RUST_BIN (binary for the Rust leg; default BIN.
 # It must honour H2H_JITTER=1, e.g. exp_TM10/indococo-train; older ST binaries
-# ignore it and the Rust leg then has one game per spawn). Runs at nice 19.
+# ignore it and the Rust leg then has one game per spawn), GAL_FID_TIMEOUT (3h, whole
+# run), GAL_FID_RUST_TIMEOUT (3600 s, each Rust leg). Runs at nice 19.
 set -u
 CK=$1; F=$2; OBS=${3:-team}; MODES=${4:-1,2,3}; BIN=${5:-}
 C=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -25,7 +26,9 @@ esac
 if [[ -n "$BIN" ]]; then env $ENVS nice -n 19 "$BIN" export "$CK" "$ST" > /dev/null 2>&1 || { echo "export failed" >&2; exit 1; }
 else ST=$CK; fi
 RUST=(); [[ -n "$BIN" ]] && RUST=(--rust-bin "${GAL_FID_RUST_BIN:-$BIN}" --rust-ckpt "$CK" --rust-env "$OBS")
-CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=1 nice -n 19 $PYT "$C/tools/pool_eval/gal_fidelity.py" --candidate "$ST" --kind $KIND \
+CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=1 timeout -k 60 "${GAL_FID_TIMEOUT:-3h}" nice -n 19 $PYT "$C/tools/pool_eval/gal_fidelity.py" --candidate "$ST" --kind $KIND \
   --modes "$MODES" --games "${GAL_FID_GAMES:-400}" --procs "${GAL_FID_PROCS:-8}" "${RUST[@]}" \
   --label "$(basename "$F")" --out "$F/gal_fidelity.jsonl" > "$F/gal_fidelity.log" 2>&1
+rc=$?
 tail -5 "$F/gal_fidelity.log"
+exit $rc

@@ -126,7 +126,9 @@ class IndococoTeamPolicy(Agent):
     One instance per car (the obs needs that car's held controls). Works in
     1v1 / 2v2 / 3v3: the net sees padded 3v3 slots in every mode."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, **_options) -> None:
+        # Pool-entry options of IndococoPolicy (e.g. clamp_air_time from
+        # --no-air-clamp) do not apply to the team obs; accepted and ignored.
         super().__init__()
         from rlgym.rocket_league.action_parsers import LookupTableAction
 
