@@ -2,6 +2,75 @@
 
 Full research write-up with figures and data: [docs/experiments/REPORT.md](../docs/experiments/REPORT.md).
 
+## Index
+
+Current references (do not change BEST or team_best without asking):
+
+- **1v1 BEST:** ST25 final, `exp_ST25/checkpoints/1794413355`, 20727.5M, user-approved 2026-11-11 12:16 PM ET (America/New_York). `checkpoints_to_test/st25_20728M.bpk`.
+- **team_best:** TM9 final, `exp_TM9/checkpoints/1795388102`, 52957.1M, user-approved 2026-11-22 7:45 PM ET (America/New_York). `checkpoints_to_test/tm9_52957M.bpk`.
+- **TM10 BT pin:** TM7 final, `exp_TM7/checkpoints/1795170349` (not the current team_best). TM10 finals therefore do not measure TM10 vs TM9; use `experiments/tm10_vs_tm9_report.sh` after `tm10_final/DONE`.
+
+Body sections below are in chronological-note order, not run order. This table is the "current" index. Steps are trainer cumulative timesteps.
+
+| run | status | start → end (steps) | promoted | link |
+|---|---|---|---|---|
+| X0 / FR / ADB | done | 430.8M → ~881M (ADB 831.6M) | ADB shipped; X0/FR not packaged as bpks | [Results](#results) |
+| FR2 | done | 831.6M → 1131.6M | shipped (`fr2_1132M.bpk`) | [Round 2: FR2](#round-2-fr2-flip-resets-with-fixed-detection) |
+| FR3 | stopped | — | no | [Round 3: FR3](#round-3-fr3-staged-reset-curriculum) |
+| AUD | done | 831.6M → 1131.6M | shipped (`aud_1132M.bpk`) | [Round 4: AUD](#round-4-aud-air-reward-audit) |
+| FR4 | done | 1131.6M → 1431.6M | shipped (`fr4_1432M.bpk`) | [Round 5: FR4](#round-5-fr4-flip-resets-on-the-audited-rewards) |
+| FR5 | done | 1431.6M → 1731.6M | no (not shipped) | [Round 6: FR5](#round-6-fr5-behavior-cloned-flip-resets-then-ppo) |
+| FR6 | done | 1431.6M → 2631.6M | shipped (`fr6_2632M.bpk`) | [Round 7: FR6](#round-7-fr6-keep-fr4s-game-strength-practice-the-levels-the-eval-uses) |
+| FR7 / FR7b–e | done | 2631.6M → 5211.6M | no (reset-use rule) | [Round 8: FR7](#round-8-fr7-resets-from-real-play-that-lead-to-shotsgoals) |
+| FR8 / FR8b/c | done | 3491.6M → 5491.6M | no (reset-use rule; 106-wide obs) | [FR8](#fr8-previous-action--car-frame-ball-obs-planned-2026-11-02) |
+| FR9 / FR9b | done | 4491.6M → 6101.6M | no (reset-use rule) | [FR9](#fr9-a-changed-recipe-for-normal-play-flip-resets-designed-2026-11-03) |
+| ST1 | done | 4491.6M → 5051.6M | no; shipped `st1_5052M.bpk` | [ST](#st-strength-only-1v1-chain-started-2026-11-03-1026-pm-et) |
+| ST2 | done | 5051.6M → 5511.6M | yes | REPORT §11.8h |
+| ST3 | done | 5511.6M → 5771.6M | yes | [ST3 done](#2026-11-04-410-pm-et-st3-done-and-promoted-st4-running-st5-queued) |
+| ST4 | ran (ST5 started from 6032.3M) | → 6032.3M | no bpk in `checkpoints_to_test` | [ST3 done / ST4 running](#2026-11-04-410-pm-et-st3-done-and-promoted-st4-running-st5-queued) |
+| ST5 | done | → 6192.8M | yes | [ST5 results](#st5-results-nov-5-2026-431-am-et-promoted-new-best-st5-61928m) |
+| ST6 | done | → 6954.5M | yes | [ST6 results](#st6-results-nov-5-2026-1056-am-et-promoted-new-best-st6-69545m) |
+| ST7 | done | mid 7666.1M | no | [ST7 results](#st7-results-nov-5-2026-526-pm-et-not-promoted) |
+| ST8 | done | → 8666.3M | yes | [ST8 results](#st8-results-nov-5-2026-1157-pm-et-promoted-new-best-st8-86663m) |
+| ST9 | done | → 9628.4M | yes | [ST9 results](#st9-results-nov-6-2026-638-am-et-promoted-new-best-st9-96284m) |
+| ST10 | done | → 10628.6M | yes (manual) | [ST10 results](#st10-results-nov-6-2026-131-pm-et-manual-promote-new-best-st10-106286m) |
+| ST11 | done | → 11090M | yes | REPORT §11.8o; `st11_11090M.bpk` |
+| ST12 | queued (add ST9_final) | — | n/a (no results section) | [ST12](#st12-generalization-add-st9_final-to-extra_opps-at-w10) |
+| ST15 | done | → 14024.3M | yes | `st15_14024M.bpk` (no dedicated results heading) |
+| ST16 | done | → 14786.0M | yes | [ST16 results](#st16-results-nov-8-2026-737-am-et-promoted-new-best-st16-147860m) |
+| ST17 | design (OPPCH 0.50→0.60) | — | n/a | [ST17](#st17-generalization-oppch-050---060) |
+| ST18 | design (Galactus focus) | — | n/a | [ST18](#st18-galactus-focus-league-pruned-galactus-20-of-iterations) |
+| ST19r | done | → 15918.8M | yes (manual) | [ST19r results](#st19r-results-nov-9-2026-802-am-et-manual-promote-new-best-st19r-159188m) |
+| ST20 | done | — | no | [ST20 results](#st20-results-nov-9-2026-not-promoted) |
+| ST20r | done | → 17642.6M | yes (manual) | [ST20r results](#st20r-results-nov-10-2026-0016-et-manual-promote-new-best-st20r-176426m) |
+| ST21 | done | → 18053.6M | yes (manual) | [ST21 results](#st21-results-nov-10-2026-0857-et-manual-promote-was-best-until-st23) |
+| ST22 | done | → 18564.8M | no | [ST22 results](#st22-results-nov-10-2026-not-promoted) |
+| ST23 | done | → 19015.7M | yes | [ST23 results](#st23-results-nov-10-2026-1130-pm-et-promote-was-best-until-st25) |
+| ST24 | done | selected 19727.3M | no | [ST24 results](#st24-results-st20r_final--20-for-bp5--dice-recovery-not-promoted-2026-11-11) |
+| ST25 | done; **current 1v1 BEST** | selected 20727.5M | yes (manual, user-approved) | [ST25](#st25-training-after-st24-demo_threat-retuned-to-the-galactus-demo-failure-mode-2026-11-11) |
+| ST26 | done | selected 21639.5M | no | [ST26 results](#st26-results-st25-without-st20r_final-not-promoted-2026-11-11) |
+| ST27 | done | selected 21749.9M | no | [ST27 results](#st27-results-fr4_final--20-not-promoted-2026-11-12) |
+| ST28 | done | — | no | [ST28 results](#st28-results-st27-league--demo-penalty-x3-from-st25-not-promoted-2026-11-12) |
+| ST29 | done | — | no | [ST29 results](#st29-results-st25-league--demo-penalty-x3-from-st25-not-promoted-2026-11-12) |
+| ST30 | done | — | no | [ST30 / ST31 results](#st31-results-pre-concede-replay-not-promoted-2026-11-13) |
+| ST31 | done | — | no | [ST31 results](#st31-results-pre-concede-replay-not-promoted-2026-11-13) |
+| ST32 | done | from ST25 | no (user declined) | [ST32 results](#st32-results-recoverable-demo_threat-not-promoted-user-declined-2026-11-13) |
+| ST33 | done | from ST25 | no (user declined) | [ST33 results](#st33-results-galactus-conditioned-threat-starts-not-promoted-user-declined-2026-11-13) |
+| ST34 | done | — | no | [ST34 results](#st34-results-face_ball-10---01-and-off-the-zero-sum-path-not-promoted-2026-11-13) |
+| ST35 | done | — | no (user declined) | [ST35 results](#st35-results-pfsp-with-galactus-clamp-not-promoted-user-declined-2026-11-14) |
+| ST36 | done | selected 21349.1M | no; shipped `st36_21349M.bpk` | [ST36 results](#st36-results-pbrs-shadow_box-w30-from-st35-not-promoted-2026-11-14) |
+| TM1 | done | from ST36 → 24275M | yes (then team_best); `tm1_24275M.bpk` | [TM1 results](#tm1-results-team-training-from-st36-team-best--tm1-final-2026-11-15) |
+| TM2 | done | → 27275M (mid export 26089M) | yes (then team_best) | [TM2 results](#tm2-results-team-mechanics-on-top-of-tm1-team-best--tm2-final-2026-11-15) |
+| TM3 | done | → 28999M | yes (then team_best); 270-wide pred obs | [TM3 results](#tm3-results-team-best--tm3-final-2026-11-16) |
+| TM4 | cut over to TM5 | cut at 30412M | yes (cut checkpoint was team_best) | [TM4 results](#tm4-results-team-best--tm4-cut-checkpoint-2026-11-16) |
+| TM5 | cut over to TM5r | cut at 31434M | cut-over export, not a final promote | `tm5_31434M.bpk` |
+| TM5r | cut over to TM6 | cut at 32957M | cut-over export, not a final promote | `tm5r_32957M.bpk` |
+| TM6 | done | → 37957M | yes (then team_best) | [TM6 results](#tm6-results-team-best--tm6-final-2026-11-18) |
+| TM7 | done | → 42957M | yes (then team_best); still TM10's BT pin | [TM7 results](#tm7-results-team-best--tm7-final-2026-11-20) |
+| TM8 | done | → 47957.0M (mid export 45582M) | yes (then team_best; user-approved 2026-11-21 2:22 PM ET) | [TM8 results](#tm8-results-team-best--tm8-final-2026-11-21) |
+| TM9 | done; **current team_best** | → 52957.1M | yes (user-approved 2026-11-22 7:45 PM ET) | [TM9 results](#tm9-results-team-best--tm9-final-2026-11-22) |
+| TM10 | **training** (as of 2026-11-23) | from TM9, +5B planned | not yet; BT pin is TM7, not TM9 | [TM10 cross-exam](#tm10--cross-exam-note-support-car-playmaking-demo--bump-staged-2026-11-21-auto-starts-after-tm9) |
+
 Three arms, all warm-started from the full 430.8M checkpoint (actor, critic
 and optimizer state) and trained ~450M steps with identical learner settings
 (`experiments/train_template.toml`):

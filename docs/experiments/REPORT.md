@@ -1201,6 +1201,19 @@ Promoted on every gate (pool −0.63 within 1.0 tol). Recent-gen league lifted F
 - Multi-seed reruns of the key comparisons (X0 vs ADB) to measure seed variance.
 - Framework: reuse collection values (stage 3), CUDA graphs and a GPU rollout buffer, as in the indococo-ppo README roadmap.
 
+## 15. ST series (strength-only 1v1, ST1–ST36)
+
+The ST chain is documented in detail in [`indococo_ppo_bot/EXPERIMENTS.md`](../../indococo_ppo_bot/EXPERIMENTS.md) (see the Index there) and in the later §11.8m–§11.8ac notes below, which were appended out of numeric order after this report's original §14.
+
+ST runs dropped the flip-reset curriculum focus and trained for 1v1 strength and generalization (broader league, then Galactus / Ripple / Megabyte, then defensive drills and PFSP). **Current 1v1 BEST is ST25** (20727.5M, `exp_ST25/checkpoints/1794413355`, user-approved 2026-11-11 12:16 PM ET, America/New_York), shipped as `checkpoints_to_test/st25_20728M.bpk`. Later ST26–ST36 were not promoted (ST32, ST33 and ST35 were declined by the user even when an automatic gate passed). ST36 (21349.1M) was still exported as `st36_21349M.bpk`.
+
+**Galactus-fidelity caveat.** Headless numbers against the Rust Galactus port (rocketsim 0.3.3) are not interchangeable with the Python / C++ RocketSim harness. ST25 scores about 69% vs Galactus in the Rust eval and about 40.8% in the Python one. Rust-Galactus mid and gate numbers are a trend only; they should not be treated as the generalization score of record. Spawn jitter (60 uu / 4°) is also worth about 7–9 points when it is left off.
+
+## 16. TM series (2v2 / 3v3 team IPPO, TM1–TM10)
+
+Team training starts at TM1 (from ST36, 235-wide team-ext obs, one shared policy) and continues through TM3 (270-wide ball-prediction obs) and TM4–TM10 (Nexto / Necto in the loop, spacing and role rewards, playmaking demos). Each finished or cut run's latest model was pushed under `checkpoints_to_test/tm*_*.bpk`. **Current team_best is the TM9 final** (52957.1M, `exp_TM9/checkpoints/1795388102`, user-approved 2026-11-22 7:45 PM ET, America/New_York), `checkpoints_to_test/tm9_52957M.bpk`. TM10 was training as of 2026-11-23 from the TM9 final; its launcher still pins the h2h baseline to the TM7 final, so a promotion decision should use a report-only TM10 vs TM9 h2h (`experiments/tm10_vs_tm9_report.sh`) rather than `TEAM_PROMOTE.json` alone.
+
+The same Galactus-fidelity caveat as §15 applies to team Galactus numbers (and Galactus is a 1v1-trained bot used as a 2v2/3v3 opponent, so those modes are a weak style-variety signal).
 
 ### 11.8m ST9 results: OPPCH 0.55 on ST8 league, from ST8 8666.3M (→ 9628.4M). NEW BEST
 

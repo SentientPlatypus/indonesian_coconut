@@ -14,6 +14,85 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
+**Current references:** 1v1 BEST is ST25 (`st25_20728M.bpk` below). **team_best** is the TM9 final (`tm9_52957M.bpk`, user-approved 2026-11-22 7:45 PM ET, America/New_York). The RLBot pack still ships TM2 as the default 2v2/3v3 model (`weights/tm2`); changing that is a separate pack decision. Every `*.bpk` in this folder should have a heading in this file.
+
+### tm9_52957M.bpk (current team_best)
+
+| | |
+|---|---|
+| Lineage | TM9 final (3v3 kickoff same-pad / one-corner rewards, `tm9.toml` / `train_tm9.toml`, 270-wide pred obs), last checkpoint at END, `exp_TM9/checkpoints/1795388102` (52957.1M steps). Warm start for TM10. **Promoted** to team_best, user-approved 2026-11-22 7:45 PM ET (America/New_York). |
+| H2H | vs TM7 pin (400 g): 2v2 **57.5%** (230-170), 3v3 **65.5%** (262-138). vs TM8 final (400 g): 2v2 **51.75%** (207-193), 3v3 **47.75%** (191-209). |
+| Nexto / Necto | Nexto 2v2 **60.3%** (181-119), 3v3 **48.7%** (146-154); Necto 2v2 **95.7%**, 3v3 **92.0%** (300 g each). |
+| sha256 | `848d7fd295321b80a18db554fc3ee25f1f5836de5c79ca07d87919bd0f602021` |
+
+### tm8_47957M.bpk
+
+| | |
+|---|---|
+| Lineage | TM8 final (rotation cover, kickoff roles, open-net finishing, PFSP; 270-wide pred obs), `exp_TM8/checkpoints/1795278408` (47957.0M steps). Was team_best after user approval 2026-11-21 2:22 PM ET; superseded by TM9. Shipped, then promoted. |
+| H2H | vs TM7 final (400 g): 2v2 **58.5%** (234-166), 3v3 **55.25%** (221-179). vs TM6 final (400 g): 2v2 **62.0%**, 3v3 **60.75%**. |
+| Nexto / Necto | Nexto 2v2 **60.3%**, 3v3 **50.0%**; Necto 2v2 **92.7%**, 3v3 **91.3%** (300 g each). |
+| sha256 | `6a12762fb75cce03d35d99b68f10fdb960d7d36f650c807270504b08d7af2ae7` |
+
+### tm8_45582M.bpk
+
+| | |
+|---|---|
+| Lineage | TM8 mid-run at 45582.2M (270-wide pred obs). **Not** the TM8 final and **not promoted**. |
+| H2H (mid-run) | vs TM6: 2v2 **62.0%**, 3v3 **61.3%**; 1v1 vs ST25 **61.5%**; Nexto 2v2/3v3 **60.5%** / **53.9%**. |
+| sha256 | `e790cfdb7ab85a21bdf95ce4113690b0a5388faa29a13ea6031c67d6d070bd37` |
+
+### tm7_42957M.bpk
+
+| | |
+|---|---|
+| Lineage | TM7 final (close + far spacing, pass separation, role-concede; 270-wide pred obs), 42957M steps, `exp_TM7/checkpoints/1795170349`. Was team_best; still the **TM10 BT pin**. Promoted at the time, later superseded by TM8/TM9. |
+| sha256 | `304d04fbb26c2da45a72f484ae36b3d1b102b678d8c363d783689cc9784d3b2f` |
+
+### tm6_37957M.bpk
+
+| | |
+|---|---|
+| Lineage | TM6 final (role-based rewards; 270-wide pred obs), 37957M steps, `exp_TM6/checkpoints/1795044069`. Was team_best; later superseded. Promoted at the time. |
+| sha256 | `b1436db0f326fdbcab8a6c4e23962e14d80acf2fdb7110bf54c14885a1147647` |
+
+### tm5r_32957M.bpk
+
+| | |
+|---|---|
+| Lineage | TM5r latest at the TM6 cut-over (stronger spacing, second-commit gate; 270-wide pred obs), 32957M steps. Cut-over export, **not** a final promote. |
+| sha256 | `59c89fe5f7185514ba7f83ca00220cdd9e47fb09a8ccd63cb516f8c0b48c6532` |
+
+### tm5_31434M.bpk
+
+| | |
+|---|---|
+| Lineage | TM5 latest at the TM5r cut-over (live-play spacing metrics; 270-wide pred obs), 31434M steps. Cut-over export, **not** a final promote. |
+| sha256 | `7933f34854f83f124641337471f7c66bd5d2f039bb6b686a013b0f5c3e462fd0` |
+
+### tm4_30412M.bpk
+
+| | |
+|---|---|
+| Lineage | TM4 latest at the TM5 cut-over (Nexto/Necto league; 270-wide pred obs), 30412M steps, then team_best as the cut checkpoint. Later superseded. |
+| sha256 | `7591bd329dd7905c5a4d57611a63d8aebf9a6b7827ba0e55e1229e49c2c33691` |
+
+### tm3_28999M.bpk
+
+| | |
+|---|---|
+| Lineage | TM3 final candidate (ball prediction + nearest big pad, obs-only; 270-wide pred obs), 28999M steps. Then team_best; later superseded. |
+| H2H | vs TM1 final: 2v2 **63.7%**, 3v3 **64.7%**; 1v1 vs ST25 **49.4%**; Galactus 1v1 **55.6%**. |
+| sha256 | `316b29d0264a4b9f48d0a2bd09b79cd2fc0f12741ef3b0c9c44fd4d263000b1a` |
+
+### tm2_27275M.bpk
+
+| | |
+|---|---|
+| Lineage | TM2 final (team mechanics on top of TM1; team-ext 235-wide obs), 27275M steps. Then team_best; later superseded. Distinct from the mid-run `tm2_26089M.bpk` below (still the pack default). |
+| H2H | vs TM1 final: 2v2 **61.1%**, 3v3 **60.9%**; 1v1 vs ST25 **51.2%**; Galactus 1v1 **55.2%**. |
+| sha256 | `3c1375fbe254869c7e69bfe67932c2a46311dd4d2fa913edbfbfb59d8b9d90d8` |
+
 ### tm2_26089M.bpk
 
 | | |
@@ -23,6 +102,14 @@ Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh eng
 | Galactus (mid-run eval, not the 500-game panel) | 1v1 **62.5%** (125-75, 200 games); 2v2 9.6% (10-94), 3v3 4.8% (5-99) |
 | Megabyte | 2v2 6.7% (7-97) |
 | sha256 | `f76f1867a8d3090a8346ff59042995c59cf3efa9d641550aba621db0393c82e4` |
+
+### tm1_24275M.bpk
+
+| | |
+|---|---|
+| Lineage | TM1 final (first 2v2/3v3 team IPPO from ST36; team-ext 235-wide obs), 24275M steps. Then team_best; later superseded. |
+| H2H | vs seed: 2v2 **85.7%**, 3v3 **88.5%**. |
+| sha256 | `b5c752f90acae45b589d1cb71d2b088fc2c8a6ba4b18adbaa1bdab1d3ef61e5f` |
 
 ### st36_21349M.bpk
 
@@ -104,6 +191,21 @@ Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh eng
 | Gen panel | min **0.342** / mean **0.800** (ST16 0.250 / 0.788) |
 | sha256 | `5a2405ebf11dc72131ad964518366df3dad22e8487c8707f167c631845d6fe6a` |
 
+### st16_14786M.bpk
+
+| | |
+|---|---|
+| Lineage | ST16, 14786.0M steps. **Promoted**, was 1v1 BEST until ST19r. 106-input obs. |
+| H2H | **52.6%** vs ST15; FR4 74.6; pool400 92.04; bp5 65.83; Galactus 25.0%; Megabyte 71.6%. |
+| sha256 | `e19c66598e88304a965d5cf0edc608f88ee62ca7f44c811fa6042839d6159b74` |
+
+### st15_14024M.bpk
+
+| | |
+|---|---|
+| Lineage | ST15, 14024.3M steps. **Promoted**, was 1v1 BEST until ST16. 106-input obs. |
+| sha256 | `ba13d7cfa2cb12e767cce67cea6a351ba864642ba67614e718de50d7bd2cac5f` |
+
 ### st10_10629M.bpk
 
 | | |
@@ -116,6 +218,14 @@ Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh eng
 | Megabyte | **71.0%** over 500 games (report-only; ST8 Python ref ~64%) |
 | Gen panel | min 24.4% (Galactus), mean 79.43% over pool400 + botpack5 + Galactus (ST9 min 21.8%, mean 77.5%) |
 | sha256 | `eeaa50b734e60121def5ac2bb6c9abf1ac92fd7a40116d511ff7ba4d9680b933` |
+
+### st11_11090M.bpk
+
+| | |
+|---|---|
+| Lineage | ST11, 11090M steps (ST8_final added to EXTRA_OPPS). **Promoted**, was 1v1 BEST until later ST runs. 106-input obs. |
+| H2H | **54.8%** vs ST10; FR4 73.6; pool 92.6; bp5 65.8; Galactus 30.0%; Megabyte 70.4%. |
+| sha256 | `687a9932dcd4b8b76277165afae249cab4f4832513ee160697cd049a0de93bbf` |
 
 ### st9_9628M.bpk
 

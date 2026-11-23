@@ -548,6 +548,16 @@ gate fails), pool400 93.0 (93.21), bp5 67.0 (68.67; gate fails), Galactus 37.0 (
 Megabyte 83.2, gen-panel min 0.37 / mean 0.801. Dice fell to 57.75 (ST23 65.25), so
 ST20r did not do its job.
 
+**Current references** (ALWAYS ask before changing BEST or team_best):
+
+| | checkpoint | steps | notes |
+|---|---|---|---|
+| **1v1 BEST** | `exp_ST25/checkpoints/1794413355` | 20727.5M | manual promote, user-approved 2026-11-11 12:16 PM ET (America/New_York). `checkpoints_to_test/st25_20728M.bpk`. |
+| **team_best** | `exp_TM9/checkpoints/1795388102` | 52957.1M | user-approved 2026-11-22 7:45 PM ET (America/New_York). `checkpoints_to_test/tm9_52957M.bpk`. |
+| **TM10 BT pin** | `exp_TM7/checkpoints/1795170349` | TM7 final | TM10 finals compare against this pin, not team_best. |
+
+The RLBot pack still ships TM2 as the default 2v2/3v3 model (`weights/tm2`); changing that is a pack decision, not done here.
+
 ST25 is the current best (manual promote, user-approved 2026-11-11 12:16 PM ET).
 Selected checkpoint `exp_ST25/checkpoints/1794413355` at 20727.5M, continued from ST24's
 19727.3M (`experiments/st_ST25.env`, `experiments/train_st25.toml`). It is ST24's config
