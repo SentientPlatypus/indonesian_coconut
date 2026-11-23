@@ -13,6 +13,7 @@ pub mod consts;
 pub mod curriculum;
 pub mod env;
 pub mod events;
+pub mod h2h_counters;
 pub mod expert;
 #[cfg(feature = "train")]
 pub mod galactus;

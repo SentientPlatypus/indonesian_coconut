@@ -36,3 +36,58 @@ impl StepReward for ZeroSum {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consts::{BLUE_TEAM, ORANGE_TEAM};
+    use crate::state::{CarView, StateView};
+
+    struct ConstReward(Vec<f64>);
+
+    impl StepReward for ConstReward {
+        fn reset(&mut self, _initial: &StateView) {}
+        fn get_rewards(&mut self, _state: &StateView) -> Vec<f64> {
+            self.0.clone()
+        }
+    }
+
+    fn cars(teams: &[u8]) -> StateView {
+        StateView {
+            cars: teams
+                .iter()
+                .map(|&team| CarView {
+                    team,
+                    ..CarView::default()
+                })
+                .collect(),
+            ..StateView::default()
+        }
+    }
+
+    #[test]
+    fn zero_sum_team_mean() {
+        // Blue, Orange, Blue, Orange — the create_env car order.
+        let state = cars(&[BLUE_TEAM, ORANGE_TEAM, BLUE_TEAM, ORANGE_TEAM]);
+        let raw = vec![10.0, 20.0, 30.0, 40.0];
+        // Orange mean = (20+40)/2 = 30; blue mean = (10+30)/2 = 20.
+        let scale = 0.5;
+        let got = ZeroSum::new(Box::new(ConstReward(raw)), scale).get_rewards(&state);
+        assert_eq!(
+            got,
+            vec![
+                10.0 - scale * 30.0,
+                20.0 - scale * 20.0,
+                30.0 - scale * 30.0,
+                40.0 - scale * 20.0,
+            ]
+        );
+    }
+
+    #[test]
+    fn zero_sum_empty_opponents_is_zero_mean() {
+        let state = cars(&[BLUE_TEAM, BLUE_TEAM]);
+        let got = ZeroSum::new(Box::new(ConstReward(vec![5.0, 7.0])), 1.0).get_rewards(&state);
+        assert_eq!(got, vec![5.0, 7.0]);
+    }
+}

@@ -380,3 +380,36 @@ pub fn create_env_sized(rewards: &RewardConfig, setters: &[WeightedSetter], per_
         SharedInfo::default(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::create_env_sized;
+    use rlgymppo_utils::rlgym::rocketsim::{Team, init_from_default};
+
+    use crate::rewards::RewardConfig;
+    use crate::setters::default_mix;
+
+    /// `create_env_sized` adds cars Blue, Orange, Blue, Orange, … so
+    /// `team_setters::attack_sign(idx)` (sign from `idx % 2`) matches the
+    /// arena team. A future `add_car` order change would silently put
+    /// support cars on the wrong side.
+    #[test]
+    fn env_car_order_alternates() {
+        init_from_default(true).expect("collision meshes");
+        let rewards = RewardConfig::default();
+        let mix = default_mix();
+        for per_team in 1..=3 {
+            let env = create_env_sized(&rewards, &mix, per_team);
+            let n = env.arena.num_cars();
+            assert_eq!(n, per_team * 2, "per_team={per_team}");
+            for idx in 0..n {
+                let want = if idx % 2 == 0 { Team::Blue } else { Team::Orange };
+                assert_eq!(
+                    env.arena.get_car_info(idx).team,
+                    want,
+                    "car {idx} team (per_team={per_team})"
+                );
+            }
+        }
+    }
+}

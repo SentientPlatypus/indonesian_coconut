@@ -776,7 +776,7 @@ pub fn team_size() -> usize {
     })
 }
 
-/// Observation size for `n` cars per team: 52 + 20 per car (1v1 92, 2v2 132, 3v3 172).
+/// Observation size for `n` cars per team: 52 + 20 floats per car on each team (`52 + 40 * n`; 1v1 92, 2v2 132, 3v3 172).
 #[must_use]
 pub const fn obs_size_for(n: usize) -> usize {
     52 + 40 * n
