@@ -86,6 +86,7 @@ fi
 # --- env-dependent checks ---
 if [[ -n $ENVF ]]; then
   stripped=$(mktemp)
+  trap 'rm -f "$stripped"' EXIT
   strip_comments "$ENVF" >"$stripped"
 
   # CHUNK
@@ -118,7 +119,7 @@ if [[ -n $ENVF ]]; then
 
   # BT / BESTF assignment (team envs only). ST envs often take BESTF from the launcher.
   base=$(basename "$ENVF")
-  if [[ $base == tm_TM* || $base == tm_* ]]; then
+  if [[ $base == tm_* ]]; then
     if grep -E '^(BT_PIN|BT)=' "$stripped" >/dev/null; then
       pass "$ENVF: BT or BT_PIN is assigned"
     else
@@ -142,10 +143,6 @@ if [[ -n $ENVF ]]; then
     fi
   fi
 
-  # Path existence: WARN only when the default looks like an EC2 path and is missing.
-  for key in BT_PIN ST25_CK START_CK; do
-    :
-  done
   rm -f "$stripped"
 else
   pass "no env file given; skipped CHUNK / BT / live-binary checks"

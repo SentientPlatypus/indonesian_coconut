@@ -62,6 +62,36 @@ else
   fails=$((fails + 1))
 fi
 
+# --- paths.env prepends $LIBTORCH_LIB and keeps an existing LD_LIBRARY_PATH
+got=$(
+  export LIBTORCH_LIB=/tmp/fake_torch_lib
+  export LD_LIBRARY_PATH=/already/lib:/other
+  export R=/tmp/fake_r
+  # shellcheck source=paths.env
+  source "$HERE/paths.env"
+  printf '%s' "$LD_LIBRARY_PATH"
+)
+if [[ $got == /tmp/fake_torch_lib:/already/lib:/other ]]; then
+  echo "PASS paths-prepend-existing"
+else
+  echo "FAIL paths-prepend-existing got=$got"
+  fails=$((fails + 1))
+fi
+got=$(
+  unset LD_LIBRARY_PATH
+  export LIBTORCH_LIB=/tmp/fake_torch_lib
+  export R=/tmp/fake_r
+  # shellcheck source=paths.env
+  source "$HERE/paths.env"
+  printf '%s' "$LD_LIBRARY_PATH"
+)
+if [[ $got == /tmp/fake_torch_lib ]]; then
+  echo "PASS paths-prepend-empty"
+else
+  echo "FAIL paths-prepend-empty got=$got"
+  fails=$((fails + 1))
+fi
+
 # --- bash syntax
 for s in "$HERE/chain.sh" "$HERE/paths.env" "$EXP/lint_launch.sh" "$EXP/tm10_vs_tm9_report.sh"; do
   if bash -n "$s"; then

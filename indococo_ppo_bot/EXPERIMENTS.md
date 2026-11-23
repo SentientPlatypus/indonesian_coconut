@@ -52,7 +52,7 @@ Body sections below are in chronological-note order, not run order. This table i
 | ST27 | done | selected 21749.9M | no | [ST27 results](#st27-results-fr4_final--20-not-promoted-2026-11-12) |
 | ST28 | done | — | no | [ST28 results](#st28-results-st27-league--demo-penalty-x3-from-st25-not-promoted-2026-11-12) |
 | ST29 | done | — | no | [ST29 results](#st29-results-st25-league--demo-penalty-x3-from-st25-not-promoted-2026-11-12) |
-| ST30 | done | — | no | [ST30 / ST31 results](#st31-results-pre-concede-replay-not-promoted-2026-11-13) |
+| ST30 | done | — | no | [ST30](#st30-queued-after-st29-real-galactus-pre-demo-states-mixed-with-the-demo_threat-drill-revised-after-cross-exam-2026-11-12) |
 | ST31 | done | — | no | [ST31 results](#st31-results-pre-concede-replay-not-promoted-2026-11-13) |
 | ST32 | done | from ST25 | no (user declined) | [ST32 results](#st32-results-recoverable-demo_threat-not-promoted-user-declined-2026-11-13) |
 | ST33 | done | from ST25 | no (user declined) | [ST33 results](#st33-results-galactus-conditioned-threat-starts-not-promoted-user-declined-2026-11-13) |
@@ -67,7 +67,7 @@ Body sections below are in chronological-note order, not run order. This table i
 | TM5r | cut over to TM6 | cut at 32957M | cut-over export, not a final promote | `tm5r_32957M.bpk` |
 | TM6 | done | → 37957M | yes (then team_best) | [TM6 results](#tm6-results-team-best--tm6-final-2026-11-18) |
 | TM7 | done | → 42957M | yes (then team_best); still TM10's BT pin | [TM7 results](#tm7-results-team-best--tm7-final-2026-11-20) |
-| TM8 | done | → 47957.0M (mid export 45582M) | yes (then team_best; user-approved 2026-11-21 2:22 PM ET) | [TM8 results](#tm8-results-team-best--tm8-final-2026-11-21) |
+| TM8 | done | → 47957.0M final (`tm8_47957M.bpk`); mid export 45582M | yes (then team_best; user-approved 2026-11-21 2:22 PM ET) | [TM8 results](#tm8-results-team-best--tm8-final-2026-11-21) |
 | TM9 | done; **current team_best** | → 52957.1M | yes (user-approved 2026-11-22 7:45 PM ET) | [TM9 results](#tm9-results-team-best--tm9-final-2026-11-22) |
 | TM10 | **training** (as of 2026-11-23) | from TM9, +5B planned | not yet; BT pin is TM7, not TM9 | [TM10 cross-exam](#tm10--cross-exam-note-support-car-playmaking-demo--bump-staged-2026-11-21-auto-starts-after-tm9) |
 

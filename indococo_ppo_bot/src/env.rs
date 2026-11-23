@@ -384,7 +384,7 @@ pub fn create_env_sized(rewards: &RewardConfig, setters: &[WeightedSetter], per_
 #[cfg(test)]
 mod tests {
     use super::create_env_sized;
-    use rlgymppo_utils::rlgym::rocketsim::{Team, init_from_default};
+    use rlgymppo_utils::rlgym::rocketsim::{Team, init};
 
     use crate::rewards::RewardConfig;
     use crate::setters::default_mix;
@@ -395,7 +395,11 @@ mod tests {
     /// support cars on the wrong side.
     #[test]
     fn env_car_order_alternates() {
-        init_from_default(true).expect("collision meshes");
+        init(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../collision_meshes"),
+            true,
+        )
+        .expect("collision meshes");
         let rewards = RewardConfig::default();
         let mix = default_mix();
         for per_team in 1..=3 {

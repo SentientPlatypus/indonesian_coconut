@@ -14,7 +14,7 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
-**Current references:** 1v1 BEST is ST25 (`st25_20728M.bpk` below). **team_best** is the TM9 final (`tm9_52957M.bpk`, user-approved 2026-11-22 7:45 PM ET, America/New_York). The RLBot pack still ships TM2 as the default 2v2/3v3 model (`weights/tm2`); changing that is a separate pack decision. Every `*.bpk` in this folder should have a heading in this file.
+**Current references:** 1v1 BEST is ST25 (`st25_20728M.bpk` below). **team_best** is the TM9 final (`tm9_52957M.bpk`, user-approved 2026-11-22 7:45 PM ET, America/New_York). The RLBot pack still ships the TM2 final (27275M) as the default 2v2/3v3 model (`weights/tm2`); changing that is a separate pack decision. Every `*.bpk` in this folder should have a heading in this file.
 
 ### tm9_52957M.bpk (current team_best)
 
@@ -89,7 +89,7 @@ Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh eng
 
 | | |
 |---|---|
-| Lineage | TM2 final (team mechanics on top of TM1; team-ext 235-wide obs), 27275M steps. Then team_best; later superseded. Distinct from the mid-run `tm2_26089M.bpk` below (still the pack default). |
+| Lineage | TM2 final (team mechanics on top of TM1; team-ext 235-wide obs), 27275M steps. Then team_best; later superseded. Distinct from the mid-run `tm2_26089M.bpk` below. This is the RLBot pack's `weights/tm2` (same sha256, since 21f7fb2). |
 | H2H | vs TM1 final: 2v2 **61.1%**, 3v3 **60.9%**; 1v1 vs ST25 **51.2%**; Galactus 1v1 **55.2%**. |
 | sha256 | `3c1375fbe254869c7e69bfe67932c2a46311dd4d2fa913edbfbfb59d8b9d90d8` |
 
@@ -97,7 +97,7 @@ Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh eng
 
 | | |
 |---|---|
-| Lineage | TM2 (team mode: musty / flip-reset-use / double-tap / air double touch rewards, reset_shot and musty_setup setters, `tm2.toml`, binary `indococo-train-tm2-620e718`), continued from TM1 24275M, checkpoint `exp_TM2/checkpoints/1794756839` (26088.8M steps). Taken mid-run (TM2 still training); not the TM2 final. 235-input team-ext obs (`INDOCOCO_OBS_TEAM=1`), plays 1v1, 2v2 and 3v3. In the RLBot pack as `weights/tm2`. |
+| Lineage | TM2 (team mode: musty / flip-reset-use / double-tap / air double touch rewards, reset_shot and musty_setup setters, `tm2.toml`, binary `indococo-train-tm2-620e718`), continued from TM1 24275M, checkpoint `exp_TM2/checkpoints/1794756839` (26088.8M steps). Taken mid-run (TM2 still training); not the TM2 final. 235-input team-ext obs (`INDOCOCO_OBS_TEAM=1`), plays 1v1, 2v2 and 3v3. Was the pack's `weights/tm2` until 21f7fb2. |
 | H2H (mid-run eval at this checkpoint) | 2v2 **58.0%** vs TM1 (116-84), 3v3 **56.5%** vs TM1 (113-87), 1v1 **49.0%** vs ST25 (98-102), 200 games each |
 | Galactus (mid-run eval, not the 500-game panel) | 1v1 **62.5%** (125-75, 200 games); 2v2 9.6% (10-94), 3v3 4.8% (5-99) |
 | Megabyte | 2v2 6.7% (7-97) |
