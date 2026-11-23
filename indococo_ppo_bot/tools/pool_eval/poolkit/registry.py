@@ -13,6 +13,10 @@ def make_agent(kind: str, path: str = "", **options) -> Agent:
         from .candidate import IndococoPolicy
 
         return IndococoPolicy(path, **options)
+    if kind == "indococo_team":
+        from .candidate import IndococoTeamPolicy
+
+        return IndococoTeamPolicy(path, **options)
     if kind in ("nexto", "necto", "element", "immortal"):
         from . import bots
 

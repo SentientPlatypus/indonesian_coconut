@@ -158,6 +158,13 @@ for g,b in ((g2,b2),(g3,b3)):
 print(json.dumps({"promote_team":bool(ok),"h2h_2v2":h2,"h2h_3v3":h3,"gal_2v2":g2,"gal_3v3":g3,"best_gal_2v2":b2,"best_gal_3v3":b3,"gal_1v1":wr("gal_1v1.json"),"mega_2v2":wr("mega_2v2.json"),"h2h_1v1_st25":wr("h2h_1v1_st25.json"),"note":"recommendation only; team_best/FINAL_CKPT is changed by hand"}))
 PY
 touch $F/DONE; log "$RUN finals: $(cat $F/TEAM_PROMOTE.json)"
+# Opt-in (GAL_FIDELITY=1), report-only: headline Galactus metric on the C++ engine
+# (Python harness, exact spawns) for 1v1/2v2/3v3 + Rust-vs-Python gap alarm ->
+# $F/gal_fidelity.jsonl (EXPERIMENTS.md "Eval fidelity"). Detached, nice 19; never gates.
+if [[ "${GAL_FIDELITY:-0}" == 1 ]]; then
+  [[ "${OBS_PRED:-0}" == 1 ]] && GF_OBS=team || GF_OBS=team235
+  setsid nohup bash $C/experiments/gal_fidelity.sh $bestck $F $GF_OBS 1,2,3 $B > $F/gal_fidelity.out 2>&1 < /dev/null &
+fi
 if [[ ! -f $R/TEAM_NO_FOLLOWUP ]]; then
   Q=$R/TEAM_QUEUE; next=$(head -1 $Q 2>/dev/null)
   if [[ -n "$next" ]]; then sed -i 1d $Q; else next="${RUN}r $VARIANT"; fi

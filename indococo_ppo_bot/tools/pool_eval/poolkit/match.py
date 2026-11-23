@@ -4,6 +4,10 @@ Follows the `h2h_1v1.py` protocol: RLGym kickoff positions from the seeded
 numpy RNG (plus a small seeded spawn jitter, see SPAWN_JITTER_UU), actions applied on the tick they are chosen, a game ends at the
 first goal, or as a timeout after 30 s without a touch or 300 s total. Each
 seed is played twice, the candidate on blue then on orange.
+
+Team modes (`play_pairs_team`, `team_size` 1-3) build one agent per car from
+a factory. `jitter=False` keeps RLGym's exact kickoff spawns, as in a real
+match (the headline Galactus metric, EXPERIMENTS.md "Eval fidelity").
 """
 from __future__ import annotations
 
@@ -39,12 +43,14 @@ def jitter_spawns(state, rng: np.random.Generator) -> None:
 
 
 class Arena:
-    def __init__(self, jitter: bool = True) -> None:
+    def __init__(self, jitter: bool = True, team_size: int = 1) -> None:
         self.jitter = jitter
+        self.team_size = team_size
         self.engine = RocketSimEngine()
-        self.mutator = MutatorSequence(FixedTeamSizeMutator(blue_size=1, orange_size=1), KickoffMutator())
+        self.mutator = MutatorSequence(FixedTeamSizeMutator(blue_size=team_size, orange_size=team_size),
+                                       KickoffMutator())
 
-    def play(self, blue: Agent, orange: Agent, seed: int) -> int:
+    def play(self, blue, orange, seed: int) -> int:
         """+1 if blue scores, -1 if orange scores, 0 on timeout.
 
         Every game gets a fresh engine: a reused arena carries contact and
@@ -61,8 +67,12 @@ class Arena:
         if self.jitter:
             jitter_spawns(state, np.random.default_rng(seed))
         state = self.engine.set_state(state, shared)
+        # `blue` / `orange` are Agents (shared by the team's cars, 1v1) or
+        # callables returning a fresh Agent per car (team modes).
+        def pick(side):
+            return side() if callable(side) and not isinstance(side, Agent) else side
         agents = {
-            cid: (blue if car.team_num == BLUE_TEAM else orange) for cid, car in state.cars.items()
+            cid: pick(blue if car.team_num == BLUE_TEAM else orange) for cid, car in state.cars.items()
         }
         last_touch = {cid: -(10**9) for cid in agents}
         tick, last_any_touch, kickoff = 0, 0, True
@@ -89,9 +99,9 @@ class Arena:
                 return 0
 
 
-def play_pairs(candidate: Agent, opponent: Agent, seeds: list[int]) -> list[int]:
+def play_pairs(candidate: Agent, opponent: Agent, seeds: list[int], jitter: bool = True) -> list[int]:
     """Candidate's result per game (+1 win, -1 loss, 0 timeout), both sides per seed."""
-    arena = Arena()
+    arena = Arena(jitter=jitter)
     results = []
     for seed in seeds:
         for cand_team in (BLUE_TEAM, ORANGE_TEAM):
@@ -99,5 +109,19 @@ def play_pairs(candidate: Agent, opponent: Agent, seeds: list[int]) -> list[int]
                 r = arena.play(candidate, opponent, seed)
             else:
                 r = -arena.play(opponent, candidate, seed)
+            results.append(r)
+    return results
+
+
+def play_pairs_team(cand_factory, opp_factory, seeds: list[int], team_size: int, jitter: bool = True) -> list[int]:
+    """As `play_pairs`, `team_size` cars a side, one agent per car from each factory."""
+    arena = Arena(jitter=jitter, team_size=team_size)
+    results = []
+    for seed in seeds:
+        for cand_team in (BLUE_TEAM, ORANGE_TEAM):
+            if cand_team == BLUE_TEAM:
+                r = arena.play(cand_factory, opp_factory, seed)
+            else:
+                r = -arena.play(opp_factory, cand_factory, seed)
             results.append(r)
     return results

@@ -169,6 +169,11 @@ fi
 $PYT $C/experiments/st_promote.py $F $BESTF > $F/PROMOTE.json 2>$F/promote.err
 echo "$(date) DONE $(cat $F/PROMOTE.json)" >> $F/run.log; touch $F/DONE
 log "$RUN finals: $(cat $F/PROMOTE.json)"
+# Opt-in (GAL_FIDELITY=1), report-only: exact-spawn C++ Galactus headline + Rust gap
+# alarm -> $F/gal_fidelity.jsonl (EXPERIMENTS.md "Eval fidelity"). Detached, nice 19.
+if [[ "${GAL_FIDELITY:-0}" == 1 ]]; then
+  setsid nohup bash $C/experiments/gal_fidelity.sh $bestck $F 1v1 1 $B > $F/gal_fidelity.out 2>&1 < /dev/null &
+fi
 # Report-only demos-against (c4c56a0 h2h fields) vs BEST, 200 kickoff games,
 # with indococo-train-hunt (has the new fields). Never blocks the chain.
 HB=$R/code_fr9/bin/indococo-train-hunt

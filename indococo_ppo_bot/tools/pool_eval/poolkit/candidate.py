@@ -115,3 +115,44 @@ class IndococoPolicy(Agent):
     def decide(self, view: AgentView) -> np.ndarray:
         logits = self.model(torch.from_numpy(self.observe(view)))
         return self.table[int(logits.argmax())]
+
+
+_TEAM_PRED = None
+
+
+class IndococoTeamPolicy(Agent):
+    """Team checkpoints (TM1+): Rust team-ext obs (235) or + prediction (270),
+    ported in `team_obs.py`; greedy over the same lookup table, 8-tick skip.
+    One instance per car (the obs needs that car's held controls). Works in
+    1v1 / 2v2 / 3v3: the net sees padded 3v3 slots in every mode."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        from rlgym.rocket_league.action_parsers import LookupTableAction
+
+        from . import team_obs
+
+        self.T = team_obs
+        self.model = build_mlp(load_state_dict(path))
+        width = self.model[0].in_features
+        if width not in (team_obs.TEAM_OBS_SIZE, team_obs.PRED_OBS_SIZE):
+            raise ValueError(f"team policy input width {width}, expected 235 or 270")
+        self.pred = width == team_obs.PRED_OBS_SIZE
+        self.table = LookupTableAction.make_lookup_table()
+
+    def observe(self, view: AgentView) -> np.ndarray:
+        global _TEAM_PRED
+        T = self.T
+        ball, pads, cars, ids = T.from_rlgym(view.state, {view.car_id: self._held})
+        i = ids.index(view.car_id)
+        o = T.build_team(ball, pads, cars, i)
+        if self.pred:
+            if _TEAM_PRED is None:
+                _TEAM_PRED = T.BallPredictor()
+            o += T.pred_features(_TEAM_PRED.samples(ball), pads, cars, i)
+        return np.asarray(o, dtype=np.float32)
+
+    @torch.no_grad()
+    def decide(self, view: AgentView) -> np.ndarray:
+        logits = self.model(torch.from_numpy(self.observe(view)))
+        return self.table[int(logits.argmax())]

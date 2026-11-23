@@ -8,6 +8,10 @@
 Writes one JSON line per opponent to --out (appending) and prints a summary
 table with the pool score (mean decisive win rate). A game ends at the first
 goal; each seed is played on both sides.
+
+`--team-size 2|3` plays 2v2 / 3v3 (one agent per car; team checkpoints use
+`--candidate-kind indococo_team`). `--exact-spawns` drops the 60 uu / 4 deg
+spawn jitter: RLGym's exact kickoff spawns, as in a real match.
 """
 from __future__ import annotations
 
@@ -23,7 +27,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from poolkit.match import play_pairs  # noqa: E402
+from poolkit.match import play_pairs, play_pairs_team  # noqa: E402
 from poolkit.registry import make_agent  # noqa: E402
 
 DEFAULT_POOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool.toml")
@@ -34,14 +38,29 @@ def load_pool(path: str) -> list[dict]:
         return tomllib.load(f)["opponent"]
 
 
+class CarPool:
+    """One agent per car: hands out `n` instances round robin (one game asks
+    each side's pool exactly `n` times, in car order)."""
+
+    def __init__(self, entry: dict, n: int) -> None:
+        self.agents = [_make(entry) for _ in range(n)]
+        self.k = 0
+
+    def __call__(self):
+        a = self.agents[self.k % len(self.agents)]
+        self.k += 1
+        return a
+
+
 def _shard(job):
-    candidate_entry, opp, seeds = job
+    candidate_entry, opp, seeds, team_size, jitter = job
     import torch
 
     torch.set_num_threads(1)
-    candidate = _make(candidate_entry)
-    opponent = _make(opp)
-    return opp["name"], play_pairs(candidate, opponent, seeds)
+    if team_size == 1 and candidate_entry["kind"] != "indococo_team":
+        return opp["name"], play_pairs(_make(candidate_entry), _make(opp), seeds, jitter=jitter)
+    return opp["name"], play_pairs_team(CarPool(candidate_entry, team_size), CarPool(opp, team_size),
+                                        seeds, team_size, jitter=jitter)
 
 
 def _make(entry: dict):
@@ -58,7 +77,8 @@ def summarize(name: str, results: list[int]) -> dict:
             "timeouts": timeouts, "win_rate_decisive": round(wr, 4), "se": round(se, 4)}
 
 
-def run_pool(candidate: str | dict, pool: list[dict], games: int, procs: int, seed: int) -> list[dict]:
+def run_pool(candidate: str | dict, pool: list[dict], games: int, procs: int, seed: int,
+             team_size: int = 1, jitter: bool = True) -> list[dict]:
     """Plays `games` games against each opponent; returns one summary row per opponent.
 
     `candidate` is a policy path (indococo kind) or a pool-style entry dict.
@@ -67,7 +87,7 @@ def run_pool(candidate: str | dict, pool: list[dict], games: int, procs: int, se
         candidate = {"name": "candidate", "kind": "indococo", "path": candidate}
     seeds = list(range(seed, seed + games // 2))
     shards = max(1, min(procs // len(pool), len(seeds)))
-    jobs = [(candidate, opp, seeds[i::shards]) for opp in pool for i in range(shards)]
+    jobs = [(candidate, opp, seeds[i::shards], team_size, jitter) for opp in pool for i in range(shards)]
     with get_context("fork").Pool(min(procs, len(jobs))) as p:
         outs = p.map(_shard, jobs, chunksize=1)
     results: dict[str, list[int]] = {}
@@ -101,6 +121,8 @@ def main() -> None:
     ap.add_argument("--games", type=int, default=400, help="games per opponent (even)")
     ap.add_argument("--procs", type=int, default=16)
     ap.add_argument("--seed", type=int, default=10_000)
+    ap.add_argument("--team-size", type=int, default=1, choices=(1, 2, 3))
+    ap.add_argument("--exact-spawns", action="store_true", help="no kickoff spawn jitter (real-match spawns)")
     ap.add_argument("--out", default=None, help="JSONL file to append to")
     ap.add_argument("--label", default=None, help="candidate label in the output")
     a = ap.parse_args()
@@ -113,13 +135,14 @@ def main() -> None:
     candidate = {"name": "candidate", "kind": a.candidate_kind, "path": a.candidate}
     if a.no_air_clamp:
         candidate["clamp_air_time"] = False
-    rows = run_pool(candidate, pool, a.games, a.procs, a.seed)
+    rows = run_pool(candidate, pool, a.games, a.procs, a.seed, team_size=a.team_size, jitter=not a.exact_spawns)
     stamp = datetime.now(ZoneInfo("America/New_York")).isoformat(timespec="seconds")
     label = a.label or a.candidate
     if a.out:
         with open(a.out, "a") as f:
             for r in rows:
-                f.write(json.dumps({"time": stamp, "candidate": label, **r, "seed": a.seed}) + "\n")
+                f.write(json.dumps({"time": stamp, "candidate": label, **r, "seed": a.seed,
+                                    "team_size": a.team_size, "jitter": not a.exact_spawns}) + "\n")
     print_table(label, rows, a.games, a.seed, time.time() - start)
 
 
