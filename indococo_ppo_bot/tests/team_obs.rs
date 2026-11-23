@@ -12,7 +12,7 @@ use rlgymppo_utils::rlgym::Obs;
 use rlgymppo_utils::rocketsim;
 
 fn kickoff_mix() -> Vec<WeightedSetter> {
-    vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: SetterKind::Kickoff }]
+    vec![WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(), weight: 1.0, kind: SetterKind::Kickoff }]
 }
 
 fn init() {

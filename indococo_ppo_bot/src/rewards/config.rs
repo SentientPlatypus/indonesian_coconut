@@ -39,6 +39,7 @@ use super::opponent_possession_space::OpponentPossessionSpace;
 use super::possession::Possession;
 use super::possession_range_carry::{PossessionRangeCarry, TakeoffParams};
 use super::playmaking_demo::{PlayKind, Playmaking, PlaymakingParams};
+use super::tm11;
 use super::pressure_flick::PressureFlick;
 use super::reset_align::{ResetAlign, ResetAlignParams};
 use super::shadow_box::{ShadowBox, ShadowBoxParams};
@@ -164,6 +165,11 @@ pub struct RewardWeights {
     /// attacking (`[playmaking]`; individual, not zero-sum).
     pub playmaking_demo: f64,
     pub playmaking_bump: f64,
+    /// TM11: KRC challenge of an opponent grounded roof carry / the break event /
+    /// 1.5 s kickoff outcome (all individual, not zero-sum).
+    pub defend_carry: f64,
+    pub carry_break: f64,
+    pub kickoff_outcome: f64,
 }
 
 /// `[team]`: TM1 team-mode settings. All empty / unused by default, so
@@ -404,6 +410,11 @@ pub struct RewardConfig {
     pub open_net: OpenNetParams,
     /// TM10 `playmaking_demo` / `playmaking_bump` parameters.
     pub playmaking: PlaymakingParams,
+    /// TM11 defend-carry / kickoff-outcome parameters.
+    #[serde(default)]
+    pub defend_carry: crate::rewards::tm11::DefendCarryParams,
+    #[serde(default)]
+    pub kickoff_outcome: crate::rewards::tm11::KickoffOutcomeParams,
     /// TM1 team settings (team spirit, gates, pass / double-touch params).
     pub team: TeamRewardConfig,
     /// `{setter kind: {term: scale}}`: term weights multiplied by `scale` in
@@ -629,7 +640,7 @@ impl RewardConfig {
             ),
             ("ang_vel", w.ang_vel, Box::new(AngVel::default())),
         ];
-        let experiment: [(&'static str, f64, Box<dyn StepReward>); 24] = [
+        let experiment: [(&'static str, f64, Box<dyn StepReward>); 27] = [
             (
                 "flip_reset_gated",
                 w.flip_reset_gated,
@@ -705,6 +716,9 @@ impl RewardConfig {
             ("kickoff_taker", w.kickoff_taker, Box::new(KickoffTaker::new(role_p.clone()))),
             ("playmaking_demo", w.playmaking_demo, Box::new(Playmaking::new(self.playmaking.clone(), role_p.clone(), PlayKind::Demo))),
             ("playmaking_bump", w.playmaking_bump, Box::new(Playmaking::new(self.playmaking.clone(), role_p.clone(), PlayKind::Bump))),
+            ("defend_carry", w.defend_carry, Box::new(tm11::DefendCarry::new(self.defend_carry.clone(), role_p.clone(), tm11::CarryPart::Shape))),
+            ("carry_break", w.carry_break, Box::new(tm11::DefendCarry::new(self.defend_carry.clone(), role_p.clone(), tm11::CarryPart::Break))),
+            ("kickoff_outcome", w.kickoff_outcome, Box::new(tm11::KickoffOutcome::new(self.kickoff_outcome.clone(), role_p.clone()))),
         ];
         terms.extend(
             experiment
@@ -714,6 +728,12 @@ impl RewardConfig {
         if w.concede_role != 0.0 {
             assert!(tm.individual.iter().any(|k| k == "concede_role"), "concede_role must be individual (post-mix)");
             assert!(!self.zero_sum.contains_key("concede_role"), "concede_role is a penalty, not zero-sum");
+        }
+        for (name, weight) in [("defend_carry", w.defend_carry), ("carry_break", w.carry_break), ("kickoff_outcome", w.kickoff_outcome)] {
+            if weight != 0.0 {
+                assert!(tm.individual.iter().any(|k| k == name), "{name} must be in team.individual");
+                assert!(!self.zero_sum.contains_key(name), "{name} must not be in any zero-sum list");
+            }
         }
         let role_scale_keys: Vec<String> = tm.role_scale.keys().cloned().collect();
         let ko_scale_keys: Vec<String> = tm.kickoff_scale.keys().cloned().collect();
@@ -1296,5 +1316,85 @@ mod extends_tests {
         let n9: Vec<_> = tm9.build().terms.iter().map(|t| t.name).collect();
         assert!(!n9.contains(&"playmaking_demo"));
         assert_eq!(names.len(), n9.len() + 2);
+    }
+
+    fn ramp_at(pts: &[[f64; 2]], step: f64) -> f64 {
+        if pts.is_empty() {
+            return 1.0;
+        }
+        if step <= pts[0][0] {
+            return pts[0][1];
+        }
+        for w in pts.windows(2) {
+            let (t0, v0, t1, v1) = (w[0][0], w[0][1], w[1][0], w[1][1]);
+            if step <= t1 {
+                if (t1 - t0).abs() < 1e-12 {
+                    return v1;
+                }
+                let a = (step - t0) / (t1 - t0);
+                return v0 + a * (v1 - v0);
+            }
+        }
+        pts.last().unwrap()[1]
+    }
+
+    /// TM11: tm10 plus defend_carry / carry_break / kickoff_outcome, playmaking
+    /// ramps held at 1.0 so a new spirit_origin does not re-ramp them.
+    #[test]
+    fn tm11_extends_tm10_holds_ramps() {
+        use crate::team::RoleParams;
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm11.toml")).unwrap();
+        let tm10 = RewardConfig::from_file(&dir.join("tm10.toml")).unwrap();
+        assert_eq!(c.weights.defend_carry, 20.0);
+        assert_eq!(c.weights.carry_break, 300.0);
+        assert_eq!(c.weights.kickoff_outcome, 120.0);
+        assert_eq!(c.weights.playmaking_demo, 150.0);
+        assert_eq!(c.weights.playmaking_bump, 20.0);
+        for k in ["defend_carry", "carry_break", "kickoff_outcome"] {
+            assert!(c.team.individual.iter().any(|x| x == k), "{k} individual");
+            assert!(c.team.role_metrics.iter().any(|x| x == k), "{k} role metric");
+            assert!(!c.zero_sum.contains_key(k), "{k} not zero-sum");
+        }
+        for k in &tm10.team.individual {
+            assert!(c.team.individual.contains(k), "tm10 individual {k} kept");
+        }
+        for k in &tm10.team.role_metrics {
+            assert!(c.team.role_metrics.contains(k), "tm10 role metric {k} kept");
+        }
+        let roles = c.team.roles.clone().unwrap_or_default();
+        assert_eq!(
+            roles,
+            RoleParams { margin: 300.0, hold: 8, obs_tiebreak: true, touch_mode: "hysteresis".into() }
+        );
+        let new_terms = ["defend_carry", "carry_break", "kickoff_outcome"];
+        for (k, pts) in &c.team.term_ramp {
+            if new_terms.contains(&k.as_str()) {
+                assert!((ramp_at(pts, 0.0) - 0.25).abs() < 1e-9, "{k} at 0: {}", ramp_at(pts, 0.0));
+                assert!((ramp_at(pts, 200_000_000.0) - 1.0).abs() < 1e-9, "{k} at 2e8");
+            } else {
+                assert!((ramp_at(pts, 0.0).abs() - 1.0).abs() < 1e-9, "{k} at 0: {}", ramp_at(pts, 0.0));
+            }
+        }
+        let names: Vec<_> = c.build().terms.iter().map(|t| t.name).collect();
+        let n10: Vec<_> = tm10.build().terms.iter().map(|t| t.name).collect();
+        assert_eq!(names.len(), n10.len() + 3, "{names:?}");
+        for k in new_terms {
+            assert!(names.contains(&k), "{k} missing from {names:?}");
+        }
+    }
+
+    #[test]
+    fn tm11_kickoff_terms_kept() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm11.toml")).unwrap();
+        let tm10 = RewardConfig::from_file(&dir.join("tm10.toml")).unwrap();
+        assert_eq!(c.weights.kickoff_same_pad, tm10.weights.kickoff_same_pad);
+        assert_eq!(c.weights.kickoff_taker, tm10.weights.kickoff_taker);
+        assert_eq!(c.team.kickoff_one_corner, tm10.team.kickoff_one_corner);
+        assert_eq!(c.team.kickoff_pad_radius, tm10.team.kickoff_pad_radius);
+        assert_eq!(c.team.kickoff_pad_grace_s, tm10.team.kickoff_pad_grace_s);
+        assert_eq!(c.team.kickoff_scale, tm10.team.kickoff_scale);
+        assert_eq!(c.team.kickoff_scale_grace_s, tm10.team.kickoff_scale_grace_s);
     }
 }

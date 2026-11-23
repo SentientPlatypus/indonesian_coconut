@@ -18,6 +18,7 @@
 //! indococo-train ripple-dump <ripple_dir> <steps> <out.jsonl>  # Dump Ripple tensors for Python parity
 //! indococo-train nexto-h2h <ckpt> <nexto_dir> <games> [threads] [dump.jsonl]  # Nexto (TorchScript), team size from INDOCOCO_TEAM_SIZE
 //! indococo-train necto-h2h <ckpt> <necto_dir> <games> [threads] [dump.jsonl]  # Necto (TorchScript), same
+//! H2H_REWARD_CONFIG=<reward toml> selects the role params.
 //! INDOCOCO_OBS_TEAM=1 indococo-train widen-team <1v1_ckpt> <dst_ckpt>  # TM1 warm start (actor+critic)
 //! INDOCOCO_OBS_TEAM=1 INDOCOCO_OBS_PRED=1 indococo-train widen-pred <235_ckpt> <dst_ckpt>  # TM3 warm start
 //! ```
@@ -1637,7 +1638,7 @@ fn main() {
 /// for `tools/galactus/parity.py`.
 fn galactus_h2h(ckpt: &Path, gdir: &Path, games: usize, threads: usize, dump: Option<&Path>) {
     init_from_default(true).expect("load collision meshes");
-    let mix = vec![WeightedSetter { opp_weights: Default::default(),
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(),
         weight: 1.0,
         kind: indococo_bot::setters::SetterKind::Kickoff,
     }];
@@ -1864,7 +1865,7 @@ fn nf_h2h(kind: indococo_bot::nectofam::Kind, ckpt: &Path, dir: &Path, games: us
     }
     tch::set_num_threads(1);
     init_from_default(true).expect("load collision meshes");
-    let mix = vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let stochastic: f32 = std::env::var("NF_STOCHASTIC").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let script = std::env::var("NF_KICKOFF").map_or(true, |v| v != "0");
     let per = games.div_ceil(threads);
@@ -2129,7 +2130,7 @@ fn megabyte_obs(mdir: &Path, _states_path: &Path) {
     let mb = mx::MegabytePolicy::load(mdir, dev).expect("megabyte weights");
     
     // Generate varied states: kickoffs and mid-game states with some pads consumed
-    let mix = vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let mut env = create_env(&RewardConfig::default(), &mix);
     
     eprintln!("Generating observations from simulated states (including depleted pads)...");
@@ -2221,7 +2222,7 @@ fn megabyte_h2h(ckpt: &Path, mdir: &Path, games: usize, threads: usize) {
     unsafe { std::env::set_var("INDOCOCO_OBS_EXT", "1"); }
     
     init_from_default(true).expect("load collision meshes");
-    let mix = vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let per = games.div_ceil(threads);
     let t0 = std::time::Instant::now();
     let res: Vec<[u64; 4]> = std::thread::scope(|s| {
@@ -2463,6 +2464,70 @@ mod tests {
         assert!(mech <= 0.2201, "{mech}");
         let labels: Vec<_> = c.state_setters.iter().map(|s| s.kind.label()).collect();
         assert!(labels.contains(&"reset_shot") && labels.contains(&"musty_setup"));
+    }
+
+    fn fill_train_placeholders(text: &str) -> String {
+        let mut text = text.to_string();
+        for (k, v) in [
+            ("@RUN@", "/tmp/tm11"), ("@ITERATIONS@", "1"), ("@WARM@", "0"), ("@HOLD@", "0"),
+            ("@SNAP@", "/tmp/snap.f32"), ("@TPI@", "300_000"), ("@MB@", "100_000"), ("@LR@", "5e-5"),
+            ("@ENT@", "0.016"), ("@GAMMA@", "0.995"), ("@OPPCH@", "0.40"), ("@PASTW@", "1.0"),
+            ("@DECAY@", "1_000_000_000"), ("@MINLR@", "0.4"),
+        ] {
+            text = text.replace(k, v);
+        }
+        text
+    }
+
+    fn share_of(shares: &[(&str, f32)], label: &str) -> f32 {
+        shares.iter().find(|(l, _)| *l == label).map(|(_, w)| *w).unwrap_or(0.0)
+    }
+
+    /// TM11 train template: per-mode shares match the §2 table; replay is
+    /// exactly 0 in 2v2/3v3; defend_carry is in the mix.
+    #[test]
+    fn tm11_train_template_parses() {
+        let text = fill_train_placeholders(include_str!("../../experiments/train_tm11.toml"));
+        assert!(!text.contains('@'), "unfilled placeholder");
+        let c: TrainConfig = toml::from_str(&text).expect("train_tm11.toml");
+        let mix = indococo_bot::setters::build_mix::<indococo_bot::env::SharedInfo>(&c.state_setters);
+        let labels: Vec<_> = c.state_setters.iter().map(|s| s.kind.label()).collect();
+        assert!(labels.contains(&"defend_carry"), "{labels:?}");
+        let cases: &[(usize, Option<&str>, &str, f32)] = &[
+            (1, None, "kickoff", 0.15 / 1.09),
+            (1, None, "defend_carry", 0.09 / 1.09),
+            (1, None, "replay", 0.09 / 1.09),
+            (1, None, "team_play", 0.15 / 1.09),
+            (2, None, "kickoff", 0.15),
+            (2, None, "defend_carry", 0.09),
+            (2, None, "replay", 0.0),
+            (2, None, "team_play", 0.15),
+            (3, None, "kickoff", 0.20 / 1.05),
+            (3, None, "defend_carry", 0.09 / 1.05),
+            (3, None, "replay", 0.0),
+            (3, None, "team_play", 0.15 / 1.05),
+            (1, Some("galactus"), "kickoff", 0.15 / 1.25),
+            (1, Some("galactus"), "defend_carry", 0.25 / 1.25),
+            (1, Some("galactus"), "replay", 0.09 / 1.25),
+            (1, Some("galactus"), "team_play", 0.15 / 1.25),
+            (2, Some("galactus"), "kickoff", 0.15 / 1.16),
+            (2, Some("galactus"), "defend_carry", 0.25 / 1.16),
+            (2, Some("galactus"), "replay", 0.0),
+            (2, Some("galactus"), "team_play", 0.15 / 1.16),
+            (3, Some("galactus"), "kickoff", 0.20 / 1.21),
+            (3, Some("galactus"), "defend_carry", 0.25 / 1.21),
+            (3, Some("galactus"), "replay", 0.0),
+            (3, Some("galactus"), "team_play", 0.15 / 1.21),
+        ];
+        for &(per_team, opp, label, want) in cases {
+            let shares = mix.shares(per_team, opp);
+            let got = share_of(&shares, label);
+            assert!((got - want).abs() < 1e-4, "{per_team}v vs {opp:?} {label}: got {got} want {want}");
+        }
+        for per_team in [2usize, 3] {
+            let shares = mix.shares(per_team, None);
+            assert_eq!(share_of(&shares, "replay"), 0.0, "replay in {per_team}v");
+        }
     }
 
     #[test]
@@ -2789,22 +2854,60 @@ mod role_metric_tests {
         v.ball.pos = glam::DVec3::new(0.0, 0.0, 93.0);
         assert_eq!(opp_ball_own_half(&v, 0), None, "pending kickoff");
     }
+
+    #[test]
+    fn h2h_role_params_from_file() {
+        use indococo_bot::team::RoleParams;
+        let path = format!("{}/experiments/tm11.toml", env!("CARGO_MANIFEST_DIR"));
+        let got = h2h_role_params_from(Some(&path));
+        assert_eq!(
+            got,
+            RoleParams { margin: 300.0, hold: 8, obs_tiebreak: true, touch_mode: "hysteresis".into() }
+        );
+        assert_eq!(h2h_role_params_from(None), RoleParams::default());
+        assert_eq!(h2h_role_params_from(Some("")), RoleParams::default());
+    }
+
+    #[test]
+    fn n_h2h_in_sync() {
+        assert_eq!(N_H2H, 59);
+        assert_eq!(N_H2H, indococo_bot::h2h_counters::N_H2H);
+    }
 }
 
-const N_H2H: usize = 55;
+/// Role hysteresis for h2h role metrics: the run's `[team.roles]` from the reward
+/// config named by H2H_REWARD_CONFIG, else RoleParams::default() (legacy h2h).
+fn h2h_role_params_from(path: Option<&str>) -> indococo_bot::team::RoleParams {
+    use indococo_bot::team::RoleParams;
+    match path {
+        None | Some("") => RoleParams::default(),
+        Some(p) => RewardConfig::from_file(Path::new(p))
+            .unwrap_or_else(|e| panic!("H2H_REWARD_CONFIG {p}: {e}"))
+            .team
+            .roles
+            .unwrap_or_default(),
+    }
+}
+fn h2h_role_params() -> indococo_bot::team::RoleParams {
+    h2h_role_params_from(std::env::var("H2H_REWARD_CONFIG").ok().as_deref())
+}
+
+const N_H2H: usize = 59;
 
 fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
     init_from_default(true).expect("load collision meshes");
-    let mix = vec![WeightedSetter { opp_weights: Default::default(),
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(),
         weight: 1.0,
         kind: indococo_bot::setters::SetterKind::Kickoff,
     }];
     let per = games.div_ceil(threads);
+    let roles = h2h_role_params();
     let res: Vec<[u64; N_H2H]> = std::thread::scope(|s| {
         let hs: Vec<_> = (0..threads)
             .map(|t| {
                 let mix = &mix;
-                s.spawn(move || h2h_worker(mix, a, b, per, 7000 + t as u64))
+                let roles = roles.clone();
+                s.spawn(move || h2h_worker(mix, a, b, per, 7000 + t as u64, roles))
             })
             .collect();
         hs.into_iter().map(|h| h.join().expect("worker")).collect()
@@ -2822,6 +2925,8 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
         "win_rate_decisive": if w + l > 0 { w as f64 / (w + l) as f64 } else { 0.5 },
         "resets_a": ra, "resets_b": rb, "uses_a": ua, "uses_b": ub,
         "demos_against_a": da, "demos_against_b": db,
+        "bumps_a": tot[55], "bumps_b": tot[56], "demos_a": tot[57], "demos_b": tot[58],
+        "roles": serde_json::to_value(&roles).expect("roles"),
     });
     // TM1 team metrics (team modes only): per side a / b.
     if indococo_bot::obs::team_size() > 1 {
@@ -2855,13 +2960,15 @@ fn h2h(a: &Path, b: &Path, games: usize, threads: usize) {
             // car from its own back wall (lower = sitting deeper).
             "touches_per_car_min": tot[47 + k] as f64 / tot[49 + k].max(1) as f64 * 15.0 * 60.0,
             "deepest_car_depth_uu": tot[53 + k] as f64 / tot[51 + k].max(1) as f64,
+            "bumps_per_min": tot[55 + k] as f64 / mins.max(1e-9),
+            "demos_per_min": tot[57 + k] as f64 / mins.max(1e-9),
         });
         out["team"] = serde_json::json!({"a": side(0), "b": side(1), "steps": tot[19], "kickoffs": tot[22]});
     }
     println!("{out}");
 }
 
-fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u64) -> [u64; N_H2H] {
+fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u64, roles: indococo_bot::team::RoleParams) -> [u64; N_H2H] {
     const ENVS: usize = 8;
     let dev = Device::flex();
     let (na, nb) = (load_actor(a, &dev), load_actor(b, &dev));
@@ -2897,7 +3004,7 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
         let live = *started < games;
         let gid = *started;
         *started += 1;
-        let roles = indococo_bot::team::RoleTracker::new(indococo_bot::team::RoleParams::default());
+        let roles = indococo_bot::team::RoleTracker::new(roles.clone());
         G { env, state, obs, prev, a_team: (k % 2) as u8, uses, touches, roles, live, gid }
     };
     let mut gs: Vec<G> = (0..ENVS).map(|k| new_game(k, &mut started)).collect();
@@ -2936,6 +3043,8 @@ fn h2h_worker(mix: &[WeightedSetter], a: &Path, b: &Path, games: usize, seed: u6
                 if events[i].demoed {
                     out[7 + side] += 1;
                 }
+                out[55 + side] += u64::from(events[i].bump);
+                out[57 + side] += u64::from(events[i].demo);
             }
             if view.cars.len() > 2 {
                 let te = g.touches.step(&view);
@@ -3039,7 +3148,7 @@ fn ripple_h2h(ckpt: &Path, rdir: &Path, games: usize, threads: usize, idle_oppon
     use indococo_bot::ripple as rx;
     init_from_default(true).expect("load collision meshes");
     println!("Starting ripple_h2h: games={}, threads={}, idle={}", games, threads, idle_opponent);
-    let mix = vec![WeightedSetter { opp_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
+    let mix = vec![WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(), weight: 1.0, kind: indococo_bot::setters::SetterKind::Kickoff }];
     let per = games.div_ceil(threads);
     let t0 = std::time::Instant::now();
     let res: Vec<[u64; 4]> = std::thread::scope(|s| {

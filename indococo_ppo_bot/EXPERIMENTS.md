@@ -4166,6 +4166,80 @@ The launcher panel (`tm9_final/`, 52957.1M vs the TM7 final, 504 games unless no
 
 TM10 was already running and set `$BT` from `BT_PIN` (the TM7 final, `exp_TM7/checkpoints/1795170349`) once at its start; mid-evals, the 2-chunk guard, the PASSIVE_ALARM and TM10's own finals therefore still compare against the TM7 final. `team_launch_tm10.sh` does not re-read `team_best/FINAL_CKPT` for `$BT` (that change landed with the TM8 promotion in 883f173), so this pointer update cannot abort or silently retarget the running TM10 or a TM10 restart. TM10 itself was not modified, restarted, or swapped; its BT stays pinned to TM7 (intentional). The switch applies from the next launcher started without that pin. `TEAM_NO_FOLLOWUP` is set. The TM9 final is 270-wide and is not in the RLBot pack.
 
+## TM11 — Cross-exam note: defending grounded carries + 3v3 kickoff outcome (staged 2026-11-23, auto-starts after TM10)
+
+Goal (user): a policy that generalizes across opponent playstyles; current weak spots are
+Galactus-style grounded roof carries (Galactus 2v2/3v3 mids 0.02–0.15) and 3v3 kickoffs
+(TM9 finals vs Nexto at 1.5 s: win 0.143 / loss 0.391). TM10 is not touched (binary, scripts,
+configs, tmux window, TEAM_NO_FOLLOWUP). TM11 starts from TM10's final if it held up vs TM7
+(mean h2h >= 0.50, each mode >= 0.45), else from the TM9 final; BT is pinned to the TM9 final
+(team_best). team_best is never changed without the user's OK.
+
+### Cross-exam (three legs, per the Nov 12 rule)
+
+- **Discord (read-only):** RLGym + RLBot read-only search (Nov 23): Galactus Griefer roles announced (42–28 in 1s/2s/3s + 2v3/1v2/1v3); musty and reset-musty flicks are Galactus's primary edge and Rou_Ad noted self-play stops practicing or defending them; soft distillation is common in top chains (e.g. Nuclear Vibes ~120B); for demos, HappyBavarian07 guards kickoffs and PigMasta keeps demo share <1%; for kickoffs, Rou_Ad trained against Nexto kickoffs in 2s/3s and PigMasta noted Nexto is weak to slow kickoffs. THEBIGTHREE "terminal sauce" (starting 1–10 s before goals from 1v1 replays: "the last part is really the key"): **Unverified**, single-source, not reproduced in our code, logs, or any public bot; recorded, not acted on.
+- **Outside research:** Lucy-SKG's KRC (kinesthetic reward combination): multiply normalized factors so a term pays only when every factor holds (geometric-mean style), instead of summing terms the policy can farm one at a time. Public team bots pay challenges ungated or not at all. Other outside findings deferred to TM12+: `rocketsim_rs` (VirxEC, MIT) for direct C++ RocketSim bindings in Rust (benchmarking in parallel for a C++ Galactus slice), Kickstarting (Schmitt et al. 2018) / PPD decaying soft KL (`λ→0`) over plain BC, death masking for demoed rows (~0.5% of rows), PopArt return normalization, asymmetric critic role inputs, and N-car failure-state replay; cap gameplay levers at 2–3 per run so attribution stays clean.
+- **Code + logs:**
+  - `standardize_returns` divides rewards by a running return std (~1020 in TM10). A term's
+    weight / 1020 is its per-event size seen by PPO.
+  - TM10 reward share: goal 25.8%, vel_ball_to_goal 19.4%, goal_dist 12.5%, kickoff_same_pad 0.07%,
+    playmaking_demo 0.01%.
+  - Demoed cars aren't masked (normal rows; respawn timer is in the obs).
+  - The critic sees the actor's obs: team cols 86–89, no hysteretic role.
+  - h2h role metrics used default RoleParams (no obs tiebreak, instant touch), not the trained
+    hysteresis.
+  - **Correction:** the team `replay` setter does not park cars. `SetterMix::apply` places
+    support cars after every two-car setter. Zeroing it in 2v2/3v3 is a mix choice, not a bug
+    fix.
+  - There were no per-team-size setter weights; TM11 adds `mode_weights`.
+
+### Reconciliation (what TM11 does)
+
+- **Setters:**
+  - New `defend_carry` (9% of starts all modes; 20–22% vs Galactus): an opponent carries on its
+    roof at our net from 1500–4000 uu, with our first man goal-side and far (80%) or ball-side
+    behind (20%).
+  - `replay` stays 9% in 1v1 and is 0 in 2v2/3v3.
+  - The 3v3 kickoff start rises to 19% (2v2 stays 15%).
+- **`defend_carry` / `carry_break`** (individual, first man only for the shaping):
+  - Shaping is cbrt(goal-side x closing speed x proximity), paid only during an opponent's
+    grounded roof carry that threatens our net.
+  - The break event is +1 when a defender's touch or bump ends the carry and it isn't regained
+    for 8 steps (cap 3 per episode).
+  - Weights 20 / 300 (calibrated in the smoke run: <fill>), about 0.3% of the reward. The 1–3%
+    target would need goal-scale payouts, which invite farming, so it is capped at 40 / 600.
+- **`kickoff_outcome`** (individual): at 1.5 s after the first touch (the audit's window),
+  clamp(team-frame ball y / 1500, ±1). Paid to the 1st and 2nd man in 3v3, the taker (full) and
+  the other car (half) in 2v2, nothing in 1v1. W = 120 (10% of a goal).
+- `kickoff_same_pad` / `kickoff_one_corner` / `kickoff_taker` and TM10 playmaking are
+  inherited. Playmaking ramps are held at 1.0 so the new spirit_origin doesn't re-ramp them.
+- **Measurement:**
+  - h2h uses the run's role params (role metrics not comparable with TM6–TM10 numbers) and
+    adds demos/bumps per minute.
+  - Every eval goes through `run_eval` (timeout, stderr kept); a missing eval fails closed
+    (no score, gate fails, alarm says missing).
+  - The score drops Necto (saturated).
+  - Galactus/Nexto mids are 200 games.
+  - Finals run the C++ Galactus fidelity report (report-only).
+  - Galactus 1v1 Rust numbers stay inflated (see "Eval fidelity").
+- **Deferred to TM12:**
+  - Death masking of demoed rows.
+  - A role input to an asymmetric critic.
+  - PopArt.
+  - N-car failure-state replay (ST32-style) for team modes.
+  - The C++ Galactus training slice.
+  - A raised demo weight (Rolv / farming warnings stand).
+
+### Success criteria (TM11 final vs the TM9 final, 504 games)
+
+- Gate: mean h2h >= 0.52, each mode >= 0.48; Galactus and the external mean not below TM9's by
+  > 0.04.
+- 3v3 kickoff vs Nexto at 1.5 s: win >= 0.20 and loss <= 0.33.
+- Galactus (C++ fidelity, py_exact) 2v2 / 3v3 not below TM10's final by > 0.03.
+- Events/Carry breaks per min rising over the run.
+- No passive alarm two mids in a row.
+- Nexto 2v2 >= 0.55, 3v3 >= 0.45.
+
 ## Eval fidelity: Galactus headline metric, diag fix, Rust vs C++ engine (2026-11-23)
 
 People beat Galactus in real Rocket League (C++-engine behaviour) while our

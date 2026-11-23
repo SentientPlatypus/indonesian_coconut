@@ -306,6 +306,7 @@ impl<SI: SharedInfoReport + TickResets> Reward<SI> for CombinedReward {
             let event = match t.name {
                 "playmaking_demo" => Some("Events/Playmaking demos per min"),
                 "playmaking_bump" => Some("Events/Playmaking bumps per min"),
+                "carry_break" => Some("Events/Carry breaks per min"),
                 _ => None,
             };
             if let Some(key) = event {

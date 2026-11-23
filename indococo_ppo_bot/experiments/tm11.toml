@@ -1,0 +1,49 @@
+# TM11 reward config = TM10 (tm10.toml) + defend_carry / carry_break (KRC-style
+# challenge of an opponent's grounded roof carry, src/rewards/tm11.rs) +
+# kickoff_outcome (1.5 s kickoff result for the 1st/2nd man). TM10's playmaking
+# terms are inherited unchanged; their ramps are held at 1.0 because TM11 has a
+# new spirit_origin (an unflattened ramp would re-ramp from 0.25).
+# Weights: see tm11_impl_spec.md section 3.3 (calibrated after the smoke run).
+extends = "tm10.toml"
+
+[weights]
+defend_carry = 20.0
+carry_break = 300.0
+kickoff_outcome = 120.0
+
+[defend_carry]
+roof_min = 95.0
+roof_max = 175.0
+max_planar = 160.0
+max_rel_speed = 500.0
+max_ball_z = 320.0
+min_steps = 4
+threat_dist = 7000.0
+prox_scale = 2000.0
+contact_window = 3
+confirm_steps = 8
+cap = 3
+
+[kickoff_outcome]
+horizon_steps = 22
+y_scale = 1500.0
+min_team = 2
+last_scale_2v2 = 0.5
+last_scale_3v3 = 0.0
+
+[team]
+# Arrays replace on extends: tm10.toml's lists plus the three TM11 terms.
+role_metrics = ["contact_quality", "speed_to_ball", "face_ball", "support_role", "last_man_goalside", "teammate_spacing", "teammate_far", "concede_role", "pass", "shadow_cover", "playmaking_demo", "playmaking_bump", "defend_carry", "carry_break", "kickoff_outcome"]
+individual = [
+  "speed_to_ball", "face_ball", "energy", "boost_keep", "boost_change",
+  "aerial_boost", "in_air", "ang_vel", "safe_boost", "overextend",
+  "contact_quality", "recover", "double_commit",
+  "flip_reset", "flip_reset_use", "air_double_touch", "musty",
+  "teammate_spacing", "last_man_goalside", "shadow_box", "support_role",
+  "teammate_far", "concede_role",
+  "shadow_cover", "kickoff_same_pad", "kickoff_taker",
+  "playmaking_demo", "playmaking_bump",
+  "defend_carry", "carry_break", "kickoff_outcome",
+]
+# Tables merge: tm9's contact_quality / shadow_cover holds stay. TM10's playmaking ramps are held flat.
+term_ramp = { playmaking_demo = [[0.0, 1.0]], playmaking_bump = [[0.0, 1.0]], defend_carry = [[0.0, 0.25], [200_000_000.0, 1.0]], carry_break = [[0.0, 0.25], [200_000_000.0, 1.0]], kickoff_outcome = [[0.0, 0.25], [200_000_000.0, 1.0]] }

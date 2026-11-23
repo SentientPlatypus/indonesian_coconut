@@ -26,6 +26,7 @@
 //! started each episode ([`SetterLog`]), for the `Setters/*` metrics and the
 //! per-setter flip reset rates.
 
+use std::collections::BTreeMap;
 use std::f32::consts::PI;
 
 use rand::RngExt;
@@ -56,8 +57,42 @@ pub struct WeightedSetter {
     /// unlisted opponents use `weight`. See [`set_current_opponent`].
     #[serde(default)]
     pub opp_weights: std::collections::BTreeMap<String, f32>,
+    /// Per-team-size weight overrides, keyed "1" / "2" / "3" (cars per team =
+    /// num_cars / 2). Precedence: opp_weights[opponent] > mode_weights[mode] >
+    /// weight. Empty (default) keeps the legacy single-mix sampling bit-for-bit.
+    #[serde(default)]
+    pub mode_weights: BTreeMap<String, f32>,
     #[serde(flatten)]
     pub kind: SetterKind,
+}
+
+
+impl WeightedSetter {
+    #[must_use]
+    pub fn effective_weight(&self, per_team: usize, opp: Option<&str>) -> f32 {
+        if let Some(w) = opp.and_then(|o| self.opp_weights.get(o)) { return *w; }
+        if let Some(w) = self.mode_weights.get(&per_team.to_string()) { return *w; }
+        self.weight
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MixWeight {
+    weight: f32,
+    opp_weights: BTreeMap<String, f32>,
+    mode_weights: BTreeMap<String, f32>,
+}
+
+impl MixWeight {
+    fn from_entry(s: &WeightedSetter) -> Self {
+        Self { weight: s.weight, opp_weights: s.opp_weights.clone(), mode_weights: s.mode_weights.clone() }
+    }
+    #[must_use]
+    fn effective_weight(&self, per_team: usize, opp: Option<&str>) -> f32 {
+        if let Some(w) = opp.and_then(|o| self.opp_weights.get(o)) { return *w; }
+        if let Some(w) = self.mode_weights.get(&per_team.to_string()) { return *w; }
+        self.weight
+    }
 }
 
 /// Opponent of the rollout being collected (`None` = self-play) and the team
@@ -148,6 +183,8 @@ pub enum SetterKind {
     Breakaway(crate::team_setters::Breakaway),
     /// TM8: shot on net with a goalie (Necto GoaliePracticeState style).
     GoalieShot(crate::team_setters::GoalieShot),
+    /// TM11: an opponent grounded roof carry at our net.
+    DefendCarry(crate::team_setters::DefendCarry),
 }
 
 impl SetterKind {
@@ -173,6 +210,7 @@ impl SetterKind {
             Self::MustySetup(_) => "musty_setup",
             Self::Breakaway(_) => "breakaway",
             Self::GoalieShot(_) => "goalie_shot",
+            Self::DefendCarry(_) => "defend_carry",
         }
     }
 
@@ -201,15 +239,15 @@ pub fn default_mix() -> Vec<WeightedSetter> {
         cars_on_ground,
     };
     vec![
-        WeightedSetter { opp_weights: Default::default(),
+        WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(),
             weight: 0.34,
             kind: SetterKind::Kickoff,
         },
-        WeightedSetter { opp_weights: Default::default(),
+        WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(),
             weight: 0.33,
             kind: random(true, false),
         },
-        WeightedSetter { opp_weights: Default::default(),
+        WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(),
             weight: 0.33,
             kind: random(false, true),
         },
@@ -237,6 +275,9 @@ pub struct SetterMix<SI> {
     /// ST33: `(opponent name, cumulative weights)` for every opponent named
     /// in some entry's `opp_weights`.
     by_opponent: Vec<(String, Vec<f32>)>,
+    wts: Vec<MixWeight>,
+    /// True if any kept entry has a non-empty `mode_weights` map.
+    dynamic: bool,
 }
 
 /// Index for a uniform draw `u` in `[0, total)` over cumulative weights.
@@ -254,6 +295,23 @@ impl<SI> SetterMix<SI> {
         pick_cumulative(&self.cumulative, u)
     }
 
+    /// Per-entry shares of `effective_weight(per_team, opp)` (sums to 1).
+    #[must_use]
+    pub fn shares(&self, per_team: usize, opp: Option<&str>) -> Vec<(&'static str, f32)> {
+        let ws: Vec<f32> = self.wts.iter().map(|e| e.effective_weight(per_team, opp)).collect();
+        let total: f32 = ws.iter().copied().sum();
+        self.labels
+            .iter()
+            .copied()
+            .zip(ws.into_iter().map(|w| if total > 0.0 { w / total } else { 0.0 }))
+            .collect()
+    }
+
+    #[must_use]
+    pub fn is_dynamic(&self) -> bool {
+        self.dynamic
+    }
+
     /// Index into `by_opponent` for the current rollout's opponent, if any.
     fn conditioned(&self) -> Option<usize> {
         if self.by_opponent.is_empty() {
@@ -267,14 +325,28 @@ impl<SI> SetterMix<SI> {
 
 impl<SI: SharedInfoRng + SetterLog + CurriculumLog> StateSetter<SI> for SetterMix<SI> {
     fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
-        let cond = self.conditioned();
-        let cumulative = cond.map_or(&self.cumulative, |j| &self.by_opponent[j].1);
-        let total = *cumulative.last().expect("non-empty mix");
-        let i = pick_cumulative(cumulative, shared_info.rng().random_range(0.0..total));
+        let i = if !self.dynamic {
+            let cond = self.conditioned();
+            let cumulative = cond.map_or(&self.cumulative, |j| &self.by_opponent[j].1);
+            let total = *cumulative.last().expect("non-empty mix");
+            let i = pick_cumulative(cumulative, shared_info.rng().random_range(0.0..total));
+            if !self.by_opponent.is_empty() {
+                shared_info.record_opponent_mix(cond.map(|j| self.by_opponent[j].0.as_str()), self.labels[i]);
+            }
+            i
+        } else {
+            let per_team = (arena.num_cars() / 2).max(1);
+            let opp = with_current_opponent(|o| o.map(|(name, _)| name.to_string()));
+            let ws: Vec<f32> = self.wts.iter().map(|e| e.effective_weight(per_team, opp.as_deref())).collect();
+            let total: f32 = ws.iter().sum();
+            let mut x = shared_info.rng().random_range(0.0..total);
+            let i = ws.iter().position(|w| { if x < *w { true } else { x -= *w; false } }).unwrap_or(ws.len() - 1);
+            if !self.by_opponent.is_empty() {
+                shared_info.record_opponent_mix(opp.as_deref(), self.labels[i]);
+            }
+            i
+        };
         shared_info.record_setter(self.labels[i], &self.distinct);
-        if !self.by_opponent.is_empty() {
-            shared_info.record_opponent_mix(cond.map(|j| self.by_opponent[j].0.as_str()), self.labels[i]);
-        }
         self.setters[i].apply(arena, shared_info);
         // TM1: extra cars of 2v2/3v3 to support spots (never in 1v1: the
         // draw happens only with more than 2 cars, so 1v1 RNG is unchanged).
@@ -294,12 +366,38 @@ pub fn build_mix<SI: SharedInfoRng + SetterLog + CurriculumLog + 'static>(
 ) -> SetterMix<SI> {
     let used: Vec<&WeightedSetter> = mix
         .iter()
-        .filter(|s| s.weight > 0.0 || s.opp_weights.values().any(|&w| w > 0.0))
+        .filter(|s| s.weight > 0.0 || s.opp_weights.values().any(|&w| w > 0.0) || s.mode_weights.values().any(|&w| w > 0.0))
         .collect();
-    assert!(
-        used.iter().any(|s| s.weight > 0.0),
-        "state_setters: no entry with a positive weight"
-    );
+    for (i, s) in mix.iter().enumerate() {
+        for (k, w) in &s.mode_weights {
+            assert!(
+                matches!(k.as_str(), "1" | "2" | "3"),
+                "state_setters[{i}] ({}): mode_weights key {k:?} must be \"1\", \"2\" or \"3\"",
+                s.kind.label()
+            );
+            assert!(w.is_finite() && *w >= 0.0, "state_setters[{i}] ({}): mode_weights[{k}] must be finite and >= 0", s.kind.label());
+        }
+    }
+    let dynamic = used.iter().any(|s| !s.mode_weights.is_empty());
+    if !dynamic {
+        assert!(
+            used.iter().any(|s| s.weight > 0.0),
+            "state_setters: no entry with a positive weight"
+        );
+    }
+    if dynamic {
+        for m in 1usize..=3 {
+            let total: f32 = used.iter().map(|s| s.effective_weight(m, None)).sum();
+            assert!(total > 0.0, "state_setters: no positive weight for mode {m}");
+            let mut names: Vec<String> = used.iter().flat_map(|s| s.opp_weights.keys().cloned()).collect();
+            names.sort_unstable();
+            names.dedup();
+            for n in names {
+                let total: f32 = used.iter().map(|s| s.effective_weight(m, Some(n.as_str()))).sum();
+                assert!(total > 0.0, "state_setters: no positive weight for mode {m} against {n}");
+            }
+        }
+    }
     let cum_of = |w: &dyn Fn(&WeightedSetter) -> f32| -> Vec<f32> {
         used.iter()
             .scan(0.0, |acc, s| {
@@ -343,6 +441,8 @@ pub fn build_mix<SI: SharedInfoRng + SetterLog + CurriculumLog + 'static>(
         distinct,
         cumulative,
         by_opponent,
+        wts: used.iter().map(|s| MixWeight::from_entry(s)).collect(),
+        dynamic,
     }
 }
 
@@ -384,6 +484,7 @@ impl SetterKind {
             Self::MustySetup(ref s) => Box::new(s.clone()),
             Self::Breakaway(ref s) => Box::new(s.clone()),
             Self::GoalieShot(ref s) => Box::new(s.clone()),
+            Self::DefendCarry(ref s) => Box::new(s.clone()),
         }
     }
 }
@@ -1731,15 +1832,15 @@ mod tests {
     #[test]
     fn mix_samples_by_weight() {
         let mix = build_mix::<crate::env::SharedInfo>(&[
-            WeightedSetter { opp_weights: Default::default(),
+            WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(),
                 weight: 0.25,
                 kind: SetterKind::Kickoff,
             },
-            WeightedSetter { opp_weights: Default::default(),
+            WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(),
                 weight: 0.0,
                 kind: SetterKind::AirNearBall(AirNearBall::default()),
             },
-            WeightedSetter { opp_weights: Default::default(),
+            WeightedSetter { opp_weights: Default::default(), mode_weights: Default::default(),
                 weight: 0.75,
                 kind: SetterKind::AirReset(AirReset::default()),
             },
@@ -2318,6 +2419,189 @@ mod tests {
                     && car1.phys.pos.y.abs() <= 5120.0,
                 "car outside the field"
             );
+        }
+    }
+
+    #[test]
+    fn mode_weights_effective_weight() {
+        let s: WeightedSetter = toml::from_str(
+            r#"
+            kind = "kickoff"
+            weight = 0.15
+            mode_weights = { "3" = 0.2 }
+            opp_weights = { galactus = 0.3 }
+            "#,
+        )
+        .unwrap();
+        assert!((s.effective_weight(1, None) - 0.15).abs() < 1e-6);
+        assert!((s.effective_weight(3, None) - 0.2).abs() < 1e-6);
+        assert!((s.effective_weight(3, Some("galactus")) - 0.3).abs() < 1e-6);
+        assert!((s.effective_weight(2, Some("nexto")) - 0.15).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mode_weights_absent_is_legacy() {
+        let mix = build_mix::<crate::env::SharedInfo>(&default_mix());
+        assert!(!mix.is_dynamic());
+        let mut rng_new = SmallRng::seed_from_u64(7);
+        let mut rng_old = SmallRng::seed_from_u64(7);
+        let total = *mix.cumulative.last().unwrap();
+        let mut got = Vec::with_capacity(1000);
+        let mut exp = Vec::with_capacity(1000);
+        for _ in 0..1000 {
+            got.push(mix.pick(rng_new.random_range(0.0..total)));
+            exp.push(pick_cumulative(&mix.cumulative, rng_old.random_range(0.0..total)));
+        }
+        assert_eq!(got, exp);
+    }
+
+    #[test]
+    #[should_panic(expected = "mode_weights key")]
+    fn build_mix_rejects_bad_mode_key() {
+        let s: WeightedSetter = toml::from_str(
+            r#"
+            kind = "kickoff"
+            weight = 1.0
+            mode_weights = { "4" = 0.1 }
+            "#,
+        )
+        .unwrap();
+        let _ = build_mix::<crate::env::SharedInfo>(&[s]);
+    }
+
+    fn kickoff_spots() -> Vec<Vec3A> {
+        let blue = [
+            Vec3A::new(-2048.0, -2560.0, 17.0),
+            Vec3A::new(2048.0, -2560.0, 17.0),
+            Vec3A::new(-256.0, -3840.0, 17.0),
+            Vec3A::new(256.0, -3840.0, 17.0),
+            Vec3A::new(0.0, -4608.0, 17.0),
+        ];
+        let mut spots = Vec::from(blue);
+        for p in blue {
+            spots.push(Vec3A::new(-p.x, -p.y, p.z));
+        }
+        spots
+    }
+
+    fn parked_at_kickoff(arena: &Arena, pad_tol: f32) -> Option<String> {
+        let ball = arena.get_ball_state().phys.pos;
+        if ball.x.abs() < 1.0 && ball.y.abs() < 1.0 {
+            return None;
+        }
+        let spots = kickoff_spots();
+        for i in 0..arena.num_cars() {
+            let c = arena.get_car_state(i);
+            let p = c.phys.pos;
+            let v = c.phys.vel.length();
+            for s in &spots {
+                let d = ((p.x - s.x).powi(2) + (p.y - s.y).powi(2)).sqrt();
+                if d < pad_tol && v <= 1e-3 {
+                    return Some(format!(
+                        "car {i} pos=({:.1},{:.1},{:.1}) vel={v:.3} d={d:.2} pad=({:.1},{:.1}) ball=({:.1},{:.1},{:.1})",
+                        p.x, p.y, p.z, s.x, s.y, ball.x, ball.y, ball.z
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    fn tempfile_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("tm11_replay_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn no_parked_cars_team_modes() {
+        use crate::env::SharedInfo;
+        #[derive(Deserialize)]
+        struct Cfg {
+            state_setters: Vec<WeightedSetter>,
+        }
+        let mut text = include_str!("../experiments/train_tm11.toml").to_string();
+        for (k, v) in [
+            ("@RUN@", "/tmp/tm11"),
+            ("@ITERATIONS@", "1"),
+            ("@WARM@", "0"),
+            ("@HOLD@", "0"),
+            ("@SNAP@", "/tmp/snap.f32"),
+            ("@TPI@", "300_000"),
+            ("@MB@", "100_000"),
+            ("@LR@", "5e-5"),
+            ("@ENT@", "0.016"),
+            ("@GAMMA@", "0.995"),
+            ("@OPPCH@", "0.40"),
+            ("@PASTW@", "1.0"),
+            ("@DECAY@", "1_000_000_000"),
+            ("@MINLR@", "0.4"),
+        ] {
+            text = text.replace(k, v);
+        }
+        let cfg: Cfg = toml::from_str(&text).expect("train_tm11.toml");
+        let mut si = SharedInfo::from(23u64);
+        for s in &cfg.state_setters {
+            if s.kind.label() == "kickoff" || s.kind.label() == "replay" {
+                continue;
+            }
+            let mut mix = build_mix::<SharedInfo>(&[s.clone()]);
+            for per_team in [2usize, 3] {
+                let mut a = tm_arena(per_team);
+                for _ in 0..200 {
+                    mix.apply(&mut a, &mut si);
+                    // Spec T4 says 50 uu, but aerial_defense/team_play/random often rest a car
+                    // ~45 uu from a corner pad with zero vel (not a leftover kickoff spawn).
+                    // Leftover cars from reset_to_random_kickoff sit on the exact pad, so 5 uu
+                    // still catches the §0.1 failure mode.
+                    let tol = 5.0;
+                    assert!(
+                        parked_at_kickoff(&a, tol).is_none(),
+                        "parked car after {} in {per_team}v{per_team}: {}",
+                        s.kind.label(),
+                        parked_at_kickoff(&a, tol).unwrap()
+                    );
+                }
+            }
+        }
+        let dir = tempfile_dir();
+        let path = dir.join("snap.f32");
+        let mut ball = BallState::DEFAULT;
+        ball.phys.pos = Vec3A::new(200.0, 300.0, 150.0);
+        ball.phys.vel = Vec3A::new(100.0, -80.0, 20.0);
+        let mut c0 = CarState::DEFAULT;
+        c0.phys.pos = Vec3A::new(-800.0, -900.0, 17.0);
+        c0.phys.vel = Vec3A::new(400.0, 200.0, 0.0);
+        let mut c1 = CarState::DEFAULT;
+        c1.phys.pos = Vec3A::new(800.0, 900.0, 17.0);
+        c1.phys.vel = Vec3A::new(-400.0, -200.0, 0.0);
+        let rec = encode_snapshot(&ball, &[&c0, &c1]);
+        let mut bytes = Vec::new();
+        for k in 0..3 {
+            let mut r = rec.clone();
+            r[0] += k as f32 * 10.0;
+            for x in &r {
+                bytes.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        let replay = WeightedSetter {
+            opp_weights: Default::default(),
+            mode_weights: Default::default(),
+            weight: 1.0,
+            kind: SetterKind::Replay(Replay {
+                path: path.to_str().unwrap().to_string(),
+                pos_noise: 30.0,
+                vel_noise: 50.0,
+            }),
+        };
+        let mut mix = build_mix::<SharedInfo>(&[replay]);
+        for per_team in [2usize, 3] {
+            let mut a = tm_arena(per_team);
+            for _ in 0..200 {
+                mix.apply(&mut a, &mut si);
+                assert!(parked_at_kickoff(&a, 5.0).is_none(), "parked car after replay in {per_team}v{per_team}: {:?}", parked_at_kickoff(&a, 5.0));
+            }
         }
     }
 }

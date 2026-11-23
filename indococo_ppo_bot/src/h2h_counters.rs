@@ -1,4 +1,4 @@
-//! Named layout of the 55-slot `h2h` counter array in `src/bin/train.rs`.
+//! Named layout of the 59-slot `h2h` counter array in `src/bin/train.rs`.
 //!
 //! The train binary still writes and reads raw indices (`tot[9 + k]`, …).
 //! Wiring [`H2hCounters`] into `h2h` / `h2h_worker` is deferred until after
@@ -7,7 +7,7 @@
 //! later mechanical swap can be checked.
 
 /// Length of the `h2h_worker` output array (`train.rs` `N_H2H`).
-pub const N_H2H: usize = 55;
+pub const N_H2H: usize = 59;
 
 /// One named field of the `h2h` counter array.
 ///
@@ -46,7 +46,7 @@ impl H2hField {
     }
 }
 
-/// The 55-slot `h2h` layout, one entry per named field.
+/// The 59-slot `h2h` layout, one entry per named field.
 ///
 /// Index map (matches `h2h` JSON / `h2h_worker` writes in `train.rs`):
 /// 0 wins, 1 losses, 2 draws, 3–4 resets a/b, 5–6 uses a/b, 7–8 demos_against
@@ -57,7 +57,7 @@ impl H2hField {
 /// deep_last_man, 33–34 spacing_steps, 35–36 role_swaps, 37–38 touch_first,
 /// 39–40 touch_second, 41–42 touch_last, 43–44 no_challenger, 45–46
 /// opp_ball_own_half, 47–48 touches, 49–50 car_steps, 51–52 depth_count,
-/// 53–54 deepest_car_depth (sum).
+/// 53–54 deepest_car_depth (sum), 55–56 bumps, 57–58 demos.
 pub const H2H_FIELDS: &[H2hField] = &[
     H2hField::shared("wins", 0),
     H2hField::shared("losses", 1),
@@ -89,6 +89,8 @@ pub const H2H_FIELDS: &[H2hField] = &[
     H2hField::sides("car_steps", 49),
     H2hField::sides("depth_count", 51),
     H2hField::sides("deepest_car_depth", 53),
+    H2hField::sides("bumps", 55),
+    H2hField::sides("demos", 57),
 ];
 
 /// Named `h2h` counters, one field per metric. Convertible to and from the
@@ -125,6 +127,8 @@ pub struct H2hCounters {
     pub car_steps: [u64; 2],
     pub depth_count: [u64; 2],
     pub deepest_car_depth: [u64; 2],
+    pub bumps: [u64; 2],
+    pub demos: [u64; 2],
 }
 
 impl H2hCounters {
@@ -163,6 +167,8 @@ impl H2hCounters {
             car_steps: side(49),
             depth_count: side(51),
             deepest_car_depth: side(53),
+            bumps: side(55),
+            demos: side(57),
         }
     }
 
@@ -225,6 +231,10 @@ impl H2hCounters {
         tot[52] = self.depth_count[1];
         tot[53] = self.deepest_car_depth[0];
         tot[54] = self.deepest_car_depth[1];
+        tot[55] = self.bumps[0];
+        tot[56] = self.bumps[1];
+        tot[57] = self.demos[0];
+        tot[58] = self.demos[1];
         tot
     }
 }
@@ -276,5 +286,7 @@ mod tests {
         assert_eq!(named.steps, 20 * 3);
         assert_eq!(named.passes, [10 * 3, 11 * 3]);
         assert_eq!(named.deepest_car_depth, [54 * 3, 55 * 3]);
+        assert_eq!(named.bumps, [56 * 3, 57 * 3]);
+        assert_eq!(named.demos, [58 * 3, 59 * 3]);
     }
 }
