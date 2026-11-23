@@ -1,0 +1,20 @@
+# Python deps for tools/pool_eval and related harnesses.
+#
+# Pinned from the EC2 training venv (~/coco-venv, pip freeze, 2026-11-23,
+# America/New_York). numpy==1.26.4 is a standing rule: do not bump.
+#
+# This is a curated subset, not a full freeze (the venv also has CUDA torch
+# wheels, nvidia-* and wandb). The live venv has torch==2.8.0+cu126;
+# install a CPU or CUDA build of 2.8.0 to match the site.
+#
+# The Phase 1 audit plan mentioned rocketsim 2.2.1; the live coco-venv
+# is rocketsim==2.1.1.post4. The pin below follows the venv.
+numpy==1.26.4
+rlgym==2.0.1
+rlgym-api==2.0.0
+rlgym-rocket-league==2.0.1
+rlgym_tools==2.3.13
+rocketsim==2.1.1.post4
+torch==2.8.0
+scipy==1.17.1
+PyYAML==6.0.3
