@@ -40,7 +40,8 @@
 //! kickoffs otherwise, and both are greedy (beta 1) the rest of the time.
 //! [`NfBot`] replays that tick by tick for the h2h harness. The league
 //! wrapper [`NfPolicy`] decides once per 8-tick interval (collector
-//! hold-then-switch with the same delay) and has no scripted kickoff.
+//! hold-then-switch with the same delay). When `kickoff_script` is set
+//! (default off) it plays the same per-tick speedflip as [`NfBot`].
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -271,6 +272,81 @@ pub fn kickoff_rows() -> &'static [[f32; 8]] {
 pub fn kickoff_phase(state: &GameState) -> bool {
     let b = &state.ball.phys;
     b.pos.x == 0.0 && b.pos.y == 0.0 && b.vel.x == 0.0 && b.vel.y == 0.0 && b.vel.z == 0.0
+}
+
+/// Kickoff-taker distance tolerance. `bot.py` uses 10 uu, which assumes the
+/// game's exact, symmetric spawns. The h2h harness jitters every spawn by up
+/// to 60 uu per axis, so two cars on mirrored spawns can differ by up to
+/// ~170 uu; kickoff spawns are at least ~570 uu apart in distance to the ball,
+/// so 180 uu picks the same taker as the real game with or without jitter.
+pub const KICKOFF_TAKER_TOL: f32 = 180.0;
+
+/// Whether car `me` is this team's kickoff taker. Same rule as
+/// [`NfBot`]: closest to the ball within [`KICKOFF_TAKER_TOL`], and on a
+/// distance tie the left-most car (in that team's frame) goes.
+pub fn is_kickoff_taker(state: &GameState, me: usize) -> bool {
+    let ball = state.ball.phys.pos;
+    let d: Vec<f32> = state
+        .cars
+        .iter()
+        .map(|(_, c)| ((c.phys.pos.x - ball.x).powi(2) + (c.phys.pos.y - ball.y).powi(2)).sqrt())
+        .collect();
+    let min = d.iter().copied().fold(f32::INFINITY, f32::min);
+    let my_team = state.cars[me].0.team;
+    if (min - d[me]).abs() > KICKOFF_TAKER_TOL {
+        return false;
+    }
+    for (j, (info, c)) in state.cars.iter().enumerate() {
+        if j != me && info.team == my_team && (d[j] - d[me]).abs() <= KICKOFF_TAKER_TOL {
+            let my_x = state.cars[me].1.phys.pos.x;
+            let is_left = if my_team == Team::Blue {
+                c.phys.pos.x < my_x
+            } else {
+                c.phys.pos.x > my_x
+            };
+            if !is_left {
+                return false; // Left goes
+            }
+        }
+    }
+    true
+}
+
+/// Per-car speedflip script, matching [`NfBot::maybe_do_kickoff`] tick for tick.
+#[derive(Clone, Debug, Default)]
+pub struct KickoffScript {
+    /// -1 = not yet decided, -2 = not the taker, >= 0 = index into [`kickoff_rows`].
+    index: i64,
+}
+
+impl KickoffScript {
+    pub fn new() -> Self {
+        Self { index: -1 }
+    }
+
+    pub fn reset(&mut self) {
+        self.index = -1;
+    }
+
+    /// Advance one physics tick. Returns the scripted row when this car is
+    /// the taker and still inside the kickoff phase.
+    pub fn tick(&mut self, state: &GameState, me: usize) -> Option<[f32; 8]> {
+        if !kickoff_phase(state) {
+            self.index = -1;
+            return None;
+        }
+        if self.index >= 0 {
+            self.index += 1;
+        } else if self.index == -1 {
+            self.index = if is_kickoff_taker(state, me) { 0 } else { -2 };
+        }
+        let rows = kickoff_rows();
+        if self.index >= 0 && (self.index as usize) < rows.len() && state.ball.phys.pos.y == 0.0 {
+            Some(rows[self.index as usize])
+        } else {
+            None
+        }
+    }
 }
 
 /// One observation: `ents` entities, kv row-major `ents x 24`.
@@ -603,20 +679,13 @@ pub struct NfBot {
     update_action: bool,
     pub action: [f32; 8],
     pub controls: [f32; 8],
-    kickoff_index: i64,
+    script_state: KickoffScript,
     necto: NectoState,
     /// Sample every decision (beta 0.5) instead of argmax.
     pub stochastic: bool,
     apply_at: u32,
     pub script: bool,
 }
-
-/// Kickoff-taker distance tolerance. `bot.py` uses 10 uu, which assumes the
-/// game's exact, symmetric spawns. The h2h harness jitters every spawn by up
-/// to 60 uu per axis, so two cars on mirrored spawns can differ by up to
-/// ~170 uu; kickoff spawns are at least ~570 uu apart in distance to the ball,
-/// so 180 uu picks the same taker as the real game with or without jitter.
-pub const KICKOFF_TAKER_TOL: f32 = 180.0;
 
 impl NfBot {
     pub fn new(kind: Kind, stochastic: bool, script: bool) -> Self {
@@ -626,7 +695,7 @@ impl NfBot {
             update_action: true,
             action: [0.0; 8],
             controls: [0.0; 8],
-            kickoff_index: -1,
+            script_state: KickoffScript::new(),
             necto: NectoState::default(),
             stochastic,
             apply_at: u32::from(kind.delay()) + 1,
@@ -668,39 +737,8 @@ impl NfBot {
     }
 
     fn maybe_do_kickoff(&mut self, state: &GameState, me: usize) {
-        if !kickoff_phase(state) {
-            self.kickoff_index = -1;
-            return;
-        }
-        if self.kickoff_index >= 0 {
-            self.kickoff_index += 1;
-        } else if self.kickoff_index == -1 {
-            let ball = state.ball.phys.pos;
-            let d: Vec<f32> = state
-                .cars
-                .iter()
-                .map(|(_, c)| ((c.phys.pos.x - ball.x).powi(2) + (c.phys.pos.y - ball.y).powi(2)).sqrt())
-                .collect();
-            let min = d.iter().copied().fold(f32::INFINITY, f32::min);
-            let my_team = state.cars[me].0.team;
-            let mut taker = false;
-            if (min - d[me]).abs() <= KICKOFF_TAKER_TOL {
-                taker = true;
-                for (j, (info, c)) in state.cars.iter().enumerate() {
-                    if j != me && info.team == my_team && (d[j] - d[me]).abs() <= KICKOFF_TAKER_TOL {
-                        let my_x = state.cars[me].1.phys.pos.x;
-                        let is_left = if my_team == Team::Blue { c.phys.pos.x < my_x } else { c.phys.pos.x > my_x };
-                        if !is_left {
-                            taker = false; // Left goes
-                        }
-                    }
-                }
-            }
-            self.kickoff_index = if taker { 0 } else { -2 };
-        }
-        let rows = kickoff_rows();
-        if self.kickoff_index >= 0 && (self.kickoff_index as usize) < rows.len() && state.ball.phys.pos.y == 0.0 {
-            self.action = rows[self.kickoff_index as usize];
+        if let Some(row) = self.script_state.tick(state, me) {
+            self.action = row;
             self.controls = self.action;
         }
     }
@@ -713,6 +751,7 @@ struct CarMem {
     stochastic: bool,
     last_tick: u64,
     was_kickoff: bool,
+    script: KickoffScript,
 }
 
 /// Nexto / Necto as a league opponent ([`ExternalPolicy`]). One decision per
@@ -727,6 +766,9 @@ pub struct NfPolicy {
     delay: u8,
     mem: Mutex<HashMap<(usize, usize), CarMem>>,
     rng: Mutex<SmallRng>,
+    /// When true, play the same per-tick speedflip as [`NfBot`] during
+    /// kickoffs. Default false.
+    pub kickoff_script: bool,
 }
 
 // The module is behind a Mutex; the rest is plain data.
@@ -741,7 +783,15 @@ impl NfPolicy {
             delay: kind.delay(),
             mem: Mutex::new(HashMap::new()),
             rng: Mutex::new(SmallRng::seed_from_u64(0x5eed_4e78)),
+            kickoff_script: false,
         })
+    }
+
+    /// Enable or disable Nexto/Necto's scripted speedflip in training.
+    /// Off by default so existing rollouts stay bit-identical.
+    pub fn with_kickoff_script(mut self, on: bool) -> Self {
+        self.kickoff_script = on;
+        self
     }
 }
 
@@ -772,6 +822,7 @@ impl ExternalPolicy for NfPolicy {
                 stochastic: false,
                 last_tick: state.tick_count,
                 was_kickoff: false,
+                script: KickoffScript::new(),
             });
             let new_episode = fresh
                 || state.tick_count < m.last_tick
@@ -779,6 +830,7 @@ impl ExternalPolicy for NfPolicy {
                 || (ko && !m.was_kickoff);
             if new_episode {
                 m.necto = NectoState::default();
+                m.script.reset();
                 m.stochastic = self.stochastic > 0.0 && self.rng.lock().expect("nf rng").random::<f32>() < self.stochastic;
             }
             m.last_tick = state.tick_count;
@@ -829,6 +881,27 @@ impl ExternalPolicy for NfPolicy {
     fn controls(&self, action: usize) -> CarControls {
         to_controls(&row_of(self.model.kind, action))
     }
+    fn per_tick_controls(&self) -> bool {
+        self.kickoff_script
+    }
+    fn wants_per_tick(&self, state: &GameState) -> bool {
+        self.kickoff_script && kickoff_phase(state)
+    }
+    fn tick_controls(&self, state: &GameState, car: usize) -> Option<CarControls> {
+        if !self.kickoff_script {
+            return None;
+        }
+        let key = (std::ptr::from_ref(state) as usize, car);
+        let mut map = self.mem.lock().expect("nf mem");
+        let m = map.entry(key).or_insert_with(|| CarMem {
+            necto: NectoState::default(),
+            stochastic: false,
+            last_tick: state.tick_count,
+            was_kickoff: kickoff_phase(state),
+            script: KickoffScript::new(),
+        });
+        m.script.tick(state, car).map(|row| to_controls(&row))
+    }
 }
 
 #[cfg(test)]
@@ -875,5 +948,110 @@ mod tests {
         assert_eq!(norm(5), 2300.0);
         assert_eq!(norm(11), 1.0);
         assert_eq!(norm(19), 5.5);
+    }
+
+    #[test]
+    fn kickoff_script_defaults_and_row_count() {
+        assert_eq!(kickoff_rows().len(), 4 * 42);
+        let mut s = KickoffScript::new();
+        s.reset();
+        assert_eq!(KICKOFF_TAKER_TOL, 180.0);
+    }
+
+    fn ko_state(cars: &[(Team, f32, f32)]) -> GameState {
+        use rlgymppo::rlgym::rocketsim::{BallState, CarInfo, CarState, GameMode, Vec3A};
+        GameState {
+            game_mode: GameMode::Soccar,
+            tick_count: 0,
+            ball: BallState::default(),
+            cars: cars
+                .iter()
+                .enumerate()
+                .map(|(idx, &(team, x, y))| {
+                    let info = CarInfo { idx, team, ..CarInfo::default() };
+                    let mut c = CarState::default();
+                    c.phys.pos = Vec3A::new(x, y, 17.0);
+                    (info, c)
+                })
+                .collect(),
+            boost_pads: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn kickoff_taker_left_goes_on_a_tie() {
+        // Two blue cars at the same distance from mid; the left one (smaller x for blue) goes.
+        let st = ko_state(&[
+            (Team::Blue, -2048.0, -2560.0),
+            (Team::Blue, 2048.0, -2560.0),
+            (Team::Orange, -2048.0, 2560.0),
+            (Team::Orange, 2048.0, 2560.0),
+        ]);
+        assert!(kickoff_phase(&st));
+        assert!(is_kickoff_taker(&st, 0), "blue left should go");
+        assert!(!is_kickoff_taker(&st, 1), "blue right should stay");
+        // Orange: left-goes is mirrored (larger x in world is left in orange's frame).
+        assert!(!is_kickoff_taker(&st, 2), "orange world-left is orange-right");
+        assert!(is_kickoff_taker(&st, 3), "orange world-right is orange-left");
+    }
+
+    #[test]
+    fn kickoff_script_matches_nfbot_on_three_spawns() {
+        // Corner, off-center, and goalie pads. Frozen kickoff state: the script
+        // and NfBot must emit the same per-tick speedflip rows for the taker.
+        let spawns: [Vec<(Team, f32, f32)>; 3] = [
+            vec![
+                (Team::Blue, -2048.0, -2560.0),
+                (Team::Blue, 2048.0, -2560.0),
+                (Team::Orange, 2048.0, 2560.0),
+                (Team::Orange, -2048.0, 2560.0),
+            ],
+            vec![
+                (Team::Blue, -256.0, -3840.0),
+                (Team::Blue, 256.0, -3840.0),
+                (Team::Orange, 256.0, 3840.0),
+                (Team::Orange, -256.0, 3840.0),
+            ],
+            vec![
+                (Team::Blue, 0.0, -4608.0),
+                (Team::Blue, -2048.0, -2560.0),
+                (Team::Orange, 0.0, 4608.0),
+                (Team::Orange, 2048.0, 2560.0),
+            ],
+        ];
+        for (si, cars) in spawns.iter().enumerate() {
+            let st = ko_state(cars);
+            assert!(kickoff_phase(&st), "spawn {si}");
+            let mut taker_count = 0;
+            for me in 0..cars.len() {
+                let mut bot = NfBot::new(Kind::Nexto, false, true);
+                let mut script = KickoffScript::new();
+                let mut scripted = 0;
+                for tick in 0..kickoff_rows().len() + 4 {
+                    let _ = bot.begin_tick(&st, me);
+                    let from_bot = bot.end_tick(None, &st, me);
+                    let from_script = script.tick(&st, me);
+                    match from_script {
+                        Some(row) => {
+                            assert_eq!(from_bot, row, "spawn {si} car {me} tick {tick}");
+                            scripted += 1;
+                        }
+                        None => {
+                            if is_kickoff_taker(&st, me) && tick < kickoff_rows().len() {
+                                panic!("spawn {si} car {me} tick {tick}: taker got no script row");
+                            }
+                        }
+                    }
+                }
+                if is_kickoff_taker(&st, me) {
+                    taker_count += 1;
+                    assert_eq!(scripted, kickoff_rows().len(), "spawn {si} car {me} script length");
+                } else {
+                    assert_eq!(scripted, 0, "spawn {si} car {me} non-taker should not script");
+                }
+            }
+            assert_eq!(taker_count, 2, "spawn {si}: one taker per team");
+        }
     }
 }

@@ -75,6 +75,9 @@ struct PlayerTraj {
     /// during collection so learner staging never converts on its thread.
     action_masks: Vec<u8>,
     action_mask_width: usize,
+    /// TM12 critic-only extras, row-major. Empty when width is 0.
+    critic_extras: Vec<f32>,
+    critic_extra_width: usize,
     /// Retained row capacity after a trajectory is cleared. This keeps a small
     /// reusable baseline without retaining an entire unusually long episode.
     baseline_steps: usize,
@@ -85,12 +88,14 @@ impl PlayerTraj {
         state_width: usize,
         old_state_width: usize,
         action_mask_width: usize,
+        critic_extra_width: usize,
         baseline_steps: usize,
     ) -> Self {
         Self {
             state_width,
             old_state_width,
             action_mask_width,
+            critic_extra_width,
             baseline_steps,
             ..Self::default()
         }
@@ -110,6 +115,7 @@ impl PlayerTraj {
         let state_width = self.state_width;
         let old_state_width = self.old_state_width;
         let action_mask_width = self.action_mask_width;
+        let critic_extra_width = self.critic_extra_width;
         let baseline_steps = self.baseline_steps;
         mem::replace(
             self,
@@ -117,6 +123,7 @@ impl PlayerTraj {
                 state_width,
                 old_state_width,
                 action_mask_width,
+                critic_extra_width,
                 baseline_steps,
             ),
         )
@@ -134,6 +141,8 @@ impl PlayerTraj {
             terminals: self.terminals.split_off(at),
             action_masks: self.action_masks.split_off(at * self.action_mask_width),
             action_mask_width: self.action_mask_width,
+            critic_extras: self.critic_extras.split_off(at * self.critic_extra_width),
+            critic_extra_width: self.critic_extra_width,
             baseline_steps: self.baseline_steps,
         }
     }
@@ -141,6 +150,14 @@ impl PlayerTraj {
     fn state_at(&self, index: usize) -> Vec<f32> {
         let start = index * self.state_width;
         self.states[start..start + self.state_width].to_vec()
+    }
+
+    fn extra_at(&self, index: usize) -> Vec<f32> {
+        if self.critic_extra_width == 0 {
+            return Vec::new();
+        }
+        let start = index * self.critic_extra_width;
+        self.critic_extras[start..start + self.critic_extra_width].to_vec()
     }
 
     fn shrink_to_baseline(&mut self) {
@@ -154,6 +171,8 @@ impl PlayerTraj {
         self.terminals.shrink_to(self.baseline_steps);
         self.action_masks
             .shrink_to(self.baseline_steps * self.action_mask_width);
+        self.critic_extras
+            .shrink_to(self.baseline_steps * self.critic_extra_width);
     }
 
     fn truncate(&mut self, len: usize) {
@@ -164,15 +183,17 @@ impl PlayerTraj {
         self.rewards.truncate(len);
         self.terminals.truncate(len);
         self.action_masks.truncate(len * self.action_mask_width);
+        self.critic_extras.truncate(len * self.critic_extra_width);
     }
 }
 
-type OverflowTraj = (PlayerTraj, Option<Vec<f32>>);
+type OverflowTraj = (PlayerTraj, Option<Vec<f32>>, Option<Vec<f32>>);
 
 struct ClaimedTrajectory {
     trajectory: PlayerTraj,
     len: usize,
     next_state: Option<Vec<f32>>,
+    next_extras: Option<Vec<f32>>,
 }
 
 /// A completed per-player trajectory, consumed in game order by the
@@ -181,6 +202,7 @@ struct FlushedTrajectory {
     trajectory: PlayerTraj,
     len: usize,
     next_state: Option<Vec<f32>>,
+    next_extras: Option<Vec<f32>>,
 }
 
 /// Per-game flush output. Terminal games produce flushes; non-terminal
@@ -203,6 +225,7 @@ struct TrajectoryPartition {
 fn partition_claimed_trajectory(
     mut traj: PlayerTraj,
     trunc_next_state: Option<Vec<f32>>,
+    trunc_next_extras: Option<Vec<f32>>,
     claimed: usize,
     retain_overflow: bool,
 ) -> TrajectoryPartition {
@@ -214,6 +237,7 @@ fn partition_claimed_trajectory(
                 len: traj.len(),
                 trajectory: traj,
                 next_state: trunc_next_state,
+                next_extras: trunc_next_extras,
             }),
             overflow: None,
         };
@@ -221,17 +245,19 @@ fn partition_claimed_trajectory(
     if claimed == 0 {
         return TrajectoryPartition {
             claimed: None,
-            overflow: retain_overflow.then_some((traj, trunc_next_state)),
+            overflow: retain_overflow.then_some((traj, trunc_next_state, trunc_next_extras)),
         };
     }
 
     let boundary_next_state = Some(traj.state_at(claimed));
-    let overflow = retain_overflow.then(|| (traj.split_off(claimed), trunc_next_state));
+    let boundary_next_extras = (traj.critic_extra_width > 0).then(|| traj.extra_at(claimed));
+    let overflow = retain_overflow.then(|| (traj.split_off(claimed), trunc_next_state, trunc_next_extras));
     TrajectoryPartition {
         claimed: Some(ClaimedTrajectory {
             trajectory: traj,
             len: claimed,
             next_state: boundary_next_state,
+            next_extras: boundary_next_extras,
         }),
         overflow,
     }
@@ -289,7 +315,7 @@ fn claim_complete_steps(
 /// Push a claimed trajectory into the target (owned memory or shard).
 fn push_claimed_trajectory(target: &mut impl ClaimTarget, claimed: Option<ClaimedTrajectory>) {
     if let Some(claimed) = claimed {
-        push_traj_prefix(target, claimed.trajectory, claimed.len, claimed.next_state);
+        push_traj_prefix(target, claimed.trajectory, claimed.len, claimed.next_state, claimed.next_extras);
     }
 }
 
@@ -300,6 +326,7 @@ fn push_traj_prefix(
     mut traj: PlayerTraj,
     len: usize,
     trunc_next_state: Option<Vec<f32>>,
+    trunc_next_extras: Option<Vec<f32>>,
 ) {
     let len = len.min(traj.len());
     traj.truncate(len);
@@ -309,7 +336,7 @@ fn push_traj_prefix(
         *terminal = TerminalState::Truncated;
     }
 
-    target.push_player(
+    target.push_player_ex(
         traj.states,
         traj.state_width,
         traj.actions,
@@ -321,6 +348,9 @@ fn push_traj_prefix(
         traj.old_states,
         traj.old_state_width,
         trunc_next_state,
+        traj.critic_extras,
+        traj.critic_extra_width,
+        trunc_next_extras,
     );
 }
 
@@ -343,7 +373,7 @@ fn reached_max_episode_length(
 struct StepJob<'a, SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI>,
-    SI: SharedInfoProvider + SharedInfoReport,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider,
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
     REW: Reward<SI>,
@@ -377,6 +407,8 @@ struct StepConfig<'a> {
     /// The first half of a delay-0 interval already ran. Finish it with the
     /// `new` controls, which the midpoint decision has replaced.
     resume_external_half: bool,
+    /// External policy, used for the optional per-tick kickoff hook.
+    ext_policy: Option<&'a dyn ExternalPolicy>,
 }
 
 /// A delay-0 external policy decides again halfway through the learner interval.
@@ -407,7 +439,7 @@ fn step_game<SS, OBS, ACT, REW, TERM, TRUNC, SI>(
     config: &StepConfig<'_>,
 ) where
     SS: StateSetter<SI>,
-    SI: SharedInfoProvider + SharedInfoReport,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider,
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
     REW: Reward<SI>,
@@ -439,6 +471,11 @@ fn step_game<SS, OBS, ACT, REW, TERM, TRUNC, SI>(
             traj.old_states.extend_from_slice(
                 &next_old_obs[p * config.old_state_width..(p + 1) * config.old_state_width],
             );
+            if traj.critic_extra_width > 0 {
+                let row = game.critic_extra_row(p);
+                debug_assert_eq!(row.len(), traj.critic_extra_width);
+                traj.critic_extras.extend(row);
+            }
         }
     }
 
@@ -454,7 +491,18 @@ fn step_game<SS, OBS, ACT, REW, TERM, TRUNC, SI>(
         let second = override_new_controls(config.overrides);
         game.finish_external_half(&second)
     } else if !ext.is_empty() {
-        game.step_external(config.actions, &ext, config.override_delay)
+        let hook_fn;
+        let hook = if config
+            .ext_policy
+            .is_some_and(|p| p.wants_per_tick(game.last_game_state()))
+        {
+            let policy = config.ext_policy.unwrap();
+            hook_fn = move |state: &rlgym::GameState, car: usize| policy.tick_controls(state, car);
+            Some(&hook_fn as &dyn Fn(&rlgym::GameState, usize) -> Option<CarControls>)
+        } else {
+            None
+        };
+        game.step_external_hooked(config.actions, &ext, config.override_delay, hook)
     } else if config.action_delay == 0 {
         game.step(config.actions)
     } else {
@@ -495,6 +543,9 @@ fn step_game<SS, OBS, ACT, REW, TERM, TRUNC, SI>(
                 let traj_len = traj.len();
                 let trunc_next =
                     (terminal_type == TerminalState::Truncated).then(|| result.obs[p].clone());
+                let trunc_next_extras = (terminal_type == TerminalState::Truncated
+                    && crate::critic_extra_width() > 0)
+                    .then(|| game.critic_extra_row(p));
                 let traj_len_f64 = traj_len as f64;
                 flush.episode_steps += traj_len;
                 flush.episode_squared_steps += traj_len_f64 * traj_len_f64;
@@ -503,6 +554,7 @@ fn step_game<SS, OBS, ACT, REW, TERM, TRUNC, SI>(
                     trajectory: traj.take(),
                     len: traj_len,
                     next_state: trunc_next,
+                    next_extras: trunc_next_extras,
                 });
             } else {
                 let _ = traj.take();
@@ -571,7 +623,7 @@ where
     mask_width: usize,
     total_players: usize,
     player_trajs: Vec<PlayerTraj>,
-    overflow_trajs: VecDeque<(PlayerTraj, Option<Vec<f32>>)>,
+    overflow_trajs: VecDeque<OverflowTraj>,
     retain_overflow_episodes: bool,
     metrics: Report,
     device: burn::tensor::Device,
@@ -606,7 +658,7 @@ where
 impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> BatchSim<SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI>,
-    SI: SharedInfoProvider + SharedInfoReport,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider,
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
     REW: Reward<SI>,
@@ -694,6 +746,7 @@ where
                     state_width,
                     old_state_width,
                     mask_width,
+                    crate::critic_extra_width(),
                     baseline_steps,
                 )
             })
@@ -837,7 +890,7 @@ where
         for trajectory in &mut self.player_trajs {
             trajectory.set_baseline_steps(baseline_steps);
         }
-        for (trajectory, _) in &mut self.overflow_trajs {
+        for (trajectory, _, _) in &mut self.overflow_trajs {
             trajectory.set_baseline_steps(baseline_steps);
         }
 
@@ -892,12 +945,12 @@ where
         let mut completed_for_update = false;
 
         while remaining_steps.load(Ordering::Relaxed) > 0 {
-            let Some((traj, trunc_next_state)) = self.overflow_trajs.pop_front() else {
+            let Some((traj, trunc_next_state, trunc_next_extras)) = self.overflow_trajs.pop_front() else {
                 break;
             };
             if overbatching {
                 let claimed = claim_overbatch_steps(remaining_steps, traj.len(), rollout_budget);
-                let partition = partition_claimed_trajectory(traj, trunc_next_state, claimed, true);
+                let partition = partition_claimed_trajectory(traj, trunc_next_state, trunc_next_extras, claimed, true);
                 push_claimed_trajectory(target, partition.claimed);
                 if let Some(overflow) = partition.overflow {
                     self.overflow_trajs.push_front(overflow);
@@ -907,7 +960,7 @@ where
                 }
             } else {
                 let claimed = claim_available_steps(remaining_steps, traj.len());
-                let partition = partition_claimed_trajectory(traj, trunc_next_state, claimed, true);
+                let partition = partition_claimed_trajectory(traj, trunc_next_state, trunc_next_extras, claimed, true);
                 push_claimed_trajectory(target, partition.claimed);
                 if let Some(overflow) = partition.overflow {
                     self.overflow_trajs.push_front(overflow);
@@ -1108,7 +1161,7 @@ where
             trajectory.set_baseline_steps(baseline_steps);
             trajectory.shrink_to_baseline();
         }
-        for (trajectory, _) in &mut self.overflow_trajs {
+        for (trajectory, _, _) in &mut self.overflow_trajs {
             trajectory.set_baseline_steps(baseline_steps);
             trajectory.shrink_to_baseline();
         }
@@ -1541,6 +1594,7 @@ where
                         },
                         override_delay,
                         resume_external_half,
+                        ext_policy: ext,
                     };
 
                     scope.spawn(move |_| {
@@ -1598,6 +1652,7 @@ where
                         },
                         override_delay: self.ext_delay,
                         resume_external_half,
+                        ext_policy: ext,
                     },
                 );
             }
@@ -1628,6 +1683,7 @@ where
                     trajectory,
                     len,
                     next_state,
+                    next_extras,
                 } = flush;
                 if self.complete_trajectories {
                     let claimed =
@@ -1640,6 +1696,7 @@ where
                                 trajectory,
                                 len,
                                 next_state,
+                                next_extras,
                             }),
                         );
                     }
@@ -1648,6 +1705,7 @@ where
                     let partition = partition_claimed_trajectory(
                         trajectory,
                         next_state,
+                        next_extras,
                         claimed,
                         self.retain_overflow_episodes,
                     );
@@ -1660,6 +1718,7 @@ where
                     let partition = partition_claimed_trajectory(
                         trajectory,
                         next_state,
+                        next_extras,
                         claimed,
                         self.retain_overflow_episodes,
                     );
@@ -1741,7 +1800,7 @@ mod regression_tests {
 
     #[test]
     fn regression_episode_reuse_preserves_flat_row_widths() {
-        let mut trajectory = PlayerTraj::with_width_and_baseline(2, 0, 1, 0);
+        let mut trajectory = PlayerTraj::with_width_and_baseline(2, 0, 1, 0, 0);
         trajectory.states.extend_from_slice(&[1.0, 2.0]);
         trajectory.actions.push(0);
         trajectory.log_probs.push(0.0);
@@ -1765,9 +1824,9 @@ mod regression_tests {
 
     #[test]
     fn regression_retention_controls_unclaimed_trajectory_suffix() {
-        let partition = partition_claimed_trajectory(trajectory(5), Some(vec![5.0]), 2, true);
+        let partition = partition_claimed_trajectory(trajectory(5), Some(vec![5.0]), None, 2, true);
         let claimed = partition.claimed.unwrap();
-        let (suffix, final_next_state) = partition.overflow.unwrap();
+        let (suffix, final_next_state, _) = partition.overflow.unwrap();
 
         assert_eq!(claimed.len, 2);
         assert_eq!(claimed.trajectory.actions, &[0, 1]);
@@ -1776,7 +1835,7 @@ mod regression_tests {
         assert_eq!(suffix.terminals.last(), Some(&TerminalState::Normal));
         assert_eq!(final_next_state, Some(vec![5.0]));
 
-        let partition = partition_claimed_trajectory(trajectory(5), Some(vec![5.0]), 2, false);
+        let partition = partition_claimed_trajectory(trajectory(5), Some(vec![5.0]), None, 2, false);
         let claimed = partition.claimed.unwrap();
         assert_eq!(claimed.len, 2);
         assert_eq!(claimed.trajectory.states.len(), 5);
@@ -1805,7 +1864,7 @@ mod regression_tests {
 
     #[test]
     fn regression_partial_claim_flushes_a_truncated_bootstrap_boundary() {
-        let partition = partition_claimed_trajectory(trajectory(5), Some(vec![5.0]), 2, false);
+        let partition = partition_claimed_trajectory(trajectory(5), Some(vec![5.0]), None, 2, false);
         let mut memory = Memory::with_capacity(2);
         push_claimed_trajectory(&mut memory, partition.claimed);
 
@@ -1817,11 +1876,11 @@ mod regression_tests {
 
     #[test]
     fn regression_zero_claim_is_retained_only_when_enabled() {
-        let partition = partition_claimed_trajectory(trajectory(3), None, 0, false);
+        let partition = partition_claimed_trajectory(trajectory(3), None, None, 0, false);
         assert!(partition.claimed.is_none());
         assert!(partition.overflow.is_none());
 
-        let partition = partition_claimed_trajectory(trajectory(3), None, 0, true);
+        let partition = partition_claimed_trajectory(trajectory(3), None, None, 0, true);
         assert!(partition.claimed.is_none());
         assert_eq!(partition.overflow.unwrap().0.len(), 3);
     }
@@ -1894,6 +1953,8 @@ mod phase3_tests {
             }
         }
     }
+
+    impl crate::CriticExtraProvider for TestSharedInfo {}
 
     impl SharedInfoProvider for TestSharedInfo {
         fn reset(&mut self, _initial_state: &GameState) {}
@@ -2245,6 +2306,7 @@ mod phase3_tests {
                     trajectory: traj.take(),
                     len: 60,
                     next_state: None,
+                    next_extras: None,
                 }],
                 episode_steps: 60,
                 episode_squared_steps: 3600.0,

@@ -145,7 +145,7 @@ where
 impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> GameInstance<SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI>,
-    SI: SharedInfoProvider + SharedInfoReport,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider,
     OBS: Obs<SI>,
     ACT: Action<SI>,
     REW: Reward<SI>,
@@ -278,19 +278,48 @@ where
         overrides: &[(usize, CarControls, CarControls)],
         delay: u8,
     ) -> StepResult {
+        self.step_external_hooked(actions, overrides, delay, None)
+    }
+
+    /// [`Self::step_external`] with an optional per-tick control hook.
+    ///
+    /// When `hook` is `None` this is the original hold-then-switch path
+    /// (bit-identical). When `Some`, physics advances one tick at a time
+    /// and `hook(state, car)` may replace that tick's controls. `last_state`
+    /// is updated in place so a pointer-keyed policy keeps its memory.
+    pub fn step_external_hooked(
+        &mut self,
+        actions: &[ACT::Input],
+        overrides: &[(usize, CarControls, CarControls)],
+        delay: u8,
+        hook: Option<&dyn Fn(&GameState, usize) -> Option<CarControls>>,
+    ) -> StepResult {
         let tick_skip = ACT::get_tick_skip();
         let delay = delay.min(tick_skip);
         self.env.pre_step(&self.last_state, actions);
-        for &(car, held, _) in overrides {
-            self.env.arena.set_car_controls(car, held);
+        if hook.is_none() {
+            for &(car, held, _) in overrides {
+                self.env.arena.set_car_controls(car, held);
+            }
+            if delay > 0 {
+                self.env.step_physics(delay);
+            }
+            for &(car, _, new) in overrides {
+                self.env.arena.set_car_controls(car, new);
+            }
+            self.env.step_physics(tick_skip - delay);
+            return self.finish_step();
         }
-        if delay > 0 {
-            self.env.step_physics(delay);
+        let hook = hook.unwrap();
+        for t in 0..tick_skip {
+            for &(car, held, new) in overrides {
+                let base = if t < delay { held } else { new };
+                let controls = hook(&self.last_state, car).unwrap_or(base);
+                self.env.arena.set_car_controls(car, controls);
+            }
+            self.env.step_physics(1);
+            self.last_state = self.env.current_state();
         }
-        for &(car, _, new) in overrides {
-            self.env.arena.set_car_controls(car, new);
-        }
-        self.env.step_physics(tick_skip - delay);
         self.finish_step()
     }
 
@@ -420,6 +449,11 @@ where
     /// Access the game state after the most recent `reset` or `step` call.
     pub fn last_game_state(&self) -> &GameState {
         &self.last_state
+    }
+
+    /// TM12 critic-only extras for `car` (empty when extra_inputs is unset).
+    pub fn critic_extra_row(&self, car: usize) -> Vec<f32> {
+        self.env.shared_info.critic_extra_row(car)
     }
 
     /// Refresh cached state and observations after a viewer-only physics edit.

@@ -626,6 +626,27 @@ pub fn default_adamw_optimizer() -> MakeOptim {
     Box::new(|| AdamWConfig::new().with_epsilon(1e-8).init())
 }
 
+
+/// Training-only critic extras (TM12). Default is empty so existing shared-info
+/// types and default-off rollouts stay unchanged.
+pub trait CriticExtraProvider {
+    fn critic_extra_row(&self, car: usize) -> Vec<f32> {
+        let _ = car;
+        Vec::new()
+    }
+}
+
+static CRITIC_EXTRA_WIDTH: AtomicUsize = AtomicUsize::new(0);
+
+/// Process-wide critic-extra width (0 = off). Set once at learner init.
+pub fn set_critic_extra_width(width: usize) {
+    CRITIC_EXTRA_WIDTH.store(width, Ordering::SeqCst);
+}
+
+pub fn critic_extra_width() -> usize {
+    CRITIC_EXTRA_WIDTH.load(Ordering::SeqCst)
+}
+
 pub struct LearnerConfig {
     /// Hyperparameters for the PPO learner.
     pub ppo: PpoLearnerConfig,
@@ -708,6 +729,8 @@ pub struct LearnerConfig {
     /// Gather rollout N+1 with the pre-update policy while the PPO update
     /// trains on rollout N. Off by default: the loop below stays sequential.
     pub async_collect: bool,
+    /// Extra critic-only input columns (0 = off). Actor / obs width unchanged.
+    pub critic_extra_width: usize,
 }
 
 impl Default for LearnerConfig {
@@ -739,6 +762,7 @@ impl Default for LearnerConfig {
             wandb_run_name: None,
             metrics_jsonl: None,
             async_collect: false,
+            critic_extra_width: 0,
         }
     }
 }
@@ -756,7 +780,7 @@ impl LearnerConfig {
     where
         F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
         SS: StateSetter<SI> + Send,
-        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send + 'static,
+        SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + SharedInfoRng + Send + 'static,
         OBS: Obs<SI> + Send,
         ACT: Action<SI, Input = usize> + Send,
         REW: Reward<SI> + Send,
@@ -788,7 +812,7 @@ impl LearnerConfig {
         F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
         FO: Fn() -> Box<dyn Obs<SI> + Send> + Clone + Send + 'static,
         SS: StateSetter<SI> + Send,
-        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send + 'static,
+        SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + SharedInfoRng + Send + 'static,
         OBS: Obs<SI> + Send,
         ACT: Action<SI, Input = usize> + Send,
         REW: Reward<SI> + Send,
@@ -813,7 +837,7 @@ impl LearnerConfig {
     where
         F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
         SS: StateSetter<SI> + Send,
-        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send + 'static,
+        SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + SharedInfoRng + Send + 'static,
         OBS: Obs<SI> + Send,
         ACT: Action<SI, Input = usize> + Send,
         REW: Reward<SI> + Send,
@@ -839,7 +863,7 @@ impl LearnerConfig {
         F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
         FO: Fn() -> Box<dyn Obs<SI> + Send> + Clone + Send + 'static,
         SS: StateSetter<SI> + Send,
-        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send + 'static,
+        SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + SharedInfoRng + Send + 'static,
         OBS: Obs<SI> + Send,
         ACT: Action<SI, Input = usize> + Send,
         REW: Reward<SI> + Send,
@@ -861,7 +885,7 @@ impl LearnerConfig {
         F: Fn(Option<usize>) -> Env<SS, OBS, ACT, REW, TERM, TRUNC, SI> + Clone + Send + 'static,
         FO: Fn() -> Box<dyn Obs<SI> + Send> + Clone + Send + 'static,
         SS: StateSetter<SI> + Send,
-        SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send,
+        SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + SharedInfoRng + Send,
         OBS: Obs<SI> + Send,
         ACT: Action<SI, Input = usize> + Send,
         REW: Reward<SI> + Send,
@@ -919,15 +943,32 @@ impl LearnerConfig {
             NormSelection::RmsNorm => Some(NormalizationConfig::Rms(RmsNormConfig::new(0))),
         };
 
-        let model = Actic::new(
+        set_critic_extra_width(self.critic_extra_width);
+        let extra = self.critic_extra_width;
+        let mut model = Actic::new(
             obs_space,
             action_space,
-            self.policy_layer_sizes,
-            self.critic_layer_sizes,
+            self.policy_layer_sizes.clone(),
+            self.critic_layer_sizes.clone(),
             &self.shared_head_layer_sizes,
             &self.device,
-            norm_config,
+            norm_config.clone(),
         );
+        if extra > 0 {
+            assert!(
+                self.shared_head_layer_sizes.is_empty(),
+                "critic extras require an empty shared head"
+            );
+            model.critic = Net::new(
+                obs_space + extra,
+                1,
+                self.critic_layer_sizes.clone(),
+                &self.device,
+                norm_config,
+                true,
+            );
+            println!("# critic extra inputs: {extra}");
+        }
 
         if let Some(ref head) = model.shared_head {
             println!("# parameters in shared head: {}", head.num_params());
@@ -1055,7 +1096,7 @@ impl LearnerConfig {
 pub struct Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI> + Send,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + SharedInfoRng + Send,
     OBS: Obs<SI> + Send,
     ACT: Action<SI, Input = usize> + Send,
     REW: Reward<SI> + Send,
@@ -1105,7 +1146,7 @@ where
 impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> Learner<SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI> + Send,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + Send,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + SharedInfoRng + Send,
     OBS: Obs<SI> + Send,
     ACT: Action<SI, Input = usize> + Send,
     REW: Reward<SI> + Send,

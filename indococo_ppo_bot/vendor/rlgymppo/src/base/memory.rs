@@ -71,6 +71,12 @@ pub struct Memory {
     /// builder is configured (same-obs transfer learning).
     old_states: Vec<f32>,
     old_state_width: usize,
+    /// TM12 critic-only extras, row-major `[step * critic_extra_width..]`.
+    /// Empty when the width is 0 (default off).
+    critic_extras: Vec<f32>,
+    critic_extra_width: usize,
+    /// Extras immediately after truncated steps, same order as trunc_next_states.
+    trunc_next_extras: Vec<f32>,
     /// Baseline capacity in rollout rows. Flat buffers convert this to scalar
     /// capacity using their stable row width.
     baseline_steps: usize,
@@ -104,6 +110,39 @@ pub trait ClaimTarget {
         old_state_width: usize,
         trunc_next_state: Option<Vec<f32>>,
     );
+
+    fn push_player_ex(
+        &mut self,
+        states: Vec<f32>,
+        state_width: usize,
+        actions: Vec<usize>,
+        log_probs: Vec<f32>,
+        rewards: Vec<f32>,
+        terminals: Vec<TerminalState>,
+        action_masks: Vec<u8>,
+        action_mask_width: usize,
+        old_states: Vec<f32>,
+        old_state_width: usize,
+        trunc_next_state: Option<Vec<f32>>,
+        critic_extras: Vec<f32>,
+        critic_extra_width: usize,
+        trunc_next_extras: Option<Vec<f32>>,
+    ) {
+        let _ = (critic_extras, critic_extra_width, trunc_next_extras);
+        self.push_player(
+            states,
+            state_width,
+            actions,
+            log_probs,
+            rewards,
+            terminals,
+            action_masks,
+            action_mask_width,
+            old_states,
+            old_state_width,
+            trunc_next_state,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -137,6 +176,42 @@ impl ClaimTarget for Memory {
             trunc_next_state,
         );
     }
+
+    fn push_player_ex(
+        &mut self,
+        states: Vec<f32>,
+        state_width: usize,
+        actions: Vec<usize>,
+        log_probs: Vec<f32>,
+        rewards: Vec<f32>,
+        terminals: Vec<TerminalState>,
+        action_masks: Vec<u8>,
+        action_mask_width: usize,
+        old_states: Vec<f32>,
+        old_state_width: usize,
+        trunc_next_state: Option<Vec<f32>>,
+        critic_extras: Vec<f32>,
+        critic_extra_width: usize,
+        trunc_next_extras: Option<Vec<f32>>,
+    ) {
+        Memory::push_player_ex(
+            self,
+            states,
+            state_width,
+            actions,
+            log_probs,
+            rewards,
+            terminals,
+            action_masks,
+            action_mask_width,
+            old_states,
+            old_state_width,
+            trunc_next_state,
+            critic_extras,
+            critic_extra_width,
+            trunc_next_extras,
+        );
+    }
 }
 
 /// Exclusive row range of a shared [`Memory`] that one pool fills directly.
@@ -153,9 +228,12 @@ pub struct MemoryShard<'a> {
     action_masks: &'a mut [u8],
     old_states: &'a mut [f32],
     trunc_next_states: Vec<f32>,
+    critic_extras: &'a mut [f32],
+    trunc_next_extras: Vec<f32>,
     state_width: usize,
     action_mask_width: usize,
     old_state_width: usize,
+    critic_extra_width: usize,
     rows_written: usize,
     capacity_rows: usize,
 }
@@ -169,6 +247,10 @@ impl<'a> MemoryShard<'a> {
     /// Take the shard's truncation tail for pool-order concatenation.
     pub fn take_trunc_next_states(&mut self) -> Vec<f32> {
         std::mem::take(&mut self.trunc_next_states)
+    }
+
+    pub fn take_trunc_next_extras(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.trunc_next_extras)
     }
 }
 
@@ -211,6 +293,53 @@ impl ClaimTarget for MemoryShard<'_> {
         }
         self.rows_written = end;
     }
+
+    fn push_player_ex(
+        &mut self,
+        states: Vec<f32>,
+        state_width: usize,
+        actions: Vec<usize>,
+        log_probs: Vec<f32>,
+        rewards: Vec<f32>,
+        terminals: Vec<TerminalState>,
+        action_masks: Vec<u8>,
+        action_mask_width: usize,
+        old_states: Vec<f32>,
+        old_state_width: usize,
+        trunc_next_state: Option<Vec<f32>>,
+        critic_extras: Vec<f32>,
+        critic_extra_width: usize,
+        trunc_next_extras: Option<Vec<f32>>,
+    ) {
+        let n = actions.len();
+        debug_assert_eq!(critic_extras.len(), n * critic_extra_width);
+        debug_assert_eq!(critic_extra_width, self.critic_extra_width);
+        let start = self.rows_written;
+        let end = start + n;
+        if critic_extra_width > 0 {
+            self.critic_extras[start * critic_extra_width..end * critic_extra_width]
+                .copy_from_slice(&critic_extras);
+        }
+        if let Some(ns) = trunc_next_extras {
+            debug_assert_eq!(ns.len(), critic_extra_width);
+            self.trunc_next_extras.extend(ns);
+        }
+        // push_player updates rows_written
+        self.push_player(
+            states,
+            state_width,
+            actions,
+            log_probs,
+            rewards,
+            terminals,
+            action_masks,
+            action_mask_width,
+            old_states,
+            old_state_width,
+            trunc_next_state,
+        );
+        debug_assert_eq!(self.rows_written, end);
+    }
 }
 
 impl Memory {
@@ -229,6 +358,9 @@ impl Memory {
             action_mask_width: 0,
             old_states: Vec::new(),
             old_state_width: 0,
+            critic_extras: Vec::new(),
+            critic_extra_width: 0,
+            trunc_next_extras: Vec::new(),
             baseline_steps: capacity,
         }
     }
@@ -300,6 +432,65 @@ impl Memory {
         }
     }
 
+    fn set_extra_width(&mut self, width: usize) {
+        if self.critic_extra_width == 0 {
+            self.critic_extra_width = width;
+            if width > 0 {
+                self.critic_extras
+                    .reserve(self.baseline_steps * width);
+            }
+        } else {
+            debug_assert_eq!(self.critic_extra_width, width);
+        }
+    }
+
+    /// Like [`Self::push_player`], plus optional critic extras (empty when off).
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_player_ex(
+        &mut self,
+        states: Vec<f32>,
+        state_width: usize,
+        actions: Vec<usize>,
+        log_probs: Vec<f32>,
+        rewards: Vec<f32>,
+        terminals: Vec<TerminalState>,
+        action_masks: Vec<u8>,
+        action_mask_width: usize,
+        old_states: Vec<f32>,
+        old_state_width: usize,
+        trunc_next_state: Option<Vec<f32>>,
+        critic_extras: Vec<f32>,
+        critic_extra_width: usize,
+        trunc_next_extras: Option<Vec<f32>>,
+    ) {
+        let n = actions.len();
+        debug_assert_eq!(critic_extras.len(), n * critic_extra_width);
+        if let Some(ref ns) = trunc_next_extras {
+            debug_assert_eq!(ns.len(), critic_extra_width);
+        }
+        self.push_player(
+            states,
+            state_width,
+            actions,
+            log_probs,
+            rewards,
+            terminals,
+            action_masks,
+            action_mask_width,
+            old_states,
+            old_state_width,
+            trunc_next_state,
+        );
+        if n == 0 {
+            return;
+        }
+        self.set_extra_width(critic_extra_width);
+        self.critic_extras.extend(critic_extras);
+        if let Some(ns) = trunc_next_extras {
+            self.trunc_next_extras.extend(ns);
+        }
+    }
+
     pub fn merge(&mut self, other: Memory) {
         // No `..` catch-all: listing every field forces a compile error when
         // a field is added, so merges can never silently drop a buffer again.
@@ -315,11 +506,15 @@ impl Memory {
             action_mask_width,
             old_states,
             old_state_width,
+            critic_extras,
+            critic_extra_width,
+            trunc_next_extras,
             baseline_steps: _,
         } = other;
 
         if !actions.is_empty() {
             self.set_widths(state_width, action_mask_width, old_state_width);
+            self.set_extra_width(critic_extra_width);
         }
         self.states.extend(states);
         self.actions.extend(actions);
@@ -329,6 +524,8 @@ impl Memory {
         self.trunc_next_states.extend(trunc_next_states);
         self.action_masks.extend(action_masks);
         self.old_states.extend(old_states);
+        self.critic_extras.extend(critic_extras);
+        self.trunc_next_extras.extend(trunc_next_extras);
     }
 
     /// Move at most `max_steps` samples from `other` into this memory.
@@ -356,6 +553,9 @@ impl Memory {
             action_mask_width,
             old_states,
             old_state_width,
+            critic_extras,
+            critic_extra_width,
+            trunc_next_extras,
             baseline_steps: _,
         } = other;
         let mut terminals = terminals;
@@ -387,11 +587,25 @@ impl Memory {
                 .into_iter()
                 .take(truncations * state_width),
         );
+        self.critic_extras
+            .extend(critic_extras.iter().copied().take(steps * critic_extra_width));
+        self.trunc_next_extras.extend(
+            trunc_next_extras
+                .into_iter()
+                .take(truncations * critic_extra_width),
+        );
         if cut_boundary {
             let next_start = steps * state_width;
             self.trunc_next_states
                 .extend_from_slice(&states[next_start..next_start + state_width]);
+            if critic_extra_width > 0 {
+                let extra_start = steps * critic_extra_width;
+                self.trunc_next_extras.extend_from_slice(
+                    &critic_extras[extra_start..extra_start + critic_extra_width],
+                );
+            }
         }
+        self.set_extra_width(critic_extra_width);
     }
 
     /// Validate the row and boundary contract expected by the learner.
@@ -431,6 +645,13 @@ impl Memory {
                 "old_states has {} values for {rows} rows of width {}",
                 self.old_states.len(),
                 self.old_state_width
+            ));
+        }
+        if self.critic_extras.len() != rows.saturating_mul(self.critic_extra_width) {
+            return Err(format!(
+                "critic_extras has {} values for {rows} rows of width {}",
+                self.critic_extras.len(),
+                self.critic_extra_width
             ));
         }
         let truncations = self
@@ -504,6 +725,18 @@ impl Memory {
         self.old_state_width
     }
 
+    pub fn critic_extras(&self) -> &[f32] {
+        &self.critic_extras
+    }
+
+    pub fn critic_extra_width(&self) -> usize {
+        self.critic_extra_width
+    }
+
+    pub fn trunc_next_extras(&self) -> &[f32] {
+        &self.trunc_next_extras
+    }
+
     pub fn len(&self) -> usize {
         self.actions.len()
     }
@@ -517,11 +750,16 @@ impl Memory {
         self.trunc_next_states.extend(states);
     }
 
+    pub fn append_trunc_next_extras(&mut self, extras: Vec<f32>) {
+        self.trunc_next_extras.extend(extras);
+    }
+
     /// Reset the sparse truncation tail, retaining capacity. The per-row
     /// buffers are left at full length: the exact-budget path overwrites
     /// every row in place (asserted full at the join).
     pub fn clear_trunc_next_states(&mut self) {
         self.trunc_next_states.clear();
+        self.trunc_next_extras.clear();
     }
 
     /// Split exclusive row ranges for `shares` (prefix sums, pool order).
@@ -539,6 +777,8 @@ impl Memory {
         let mut terminals = self.terminals.as_mut_slice();
         let mut masks = self.action_masks.as_mut_slice();
         let mut old = self.old_states.as_mut_slice();
+        let extra_width = self.critic_extra_width;
+        let mut extras = self.critic_extras.as_mut_slice();
         let mut shards = Vec::with_capacity(shares.len());
         for &share in shares {
             let (s_head, s_tail) = states.split_at_mut(share * state_width);
@@ -555,6 +795,8 @@ impl Memory {
             masks = m_tail;
             let (o_head, o_tail) = old.split_at_mut(share * old_width);
             old = o_tail;
+            let (e_head, e_tail) = extras.split_at_mut(share * extra_width);
+            extras = e_tail;
             shards.push(MemoryShard {
                 states: s_head,
                 actions: a_head,
@@ -564,9 +806,12 @@ impl Memory {
                 action_masks: m_head,
                 old_states: o_head,
                 trunc_next_states: Vec::new(),
+                critic_extras: e_head,
+                trunc_next_extras: Vec::new(),
                 state_width,
                 action_mask_width: mask_width,
                 old_state_width: old_width,
+                critic_extra_width: extra_width,
                 rows_written: 0,
                 capacity_rows: share,
             });
@@ -596,6 +841,11 @@ impl Memory {
         self.old_states.clear();
         self.old_states
             .shrink_to(self.baseline_steps * self.old_state_width);
+        self.critic_extras.clear();
+        self.critic_extras
+            .shrink_to(self.baseline_steps * self.critic_extra_width);
+        self.trunc_next_extras.clear();
+        self.trunc_next_extras.shrink_to(0);
     }
 
     /// Write this rollout to `dir` as a JSON header plus little-endian raw

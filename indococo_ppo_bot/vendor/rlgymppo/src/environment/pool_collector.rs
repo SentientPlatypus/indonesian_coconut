@@ -34,7 +34,7 @@ where
 impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> PoolCollector<SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI> + Send,
-    SI: SharedInfoProvider + SharedInfoReport + Send,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + Send,
     OBS: Obs<SI> + Send,
     ACT: Action<SI, Input = usize> + Send,
     REW: Reward<SI> + Send,
@@ -186,6 +186,8 @@ mod flex_gated {
             }
         }
     }
+
+    impl crate::CriticExtraProvider for TestSharedInfo {}
 
     impl SharedInfoProvider for TestSharedInfo {
         fn reset(&mut self, _initial_state: &GameState) {}

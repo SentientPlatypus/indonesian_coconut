@@ -41,6 +41,24 @@ pub trait ExternalPolicy: Send + Sync {
     fn infer(&self, obs: &[f32], masks: &[bool], rows: usize) -> Vec<usize>;
     /// Controls of action `action`.
     fn controls(&self, action: usize) -> CarControls;
+    /// When true, the collector may step physics one tick at a time and call
+    /// [`tick_controls`] so a scripted kickoff can change controls every tick.
+    /// Default false keeps the hold-then-switch path (bit-identical).
+    fn per_tick_controls(&self) -> bool {
+        false
+    }
+    /// True when this interval should use the per-tick hook (e.g. a scripted
+    /// kickoff is in progress). Default false.
+    fn wants_per_tick(&self, state: &GameState) -> bool {
+        let _ = state;
+        false
+    }
+    /// Override for `car` at the current physics tick. `None` keeps the
+    /// hold-then-switch controls already applied for this tick.
+    fn tick_controls(&self, state: &GameState, car: usize) -> Option<CarControls> {
+        let _ = (state, car);
+        None
+    }
 }
 
 /// An [`ExternalPolicy`] in the self-play pool with its sampling weight.

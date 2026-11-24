@@ -43,6 +43,8 @@ pub struct SharedInfo {
     /// TM1 team metrics (`Team/*`), only with more than one car per team.
     team: crate::team::TouchTracker,
     prev_view: Option<StateView>,
+    /// TM12 training-only critic extras (empty when extra_inputs is unset).
+    critic_extra: crate::critic_extras::ExtraState,
 }
 
 impl Default for SharedInfo {
@@ -63,6 +65,7 @@ impl From<u64> for SharedInfo {
             pfsp: crate::pfsp::EpisodeTracker::default(),
             team: crate::team::TouchTracker::default(),
             prev_view: None,
+            critic_extra: crate::critic_extras::ExtraState::default(),
         }
     }
 }
@@ -72,6 +75,7 @@ impl SharedInfoProvider for SharedInfo {
         self.resets.reset(state);
         self.events.reset(StateView::from_game_state(state));
         self.prev_view = None;
+        self.critic_extra.reset(&StateView::from_game_state(state));
         if state.cars.len() > 2 {
             self.team.reset(&StateView::from_game_state(state));
         }
@@ -119,6 +123,7 @@ impl SharedInfoProvider for SharedInfo {
             self.metrics["Player/Ball Touch Ratio"] += AvgTracker::from(touched);
         }
         self.count_events(gs);
+        self.critic_extra.update(&StateView::from_game_state(gs));
     }
 }
 
@@ -285,6 +290,13 @@ impl SharedInfoRng for SharedInfo {
 
     fn rng(&mut self) -> &mut SmallRng {
         &mut self.rng
+    }
+}
+
+#[cfg(feature = "train")]
+impl rlgymppo::CriticExtraProvider for SharedInfo {
+    fn critic_extra_row(&self, car: usize) -> Vec<f32> {
+        self.critic_extra.row(car)
     }
 }
 

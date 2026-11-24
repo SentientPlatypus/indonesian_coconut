@@ -33,7 +33,7 @@ impl RendererControls {
 pub struct Renderer<SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI>,
-    SI: SharedInfoProvider,
+    SI: SharedInfoProvider + crate::CriticExtraProvider,
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
     REW: Reward<SI>,
@@ -51,7 +51,7 @@ where
 impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> Renderer<SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI>,
-    SI: SharedInfoProvider + SharedInfoReport,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider,
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
     REW: Reward<SI>,

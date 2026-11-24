@@ -257,7 +257,7 @@ pub struct AsyncSkillTracker<OBS, ACT, SI>
 where
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + crate::CriticExtraProvider,
 {
     config: SkillTrackerConfig,
     job_tx: SyncSender<AsyncSkillTrackerJob>,
@@ -286,7 +286,7 @@ pub struct SkillTracker<OBS, ACT, SI>
 where
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + crate::CriticExtraProvider,
 {
     config: SkillTrackerConfig,
 
@@ -327,7 +327,7 @@ fn send_skill_reset<OBS, ACT, SI>(
 ) where
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + crate::CriticExtraProvider,
 {
     let (obs, _old_obs, masks) = game.reset();
     let teams = game.player_teams();
@@ -364,7 +364,7 @@ fn send_skill_step<OBS, ACT, SI>(
 ) where
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + crate::CriticExtraProvider,
 {
     let nexto_controls: Vec<(usize, CarControls)> = if nexto_builder.is_some() {
         let current_state = game.last_game_state().clone();
@@ -438,7 +438,7 @@ impl<OBS, ACT, SI> SkillTracker<OBS, ACT, SI>
 where
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + crate::CriticExtraProvider,
 {
     /// Construct a skill tracker with one worker thread per arena.
     pub fn new<F>(config: SkillTrackerConfig, create_arena: F, device: Device) -> Self
@@ -901,7 +901,7 @@ impl<OBS, ACT, SI> Drop for SkillTracker<OBS, ACT, SI>
 where
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + crate::CriticExtraProvider,
 {
     fn drop(&mut self) {
         for worker_tx in &self.worker_txs {
@@ -918,7 +918,7 @@ impl<OBS, ACT, SI> AsyncSkillTracker<OBS, ACT, SI>
 where
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + crate::CriticExtraProvider,
 {
     pub fn new<F>(
         config: SkillTrackerConfig,
@@ -1160,7 +1160,7 @@ impl<OBS, ACT, SI> Drop for AsyncSkillTracker<OBS, ACT, SI>
 where
     OBS: Obs<SI>,
     ACT: Action<SI, Input = usize>,
-    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng,
+    SI: SharedInfoProvider + SharedInfoReport + SharedInfoRng + crate::CriticExtraProvider,
 {
     fn drop(&mut self) {
         let _ = self.job_tx.send(AsyncSkillTrackerJob::Shutdown);

@@ -51,7 +51,7 @@ where
 impl<SS, OBS, ACT, REW, TERM, TRUNC, SI> ThreadSim<SS, OBS, ACT, REW, TERM, TRUNC, SI>
 where
     SS: StateSetter<SI> + Send,
-    SI: SharedInfoProvider + SharedInfoReport + Send,
+    SI: SharedInfoProvider + SharedInfoReport + crate::CriticExtraProvider + Send,
     OBS: Obs<SI> + Send,
     ACT: Action<SI, Input = usize> + Send,
     REW: Reward<SI> + Send,
@@ -199,6 +199,7 @@ where
             // Collect truncation tails first: `shards` borrows the memory,
             // so the memory cannot be touched until they are dropped.
             let mut trunc_tails = Vec::with_capacity(shards.len());
+            let mut extra_tails = Vec::with_capacity(shards.len());
             for ((shard, &share), (report, pool_secs)) in
                 shards.iter_mut().zip(&shares).zip(reports)
             {
@@ -209,11 +210,15 @@ where
                 );
                 pool_max_wall = pool_max_wall.max(pool_secs);
                 trunc_tails.push(shard.take_trunc_next_states());
+                extra_tails.push(shard.take_trunc_next_extras());
                 self.metrics += report;
             }
             drop(shards);
             for tail in trunc_tails {
                 self.memory.append_trunc_next_states(tail);
+            }
+            for tail in extra_tails {
+                self.memory.append_trunc_next_extras(tail);
             }
             self.metrics[COLLECT_MERGE_TIME_KEY] = merge_start.elapsed().as_secs_f64().into();
         } else if self.num_pools == 1 {

@@ -387,10 +387,10 @@ fn profile_sync(device: &Device) {
     let _ = Transaction::default().register(token).execute();
 }
 
-/// `1 - Var(returns - old_values) / Var(returns)`, population variance.
-fn explained_variance(returns: &[f32], old_values: &[f32]) -> f64 {
-    assert_eq!(returns.len(), old_values.len());
-    let n = returns.len();
+/// `1 - Var(y - yhat) / Var(y)`, population variance. Metric only.
+fn explained_variance(y: &[f32], yhat: &[f32]) -> f64 {
+    assert_eq!(y.len(), yhat.len());
+    let n = y.len();
     if n < 2 {
         return 0.0;
     }
@@ -398,17 +398,13 @@ fn explained_variance(returns: &[f32], old_values: &[f32]) -> f64 {
     let var = |xs: &[f32], m: f32| {
         xs.iter().map(|x| (x - m).powi(2)).sum::<f32>() / xs.len() as f32
     };
-    let return_var = var(returns, mean(returns));
-    if return_var <= f32::EPSILON {
+    let y_var = var(y, mean(y));
+    if y_var <= f32::EPSILON {
         return 0.0;
     }
-    let resid: Vec<f32> = returns
-        .iter()
-        .zip(old_values)
-        .map(|(r, v)| r - v)
-        .collect();
+    let resid: Vec<f32> = y.iter().zip(yhat).map(|(r, v)| r - v).collect();
     let resid_var = var(&resid, mean(&resid));
-    f64::from(1.0 - resid_var / return_var)
+    f64::from(1.0 - resid_var / y_var)
 }
 
 impl Ppo {
@@ -480,6 +476,16 @@ impl Ppo {
             &self.device,
         );
         let resident_secs = resident_start.elapsed().as_secs_f64();
+        let extra_width = memory.critic_extra_width();
+        let resident_extras = (extra_width > 0).then(|| {
+            get_states_batch_range(
+                memory.critic_extras(),
+                extra_width,
+                0,
+                rollout_size,
+                &self.device,
+            )
+        });
         let profile = speed_profile_enabled();
         if profile {
             profile_sync(&self.device);
@@ -506,7 +512,17 @@ impl Ppo {
                     .narrow(0, start, end - start)
                     .cast(DType::F32);
                 let features = nodiff_net.apply_shared_head(states);
-                transaction = transaction.register(nodiff_net.critic.forward(features));
+                let critic_in = match &resident_extras {
+                    Some(ex) => Tensor::cat(
+                        vec![
+                            features,
+                            ex.clone().narrow(0, start, end - start).cast(DType::F32),
+                        ],
+                        1,
+                    ),
+                    None => features,
+                };
+                transaction = transaction.register(nodiff_net.critic.forward(critic_in));
             }
 
             let mut values = Vec::with_capacity(n);
@@ -560,7 +576,20 @@ impl Ppo {
                         .cast(DType::F32);
 
                     let features = nodiff_net.apply_shared_head(batch);
-                    transaction = transaction.register(nodiff_net.critic.forward(features));
+                    let critic_in = if extra_width > 0 {
+                        let extras = get_states_batch_range(
+                            &memory.trunc_next_extras()[..window_truncations * extra_width],
+                            extra_width,
+                            start,
+                            end,
+                            &self.device,
+                        )
+                        .cast(DType::F32);
+                        Tensor::cat(vec![features, extras], 1)
+                    } else {
+                        features
+                    };
+                    transaction = transaction.register(nodiff_net.critic.forward(critic_in));
                 }
 
                 let mut values = Vec::with_capacity(window_truncations);
@@ -765,8 +794,11 @@ impl Ppo {
                     ),
                     &self.device,
                 );
-                let states = resident_b.clone().select(0, index).cast(DType::F32);
-                let batch = GpuBatch::from_staged(states, staged, &self.device);
+                let states = resident_b.clone().select(0, index.clone()).cast(DType::F32);
+                let extras = resident_extras.as_ref().map(|ex| {
+                    ex.clone().select(0, index).cast(DType::F32)
+                });
+                let batch = GpuBatch::from_staged(states, extras, staged, &self.device);
                 if profile {
                     profile_sync(&self.device);
                 }
@@ -911,6 +943,7 @@ impl Ppo {
             let mini_batch = batch.slice(offset, mini_batch_len);
 
             let state_batch = mini_batch.states;
+            let extras_batch = mini_batch.extras;
             let action_batch = mini_batch.actions;
             let old_log_probs_batch = mini_batch.old_log_probs;
             let advantage_batch = mini_batch.advantages;
@@ -922,6 +955,7 @@ impl Ppo {
             self.train_mini_batch(
                 net,
                 state_batch,
+                extras_batch,
                 action_batch,
                 old_log_probs_batch,
                 advantage_batch,
@@ -956,6 +990,7 @@ impl Ppo {
         &self,
         net: &Actic,
         state_batch: Tensor<2>,
+        extras_batch: Option<Tensor<2>>,
         action_batch: Tensor<2, Int>,
         old_log_probs_batch: Tensor<2>,
         advantage_batch: Tensor<2>,
@@ -971,7 +1006,17 @@ impl Ppo {
         let PPOOutput {
             log_probs: log_prob,
             values: value_batch,
-        } = net.forward_with(state_batch, mask_batch, self.config.precision);
+        } = if let Some(extras) = extras_batch {
+            let features = net.apply_shared_head(state_batch.clone());
+            let log_probs = net.actor.log_probs_with(features, mask_batch, self.config.precision.policy);
+            let values = net.critic.forward_with(
+                Tensor::cat(vec![state_batch, extras], 1),
+                self.config.precision.critic,
+            );
+            PPOOutput::new(log_probs, values)
+        } else {
+            net.forward_with(state_batch, mask_batch, self.config.precision)
+        };
 
         let PolicyLoss {
             actor_loss,
@@ -1158,6 +1203,7 @@ impl Ppo {
 
 struct GpuBatch {
     states: Tensor<2>,
+    extras: Option<Tensor<2>>,
     actions: Tensor<2, Int>,
     old_log_probs: Tensor<2>,
     advantages: Tensor<2>,
@@ -1260,10 +1306,11 @@ impl StagedBatch {
 impl GpuBatch {
     /// Combine GPU-gathered states with one staged small-field batch. The
     /// staging `Vec`s move into `TensorData` with no further copy on host.
-    fn from_staged(states: Tensor<2>, staged: StagedBatch, device: &Device) -> Self {
+    fn from_staged(states: Tensor<2>, extras: Option<Tensor<2>>, staged: StagedBatch, device: &Device) -> Self {
         let rows = staged.rows;
         Self {
             states,
+            extras,
             actions: Tensor::from_data(TensorData::new(staged.actions, [rows, 1]), device),
             old_log_probs: Tensor::from_data(TensorData::new(staged.log_probs, [rows, 1]), device),
             advantages: Tensor::from_data(TensorData::new(staged.advantages, [rows, 1]), device),
@@ -1283,6 +1330,7 @@ impl GpuBatch {
     fn slice(&self, offset: usize, len: usize) -> Self {
         Self {
             states: self.states.clone().narrow(0, offset, len),
+            extras: self.extras.as_ref().map(|ex| ex.clone().narrow(0, offset, len)),
             actions: self.actions.clone().narrow(0, offset, len),
             old_log_probs: self.old_log_probs.clone().narrow(0, offset, len),
             advantages: self.advantages.clone().narrow(0, offset, len),
@@ -1970,5 +2018,31 @@ mod runtime_device_tests {
             critic: ComputePrecision::Bf16,
         };
         exercise_full_learn(Device::libtorch().autodiff(), precision);
+    }
+}
+
+
+#[cfg(test)]
+mod explained_variance_tests {
+    use super::explained_variance;
+
+    #[test]
+    fn perfect_prediction_is_one() {
+        let returns = [1.0, 2.0, 3.0, 4.0];
+        assert!((explained_variance(&returns, &returns) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mean_prediction_is_zero() {
+        let returns = [1.0, 2.0, 3.0, 4.0];
+        let old = [2.5, 2.5, 2.5, 2.5];
+        assert!(explained_variance(&returns, &old).abs() < 1e-6);
+    }
+
+    #[test]
+    fn constant_target_is_zero() {
+        let returns = [3.0, 3.0, 3.0];
+        let old = [1.0, 2.0, 3.0];
+        assert_eq!(explained_variance(&returns, &old), 0.0);
     }
 }

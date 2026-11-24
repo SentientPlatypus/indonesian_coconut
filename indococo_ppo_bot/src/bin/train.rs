@@ -110,6 +110,16 @@ struct TrainConfig {
     /// TM1 team training (2v2 / 3v3): mode mix and obs slot shuffle.
     #[serde(default)]
     team: Option<TeamTrainConfig>,
+    /// TM12 critic-only extra inputs (default empty = off).
+    #[serde(default)]
+    critic: CriticTrainConfig,
+}
+
+/// `[critic]` of the train config (TM12). Default empty = off.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CriticTrainConfig {
+    extra_inputs: Vec<String>,
 }
 
 /// `[team]` of the train config.
@@ -217,6 +227,10 @@ struct ExternalOpponentConfig {
     /// (beta 0.5) instead of playing greedily. Default 0.
     #[serde(default)]
     stochastic: f32,
+    /// Nexto / Necto only: play the scripted speedflip kickoff (same as
+    /// the eval harness). Default false so existing rollouts stay identical.
+    #[serde(default)]
+    kickoff_script: bool,
 }
 
 /// `RIPPLE_WEIGHT` overrides a toml `kind = "ripple"` entry. A positive value
@@ -248,6 +262,7 @@ fn ripple_external_specs(cfg: &OpponentsConfig) -> Vec<ExternalOpponentConfig> {
                 path: PathBuf::from(path),
                 weight,
                 stochastic: 0.0,
+                kickoff_script: false,
             });
         }
     }
@@ -294,8 +309,9 @@ fn load_external_opponents(
                         LeagueBotsDevice::Default | LeagueBotsDevice::Cuda => indococo_bot::nectofam::NfModel::default_device(),
                     };
                     let policy = indococo_bot::nectofam::NfPolicy::load(kind, &o.path, tch_dev, o.stochastic)
-                        .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name));
-                    println!("LEAGUE {} ({k}): delay {}, stochastic {}, device {:?}", o.name, policy.model.kind.delay(), policy.stochastic, tch_dev);
+                        .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name))
+                        .with_kickoff_script(o.kickoff_script);
+                    println!("LEAGUE {} ({k}): delay {}, stochastic {}, kickoff_script {}, device {:?}", o.name, policy.model.kind.delay(), policy.stochastic, policy.kickoff_script, tch_dev);
                     std::sync::Arc::new(policy)
                 }
                 other => panic!("opponent {}: unknown external kind {other:?}", o.name),
@@ -491,6 +507,7 @@ fn learner_config(
         device: device.autodiff(),
         skill_tracker_device: None,
         async_collect: cfg.async_collect,
+        critic_extra_width: indococo_bot::critic_extras::width(),
         ..Default::default()
     }
 }
@@ -560,6 +577,8 @@ fn train_cfg(cfg: TrainConfig) {
     // ST33: setters may condition on the rollout's opponent (opp_weights).
     rlgymppo::set_opponent_pick_hook(indococo_bot::setters::set_current_opponent);
     let rewards = read_rewards(&cfg.reward_config);
+    let role_params = rewards.team.roles.clone().unwrap_or_default();
+    indococo_bot::critic_extras::install(&cfg.critic.extra_inputs, role_params);
     init_from_default(true).expect("load collision meshes");
     let dev = device(&cfg.backend);
     let fixed = load_fixed_opponents(&cfg.opponents, &dev);
@@ -1649,6 +1668,62 @@ fn speed_bench(config: &Path, iters: u64) {
     }
 }
 
+/// `widen-critic-extras <src_ck> <dst_ck>`: copy actor and stats, widen the
+/// critic's first layer by the process-wide critic extra width (zero-init
+/// columns). If the critic is already wide, copy it. Prints WIDEN_CRITIC
+/// and checks that V is identical at step 0 (zero extras vs the source).
+fn widen_critic_extras(src: &Path, dst: &Path) {
+    let extra = indococo_bot::critic_extras::width();
+    // The CLI is usually run before `train` installs extra_inputs. Default
+    // to the TM12 set (width 10) when the process-wide config is still empty,
+    // unless the caller set CRITIC_EXTRAS=0.
+    let extra = if extra == 0 && std::env::var("CRITIC_EXTRAS").ok().as_deref() != Some("0") {
+        10
+    } else {
+        extra
+    };
+    init_from_default(true).expect("load collision meshes");
+    let dev = Device::flex();
+    std::fs::create_dir_all(dst).expect("create dst");
+    std::fs::copy(src.join("actor.bpk"), dst.join("actor.bpk")).expect("copy actor");
+    if src.join("stats.toml") != dst.join("stats.toml") {
+        let _ = std::fs::copy(src.join("stats.toml"), dst.join("stats.toml"));
+    }
+    let from = bpk_input_width(&src.join("critic.bpk")).expect("critic width");
+    let to = obs_size() + extra;
+    if extra == 0 || from == to {
+        if src.join("critic.bpk") != dst.join("critic.bpk") {
+            std::fs::copy(src.join("critic.bpk"), dst.join("critic.bpk")).expect("copy critic");
+        }
+        println!("WIDEN_CRITIC extra={extra} from={from} to={to} copied (no change)");
+        return;
+    }
+    assert_eq!(from, obs_size(), "widen-critic-extras needs a {0}-wide critic, got {from}", obs_size());
+    let bytes = std::fs::read(src.join("critic.bpk")).expect("read critic");
+    let wide = widen_safetensors(&bytes, from, to);
+    std::fs::write(dst.join("critic.bpk"), &wide).expect("write critic");
+    // Step-0 identity: source critic on obs equals widened critic on obs||zeros.
+    let src_c = model_with_input(from, &dev).critic.try_load_file(src.join("critic.bpk")).expect("src critic");
+    let dst_c = model_with_input(to, &dev).critic.try_load_file(dst.join("critic.bpk")).expect("dst critic");
+    let n = 8;
+    let mut rows = Vec::with_capacity(n * from);
+    for i in 0..n * from {
+        rows.push(((i as f32) * 0.37).sin() * 0.8);
+    }
+    let x = Tensor::<2>::from_data(TensorData::new(rows.clone(), [n, from]), &dev);
+    let mut wide_rows = Vec::with_capacity(n * to);
+    for r in 0..n {
+        wide_rows.extend_from_slice(&rows[r * from..(r + 1) * from]);
+        wide_rows.extend(std::iter::repeat(0.0).take(extra));
+    }
+    let xw = Tensor::<2>::from_data(TensorData::new(wide_rows, [n, to]), &dev);
+    let a = src_c.forward(x).into_data().try_to_vec::<f32>().expect("src v");
+    let b = dst_c.forward(xw).into_data().try_to_vec::<f32>().expect("dst v");
+    let maxdiff = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0_f32, f32::max);
+    println!("WIDEN_CRITIC extra={extra} from={from} to={to} step0_max_abs_value_diff={maxdiff}");
+    assert!(maxdiff < 1e-5, "widened critic is not identical at step 0: {maxdiff}");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| -> &str {
@@ -1663,6 +1738,7 @@ fn main() {
         "widen" => widen(Path::new(arg(1)), Path::new(arg(2))),
         "widen-team" => widen_team(Path::new(arg(1)), Path::new(arg(2))),
         "widen-pred" => widen_pred(Path::new(arg(1)), Path::new(arg(2))),
+        "widen-critic-extras" => widen_critic_extras(Path::new(arg(1)), Path::new(arg(2))),
         "export" => export(Path::new(arg(1)), Path::new(arg(2))),
         "record" => record(
             Path::new(arg(1)),

@@ -10,6 +10,7 @@
 
 pub mod action;
 pub mod consts;
+pub mod critic_extras;
 pub mod curriculum;
 pub mod env;
 pub mod events;

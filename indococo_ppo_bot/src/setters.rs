@@ -2440,6 +2440,28 @@ mod tests {
     }
 
     #[test]
+    fn tm12_kickoff_nexto_opp_weight_is_30_percent() {
+        let s: WeightedSetter = toml::from_str(
+            r#"
+            kind = "kickoff"
+            weight = 0.15
+            mode_weights = { "3" = 0.20 }
+            opp_weights = { nexto = 0.30 }
+            "#,
+        )
+        .unwrap();
+        // Nexto rounds start from a kickoff 30% of the time in every mode;
+        // self-play / other opponents keep the existing 15%/20% mix.
+        assert!((s.effective_weight(1, Some("nexto")) - 0.30).abs() < 1e-6);
+        assert!((s.effective_weight(2, Some("nexto")) - 0.30).abs() < 1e-6);
+        assert!((s.effective_weight(3, Some("nexto")) - 0.30).abs() < 1e-6);
+        assert!((s.effective_weight(2, None) - 0.15).abs() < 1e-6);
+        assert!((s.effective_weight(3, None) - 0.20).abs() < 1e-6);
+        assert!((s.effective_weight(2, Some("galactus")) - 0.15).abs() < 1e-6);
+        assert!((s.effective_weight(3, Some("galactus")) - 0.20).abs() < 1e-6);
+    }
+
+    #[test]
     fn mode_weights_absent_is_legacy() {
         let mix = build_mix::<crate::env::SharedInfo>(&default_mix());
         assert!(!mix.is_dynamic());
