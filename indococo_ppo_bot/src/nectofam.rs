@@ -46,6 +46,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -73,17 +74,39 @@ const NECTO_LOGITS: usize = 12;
 /// rlgym `common_values.BOOST_LOCATIONS` (both bots' training layout; z 70
 /// small / 73 big; note the upstream (-940, 3310)).
 pub const BOOST_LOCATIONS: [[f64; 3]; N_PADS] = [
-    [0.0, -4240.0, 70.0], [-1792.0, -4184.0, 70.0], [1792.0, -4184.0, 70.0],
-    [-3072.0, -4096.0, 73.0], [3072.0, -4096.0, 73.0], [-940.0, -3308.0, 70.0],
-    [940.0, -3308.0, 70.0], [0.0, -2816.0, 70.0], [-3584.0, -2484.0, 70.0],
-    [3584.0, -2484.0, 70.0], [-1788.0, -2300.0, 70.0], [1788.0, -2300.0, 70.0],
-    [-2048.0, -1036.0, 70.0], [0.0, -1024.0, 70.0], [2048.0, -1036.0, 70.0],
-    [-3584.0, 0.0, 73.0], [-1024.0, 0.0, 70.0], [1024.0, 0.0, 70.0],
-    [3584.0, 0.0, 73.0], [-2048.0, 1036.0, 70.0], [0.0, 1024.0, 70.0],
-    [2048.0, 1036.0, 70.0], [-1788.0, 2300.0, 70.0], [1788.0, 2300.0, 70.0],
-    [-3584.0, 2484.0, 70.0], [3584.0, 2484.0, 70.0], [0.0, 2816.0, 70.0],
-    [-940.0, 3310.0, 70.0], [940.0, 3308.0, 70.0], [-3072.0, 4096.0, 73.0],
-    [3072.0, 4096.0, 73.0], [-1792.0, 4184.0, 70.0], [1792.0, 4184.0, 70.0],
+    [0.0, -4240.0, 70.0],
+    [-1792.0, -4184.0, 70.0],
+    [1792.0, -4184.0, 70.0],
+    [-3072.0, -4096.0, 73.0],
+    [3072.0, -4096.0, 73.0],
+    [-940.0, -3308.0, 70.0],
+    [940.0, -3308.0, 70.0],
+    [0.0, -2816.0, 70.0],
+    [-3584.0, -2484.0, 70.0],
+    [3584.0, -2484.0, 70.0],
+    [-1788.0, -2300.0, 70.0],
+    [1788.0, -2300.0, 70.0],
+    [-2048.0, -1036.0, 70.0],
+    [0.0, -1024.0, 70.0],
+    [2048.0, -1036.0, 70.0],
+    [-3584.0, 0.0, 73.0],
+    [-1024.0, 0.0, 70.0],
+    [1024.0, 0.0, 70.0],
+    [3584.0, 0.0, 73.0],
+    [-2048.0, 1036.0, 70.0],
+    [0.0, 1024.0, 70.0],
+    [2048.0, 1036.0, 70.0],
+    [-1788.0, 2300.0, 70.0],
+    [1788.0, 2300.0, 70.0],
+    [-3584.0, 2484.0, 70.0],
+    [3584.0, 2484.0, 70.0],
+    [0.0, 2816.0, 70.0],
+    [-940.0, 3310.0, 70.0],
+    [940.0, 3308.0, 70.0],
+    [-3072.0, 4096.0, 73.0],
+    [3072.0, 4096.0, 73.0],
+    [-1792.0, 4184.0, 70.0],
+    [1792.0, 4184.0, 70.0],
     [0.0, 4240.0, 70.0],
 ];
 
@@ -114,7 +137,11 @@ fn norm(i: usize) -> f64 {
 
 /// `_invert = [1]*5 + [-1, -1, 1]*5 + [1]*4`.
 fn invert(i: usize) -> f64 {
-    if (5..20).contains(&i) && (i - 5) % 3 != 2 { -1.0 } else { 1.0 }
+    if (5..20).contains(&i) && (i - 5) % 3 != 2 {
+        -1.0
+    } else {
+        1.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,8 +178,14 @@ impl Kind {
             Kind::Nexto => ("NEXTO_DELAY", 6),
             Kind::Necto => ("NECTO_DELAY", 7),
         };
-        let d = std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        assert!((1..TICK_SKIP as u8).contains(&d), "{var} must be 1..=7, got {d}");
+        let d = std::env::var(var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d);
+        assert!(
+            (1..TICK_SKIP as u8).contains(&d),
+            "{var} must be 1..=7, got {d}"
+        );
         d
     }
     pub fn num_actions(self) -> usize {
@@ -204,7 +237,9 @@ pub fn nexto_table() -> &'static [[f32; 8]] {
                             if pitch == 0.0 && roll == 0.0 && jump == 0.0 {
                                 continue;
                             }
-                            let hb = f32::from(jump == 1.0 && (pitch != 0.0 || yaw != 0.0 || roll != 0.0));
+                            let hb = f32::from(
+                                jump == 1.0 && (pitch != 0.0 || yaw != 0.0 || roll != 0.0),
+                            );
                             rows.push([boost, yaw, pitch, yaw, roll, jump, boost, hb]);
                         }
                     }
@@ -247,7 +282,16 @@ pub fn to_controls(a: &[f32; 8]) -> CarControls {
 }
 
 pub fn controls_vec(c: &CarControls) -> [f32; 8] {
-    [c.throttle, c.steer, c.pitch, c.yaw, c.roll, f32::from(c.jump), f32::from(c.boost), f32::from(c.handbrake)]
+    [
+        c.throttle,
+        c.steer,
+        c.pitch,
+        c.yaw,
+        c.roll,
+        f32::from(c.jump),
+        f32::from(c.boost),
+        f32::from(c.handbrake),
+    ]
 }
 
 /// Nexto's / Necto's speedflip (bot.py `KICKOFF_CONTROLS`), one row per tick.
@@ -263,7 +307,9 @@ pub fn kickoff_rows() -> &'static [[f32; 8]] {
             (13, [1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             (10, [1.0, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0, 0.0]),
         ];
-        seg.iter().flat_map(|&(n, r)| std::iter::repeat_n(r, 4 * n)).collect()
+        seg.iter()
+            .flat_map(|&(n, r)| std::iter::repeat_n(r, 4 * n))
+            .collect()
     })
 }
 
@@ -407,7 +453,15 @@ fn finish(kv: Vec<[f64; KV_LEN]>, q: [f64; Q_LEN]) -> NfObs {
     for (o, v) in qf.iter_mut().zip(q) {
         *o = v as f32;
     }
-    NfObs { ents, q: qf, kv: kv.iter().flat_map(|r| r.iter().map(|&v| v as f32)).collect(), mask: vec![0.0; ents] }
+    NfObs {
+        ents,
+        q: qf,
+        kv: kv
+            .iter()
+            .flat_map(|r| r.iter().map(|&v| v as f32))
+            .collect(),
+        mask: vec![0.0; ents],
+    }
 }
 
 /// Nexto obs of car `me` (`nexto_obs.py` `batched_build_obs` + `add_actions`).
@@ -486,7 +540,10 @@ pub struct NectoState {
 
 impl Default for NectoState {
     fn default() -> Self {
-        Self { demo: [0.0; MAX_CARS], boost: [0.0; N_PADS] }
+        Self {
+            demo: [0.0; MAX_CARS],
+            boost: [0.0; N_PADS],
+        }
     }
 }
 
@@ -516,7 +573,11 @@ pub fn necto_obs(st: &mut NectoState, state: &GameState, me: usize, prev: &[f32;
         car_row(r, c);
         // demo_timers[car_id]: keyed by the car, not the slot.
         let t = &mut st.demo[ci.min(MAX_CARS - 1)];
-        *t = if *t <= 0.0 { 3.0 } else { (*t - TICK_SKIP_F / 120.0).max(0.0) };
+        *t = if *t <= 0.0 {
+            3.0
+        } else {
+            (*t - TICK_SKIP_F / 120.0).max(0.0)
+        };
         r[DEMO] = *t / 10.0;
     }
     let active = pads_active(state);
@@ -567,17 +628,44 @@ pub fn necto_obs(st: &mut NectoState, state: &GameState, me: usize, prev: &[f32;
 /// The TorchScript net of either bot.
 pub struct NfModel {
     pub kind: Kind,
-    module: Mutex<tch::CModule>,
+    modules: Vec<Mutex<tch::CModule>>,
+    cursor: AtomicUsize,
     pub device: tch::Device,
 }
 
 impl NfModel {
     /// `path`: the bot dir (with `nexto-model.pt` / `necto-model.pt`) or the file.
+    /// Loads one replica, so behaviour matches the pre-replica path.
     pub fn load(kind: Kind, path: &Path, device: tch::Device) -> Result<Self, String> {
-        let file = if path.is_dir() { path.join(kind.model_file()) } else { path.to_path_buf() };
-        let mut module = tch::CModule::load_on_device(&file, device).map_err(|e| format!("{}: {e}", file.display()))?;
-        module.set_eval();
-        Ok(Self { kind, module: Mutex::new(module), device })
+        Self::load_replicas(kind, path, device, 1)
+    }
+
+    /// Load `n` copies of the TorchScript module (at least 1).
+    pub fn load_replicas(
+        kind: Kind,
+        path: &Path,
+        device: tch::Device,
+        n: usize,
+    ) -> Result<Self, String> {
+        let n = n.max(1);
+        let file = if path.is_dir() {
+            path.join(kind.model_file())
+        } else {
+            path.to_path_buf()
+        };
+        let mut modules = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mut module = tch::CModule::load_on_device(&file, device)
+                .map_err(|e| format!("{}: {e}", file.display()))?;
+            module.set_eval();
+            modules.push(Mutex::new(module));
+        }
+        Ok(Self {
+            kind,
+            modules,
+            cursor: AtomicUsize::new(0),
+            device,
+        })
     }
 
     /// CPU unless `NF_DEVICE=cuda` (and CUDA is available). The released
@@ -594,15 +682,50 @@ impl NfModel {
 
     /// Logits of `rows` observations with `ents` entities each
     /// (Nexto: 90 per row; Necto: the 5 heads concatenated, 12 per row).
-    pub fn logits(&self, ents: usize, q: &[f32], kv: &[f32], mask: &[f32], rows: usize) -> Vec<f32> {
+    pub fn logits(
+        &self,
+        ents: usize,
+        q: &[f32],
+        kv: &[f32],
+        mask: &[f32],
+        rows: usize,
+    ) -> Vec<f32> {
+        let n = self.modules.len();
+        let start = self.cursor.fetch_add(1, Ordering::Relaxed) % n;
+        for i in 0..n {
+            let idx = (start + i) % n;
+            if let Ok(module) = self.modules[idx].try_lock() {
+                return self.logits_with(&module, ents, q, kv, mask, rows);
+            }
+        }
+        let module = self.modules[start].lock().expect("nf module");
+        self.logits_with(&module, ents, q, kv, mask, rows)
+    }
+
+    fn logits_with(
+        &self,
+        module: &tch::CModule,
+        ents: usize,
+        q: &[f32],
+        kv: &[f32],
+        mask: &[f32],
+        rows: usize,
+    ) -> Vec<f32> {
         use tch::{IValue, Tensor};
         let (r, e) = (rows as i64, ents as i64);
-        let qt = Tensor::from_slice(q).view([r, 1, Q_LEN as i64]).to(self.device);
-        let kt = Tensor::from_slice(kv).view([r, e, KV_LEN as i64]).to(self.device);
+        let qt = Tensor::from_slice(q)
+            .view([r, 1, Q_LEN as i64])
+            .to(self.device);
+        let kt = Tensor::from_slice(kv)
+            .view([r, e, KV_LEN as i64])
+            .to(self.device);
         let mt = Tensor::from_slice(mask).view([r, e]).to(self.device);
         let out = tch::no_grad(|| {
-            let m = self.module.lock().expect("nf module");
-            m.forward_is(&[IValue::Tuple(vec![IValue::Tensor(qt), IValue::Tensor(kt), IValue::Tensor(mt)])])
+            module.forward_is(&[IValue::Tuple(vec![
+                IValue::Tensor(qt),
+                IValue::Tensor(kt),
+                IValue::Tensor(mt),
+            ])])
         })
         .unwrap_or_else(|e| panic!("{} forward: {e}", self.kind.name()));
         let first = match out {
@@ -621,10 +744,22 @@ impl NfModel {
             IValue::TensorList(v) => v,
             other => panic!("{} output: {other:?}", self.kind.name()),
         };
-        let heads: Vec<Tensor> = heads.iter().map(|t| t.to(tch::Device::Cpu).to_kind(tch::Kind::Float).reshape([r, -1])).collect();
+        let heads: Vec<Tensor> = heads
+            .iter()
+            .map(|t| {
+                t.to(tch::Device::Cpu)
+                    .to_kind(tch::Kind::Float)
+                    .reshape([r, -1])
+            })
+            .collect();
         let cat = Tensor::cat(&heads, 1).contiguous();
         let width = cat.size()[1] as usize;
-        assert_eq!(width, self.kind.logits_per_row(), "{} logits width", self.kind.name());
+        assert_eq!(
+            width,
+            self.kind.logits_per_row(),
+            "{} logits width",
+            self.kind.name()
+        );
         let mut v = vec![0.0f32; rows * width];
         cat.copy_data(&mut v, rows * width);
         v
@@ -658,7 +793,13 @@ fn sample(l: &[f32], rng: &mut SmallRng) -> usize {
 /// 0.5 = plain softmax, `agent.py` scales logits by log3(3) = 1). Necto
 /// picks each head independently.
 pub fn pick(kind: Kind, l: &[f32], stochastic: bool, rng: &mut SmallRng) -> usize {
-    let f = |x: &[f32], rng: &mut SmallRng| if stochastic { sample(x, rng) } else { argmax(x) };
+    let f = |x: &[f32], rng: &mut SmallRng| {
+        if stochastic {
+            sample(x, rng)
+        } else {
+            argmax(x)
+        }
+    };
     match kind {
         Kind::Nexto => f(l, rng),
         Kind::Necto => {
@@ -772,6 +913,7 @@ pub struct NfPolicy {
     /// When true, play the same per-tick speedflip as [`NfBot`] during
     /// kickoffs. Default false.
     pub kickoff_script: bool,
+    chunk_rows: usize,
 }
 
 // The module is behind a Mutex; the rest is plain data.
@@ -779,14 +921,35 @@ unsafe impl Sync for NfPolicy {}
 unsafe impl Send for NfPolicy {}
 
 impl NfPolicy {
-    pub fn load(kind: Kind, path: &Path, device: tch::Device, stochastic: f32) -> Result<Self, String> {
+    pub fn load(
+        kind: Kind,
+        path: &Path,
+        device: tch::Device,
+        stochastic: f32,
+    ) -> Result<Self, String> {
+        Self::load_with(kind, path, device, stochastic, 1, 0)
+    }
+
+    /// `replicas` copies of the TorchScript module (1 = today's path).
+    /// `chunk_rows` 0 leaves `infer` on the single-lock-per-group path;
+    /// a positive value splits each entity group into chunks and runs them
+    /// on scoped threads, up to the replica count.
+    pub fn load_with(
+        kind: Kind,
+        path: &Path,
+        device: tch::Device,
+        stochastic: f32,
+        replicas: usize,
+        chunk_rows: usize,
+    ) -> Result<Self, String> {
         Ok(Self {
-            model: NfModel::load(kind, path, device)?,
+            model: NfModel::load_replicas(kind, path, device, replicas)?,
             stochastic: stochastic.clamp(0.0, 1.0),
             delay: kind.delay(),
             mem: Mutex::new(HashMap::new()),
             rng: Mutex::new(SmallRng::seed_from_u64(0x5eed_4e78)),
             kickoff_script: false,
+            chunk_rows,
         })
     }
 
@@ -796,6 +959,21 @@ impl NfPolicy {
         self.kickoff_script = on;
         self
     }
+}
+
+fn pack_nf_group(obs: &[f32], idx: &[usize], ents: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let mut q = Vec::with_capacity(idx.len() * Q_LEN);
+    let mut kv = Vec::with_capacity(idx.len() * ents * KV_LEN);
+    let mut mk = Vec::with_capacity(idx.len() * ents);
+    for &r in idx {
+        let row = &obs[r * ROW..(r + 1) * ROW];
+        q.extend_from_slice(&row[HDR..HDR + Q_LEN]);
+        let kv0 = HDR + Q_LEN;
+        kv.extend_from_slice(&row[kv0..kv0 + ents * KV_LEN]);
+        let m0 = kv0 + MAX_ENTITIES * KV_LEN;
+        mk.extend_from_slice(&row[m0..m0 + ents]);
+    }
+    (q, kv, mk)
 }
 
 impl ExternalPolicy for NfPolicy {
@@ -844,7 +1022,11 @@ impl ExternalPolicy for NfPolicy {
             };
             (o, m.stochastic || (kind.stochastic_kickoffs() && ko))
         };
-        assert!(o.ents <= MAX_ENTITIES, "{} cars: more than {MAX_CARS}", state.cars.len());
+        assert!(
+            o.ents <= MAX_ENTITIES,
+            "{} cars: more than {MAX_CARS}",
+            state.cars.len()
+        );
         obs.fill(0.0);
         obs[0] = o.ents as f32;
         obs[1] = f32::from(stoch);
@@ -860,24 +1042,67 @@ impl ExternalPolicy for NfPolicy {
         for r in 0..rows {
             groups.entry(obs[r * ROW] as usize).or_default().push(r);
         }
-        let mut out = vec![0usize; rows];
         let lpr = kind.logits_per_row();
-        for (ents, idx) in groups {
-            let (mut q, mut kv, mut mk) = (Vec::new(), Vec::new(), Vec::new());
-            for &r in &idx {
-                let row = &obs[r * ROW..(r + 1) * ROW];
-                q.extend_from_slice(&row[HDR..HDR + Q_LEN]);
-                let kv0 = HDR + Q_LEN;
-                kv.extend_from_slice(&row[kv0..kv0 + ents * KV_LEN]);
-                let m0 = kv0 + MAX_ENTITIES * KV_LEN;
-                mk.extend_from_slice(&row[m0..m0 + ents]);
+        if self.chunk_rows == 0 {
+            let mut out = vec![0usize; rows];
+            for (ents, idx) in groups {
+                let (q, kv, mk) = pack_nf_group(obs, &idx, ents);
+                let logits = self.model.logits(ents, &q, &kv, &mk, idx.len());
+                let mut rng = self.rng.lock().expect("nf rng");
+                for (j, &r) in idx.iter().enumerate() {
+                    let stoch = obs[r * ROW + 1] > 0.5;
+                    out[r] = pick(kind, &logits[j * lpr..(j + 1) * lpr], stoch, &mut rng);
+                }
             }
-            let logits = self.model.logits(ents, &q, &kv, &mk, idx.len());
-            let mut rng = self.rng.lock().expect("nf rng");
-            for (j, &r) in idx.iter().enumerate() {
-                let stoch = obs[r * ROW + 1] > 0.5;
-                out[r] = pick(kind, &logits[j * lpr..(j + 1) * lpr], stoch, &mut rng);
+            return out;
+        }
+
+        // Chunked path: groups in sorted-ents order; picks in original row order
+        // so the stochastic stream does not depend on HashMap visit order.
+        let mut group_list: Vec<(usize, Vec<usize>)> = groups.into_iter().collect();
+        group_list.sort_by_key(|(ents, _)| *ents);
+        let mut all_logits = vec![0.0f32; rows * lpr];
+        let replicas = self.model.modules.len().max(1);
+        for (ents, idx) in &group_list {
+            let ents = *ents;
+            let chunk = self.chunk_rows.max(1);
+            let slices: Vec<&[usize]> = idx.chunks(chunk).collect();
+            let packed: Vec<(Vec<f32>, Vec<f32>, Vec<f32>)> = slices
+                .iter()
+                .map(|ch| pack_nf_group(obs, ch, ents))
+                .collect();
+            let mut chunk_out: Vec<Vec<f32>> = vec![Vec::new(); slices.len()];
+            for wave in (0..slices.len()).step_by(replicas) {
+                let end = (wave + replicas).min(slices.len());
+                let packed_wave = &packed[wave..end];
+                let slices_wave = &slices[wave..end];
+                let out_wave = &mut chunk_out[wave..end];
+                std::thread::scope(|scope| {
+                    for ((slot, (q, kv, mk)), ch) in out_wave
+                        .iter_mut()
+                        .zip(packed_wave.iter())
+                        .zip(slices_wave.iter())
+                    {
+                        let n = ch.len();
+                        scope.spawn(move || {
+                            *slot = self.model.logits(ents, q, kv, mk, n);
+                        });
+                    }
+                });
             }
+            for (ch, logits) in slices.iter().zip(chunk_out.into_iter()) {
+                assert_eq!(logits.len(), ch.len() * lpr, "chunk logits width");
+                for (j, &r) in ch.iter().enumerate() {
+                    let src = &logits[j * lpr..(j + 1) * lpr];
+                    all_logits[r * lpr..(r + 1) * lpr].copy_from_slice(src);
+                }
+            }
+        }
+        let mut out = vec![0usize; rows];
+        let mut rng = self.rng.lock().expect("nf rng");
+        for r in 0..rows {
+            let stoch = obs[r * ROW + 1] > 0.5;
+            out[r] = pick(kind, &all_logits[r * lpr..(r + 1) * lpr], stoch, &mut rng);
         }
         out
     }
@@ -938,7 +1163,9 @@ mod tests {
         let mut l90 = [0.0f32; 90];
         l90[37] = 3.0;
         assert_eq!(pick(Kind::Nexto, &l90, false, &mut rng), 37);
-        let n = (0..2000).filter(|_| pick(Kind::Nexto, &l90, true, &mut rng) == 37).count();
+        let n = (0..2000)
+            .filter(|_| pick(Kind::Nexto, &l90, true, &mut rng) == 37)
+            .count();
         // softmax mass of 37: e^3 / (e^3 + 89) ~ 0.184
         assert!((250..500).contains(&n), "{n}");
     }
@@ -1058,6 +1285,151 @@ mod tests {
                 }
             }
             assert_eq!(taker_count, 2, "spawn {si}: one taker per team");
+        }
+    }
+
+    /// Built-row parity of the replica/chunk path vs a single module.
+    /// Skips when `NEXTO_DIR` is unset or collision meshes are missing.
+    #[test]
+    fn nf_replica_chunk_parity() {
+        use rlgymppo::ExternalPolicy;
+        let dir = match std::env::var("NEXTO_DIR") {
+            Ok(d) if !d.is_empty() => d,
+            _ => return,
+        };
+        let mesh = concat!(env!("CARGO_MANIFEST_DIR"), "/../collision_meshes");
+        if rlgymppo::rlgym::rocketsim::init(mesh, true).is_err() {
+            return;
+        }
+        use crate::env::create_env_sized;
+        use crate::rewards::RewardConfig;
+        use crate::setters::default_mix;
+
+        let path = std::path::Path::new(&dir);
+        if !path.exists() {
+            return;
+        }
+        let device = tch::Device::Cpu;
+        let single = NfPolicy::load(Kind::Nexto, path, device, 0.0).expect("load single");
+        let default_path =
+            NfPolicy::load_with(Kind::Nexto, path, device, 0.0, 1, 0).expect("load 1/0");
+        let chunked =
+            NfPolicy::load_with(Kind::Nexto, path, device, 0.0, 4, 64).expect("load 4/64");
+
+        fn collect_rows(per_team: usize, want: usize, policy: &NfPolicy) -> Vec<f32> {
+            let mut env = create_env_sized(&RewardConfig::default(), &default_mix(), per_team);
+            let (mut state, _, _) = env.reset();
+            let mut rng = SmallRng::seed_from_u64(0x0e11 + per_team as u64);
+            let mut out = Vec::with_capacity(want * ROW);
+            let mut mask = vec![true; 90];
+            while out.len() / ROW < want {
+                for car in 0..state.cars.len() {
+                    if out.len() / ROW >= want {
+                        break;
+                    }
+                    let mut row = vec![0.0f32; ROW];
+                    policy.build(&state, car, &mut row, &mut mask);
+                    out.extend_from_slice(&row);
+                }
+                let actions: Vec<usize> = (0..state.cars.len())
+                    .map(|_| rng.random_range(0..90))
+                    .collect();
+                let res = env.step(&state, &actions);
+                state = res.state;
+                if res.is_terminal || res.truncated {
+                    let (s, _, _) = env.reset();
+                    state = s;
+                }
+            }
+            out
+        }
+
+        fn compare(
+            label: &str,
+            a: &[f32],
+            b: &[f32],
+            lpr: usize,
+            rows: usize,
+            pick_a: &[usize],
+            pick_b: &[usize],
+        ) {
+            assert_eq!(a.len(), b.len(), "{label} logit len");
+            let mut max_abs = 0.0f32;
+            let mut arg_agree = 0usize;
+            for r in 0..rows {
+                let aa = &a[r * lpr..(r + 1) * lpr];
+                let bb = &b[r * lpr..(r + 1) * lpr];
+                for i in 0..lpr {
+                    max_abs = max_abs.max((aa[i] - bb[i]).abs());
+                }
+                if argmax(aa) == argmax(bb) {
+                    arg_agree += 1;
+                }
+            }
+            let frac = arg_agree as f64 / rows as f64;
+            assert!(max_abs <= 1e-4, "{label} max |d|={max_abs}");
+            assert!(frac >= 0.999, "{label} argmax agree {frac}");
+            // Picks under the same seed must match on rows where argmax agrees.
+            for r in 0..rows {
+                let aa = &a[r * lpr..(r + 1) * lpr];
+                let bb = &b[r * lpr..(r + 1) * lpr];
+                if argmax(aa) == argmax(bb) {
+                    assert_eq!(pick_a[r], pick_b[r], "{label} pick row {r}");
+                }
+            }
+        }
+
+        fn logits_of(policy: &NfPolicy, obs: &[f32], rows: usize) -> Vec<f32> {
+            let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+            for r in 0..rows {
+                groups.entry(obs[r * ROW] as usize).or_default().push(r);
+            }
+            let lpr = Kind::Nexto.logits_per_row();
+            let mut out = vec![0.0f32; rows * lpr];
+            for (ents, idx) in groups {
+                let (q, kv, mk) = pack_nf_group(obs, &idx, ents);
+                let logits = policy.model.logits(ents, &q, &kv, &mk, idx.len());
+                for (j, &r) in idx.iter().enumerate() {
+                    out[r * lpr..(r + 1) * lpr].copy_from_slice(&logits[j * lpr..(j + 1) * lpr]);
+                }
+            }
+            out
+        }
+
+        for per_team in [2usize, 3] {
+            let obs = collect_rows(per_team, 2000, &single);
+            let rows = 2000;
+            let lpr = Kind::Nexto.logits_per_row();
+            let a = logits_of(&single, &obs, rows);
+            let b = logits_of(&default_path, &obs, rows);
+            // Default config path must be bit-identical to a single module.
+            assert_eq!(a, b, "2v{per_team} default path not bit-identical");
+            let c = logits_of(&chunked, &obs, rows);
+            let mask = vec![false; rows];
+            // Stochastic picks with a fixed seed: run infer (which consumes rng).
+            // Compare greedy picks from logits plus a fresh-policy infer in stochastic
+            // mode on a copy of rows with the stoch flag set.
+            let mut stoch_obs = obs.clone();
+            for r in 0..rows {
+                stoch_obs[r * ROW + 1] = 1.0;
+            }
+            // Reload policies so rng streams start together.
+            let p0 = NfPolicy::load(Kind::Nexto, path, device, 0.0).expect("p0");
+            let p1 = NfPolicy::load_with(Kind::Nexto, path, device, 0.0, 1, 0).expect("p1");
+            let p4 = NfPolicy::load_with(Kind::Nexto, path, device, 0.0, 4, 64).expect("p4");
+            let pick0 = p0.infer(&stoch_obs, &mask, rows);
+            let pick1 = p1.infer(&stoch_obs, &mask, rows);
+            let pick4 = p4.infer(&stoch_obs, &mask, rows);
+            assert_eq!(pick0, pick1, "2v{per_team} default infer picks");
+            compare(
+                &format!("2v{per_team} chunk vs single"),
+                &a,
+                &c,
+                lpr,
+                rows,
+                &pick0,
+                &pick4,
+            );
         }
     }
 }

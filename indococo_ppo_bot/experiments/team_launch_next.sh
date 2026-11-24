@@ -17,6 +17,8 @@
 # eval commands (defaults to EVAL_OMP if that is set). EVAL_TASKSET pins evals
 # (e.g. 24-31). TRAIN_TASKSET pins the trainer. All default unset (TM11).
 # SKIP_FINALS=1 exits after TRAIN_DONE / mid bookkeeping (tests only; default 0).
+# NEXTO_REPLICAS, NEXTO_CHUNK, NF_INTRA, ASYNC, ASYNC_PRIO: optional toml
+# keys, written only when set. Defaults keep TM11 rendering.
 #
 # BT pin, fail-closed mid/guard/alarm/finals, numpy 1.26.4, CHUNK 100M, no
 # automatic follow-up: same as TM11.
@@ -133,6 +135,25 @@ mega_mode() { ev "$4" env H2H_JITTER="$GAL_JITTER" INDOCOCO_TEAM_SIZE="$1" "$EVA
 nf_mode() { # n kind ckpt games name [traj_prefix]
   local d=$NEXTO_DIR; [[ $2 == necto ]] && d=$NECTO_DIR
   ev "$5" env INDOCOCO_TEAM_SIZE="$1" ${6:+TRAJ_DUMP="$6"} "$EVAL_BIN" "$2-h2h" "$3" "$d" "$4" "$EV_THREADS"; }
+
+# Optional speed keys, written only when the matching env is set (default off).
+append_speed_toml() {
+  local f=$1
+  if [[ -n ${NF_INTRA:-} ]]; then
+    printf '\nnf_intra_threads = %s\n' "$NF_INTRA" >> "$f"
+  fi
+  if [[ "${ASYNC_PRIO:-0}" == 1 ]]; then
+    printf '\nasync_collect = true\ncollect_stream_priority = true\n' >> "$f"
+  elif [[ "${ASYNC:-0}" == 1 ]]; then
+    printf '\nasync_collect = true\n' >> "$f"
+  fi
+}
+
+append_nf_block() {
+  local f=$1
+  [[ -n ${NEXTO_REPLICAS:-} ]] && printf 'replicas = %s\n' "$NEXTO_REPLICAS" >> "$f"
+  [[ -n ${NEXTO_CHUNK:-} ]] && printf 'chunk_rows = %s\n' "$NEXTO_CHUNK" >> "$f"
+}
 source "$C/experiments/lib/mids.sh"
 source $X/guard.env
 
@@ -146,9 +167,12 @@ if [[ "${DRY_RENDER:-0}" == 1 ]]; then
   [[ -n "${GAL_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "galactus"\nkind = "galactus"\npath = "%s"\nweight = %s\n' "$GAL_DIR" "$GAL_WEIGHT" >> $X/train_tm.toml
   [[ -n "${MEGA_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "megabyte"\nkind = "megabyte"\npath = "%s"\nweight = %s\n' "$MEGA_DIR" "$MEGA_WEIGHT" >> $X/train_tm.toml
   [[ -n "${NEXTO_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "nexto"\nkind = "nexto"\npath = "%s"\nweight = %s\nstochastic = %s\n' "$NEXTO_DIR" "$NEXTO_WEIGHT" "${NEXTO_STOCH:-0.0}" >> $X/train_tm.toml
+  [[ -n "${NEXTO_WEIGHT:-}" ]] && append_nf_block $X/train_tm.toml
   [[ -n "${NECTO_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "necto"\nkind = "necto"\npath = "%s"\nweight = %s\nstochastic = %s\n' "$NECTO_DIR" "$NECTO_WEIGHT" "${NECTO_STOCH:-0.0}" >> $X/train_tm.toml
+  [[ -n "${NECTO_WEIGHT:-}" ]] && append_nf_block $X/train_tm.toml
   for e in ${EXTRA_OPPS:-}; do n=${e%%:*}
     printf '\n[[opponents.fixed]]\nname = "%s"\ncheckpoint = "%s"\nweight = %s\n' "$n" "$X/opponents/$n" "${e##*:}" >> $X/train_tm.toml; done
+  append_speed_toml $X/train_tm.toml
   log "$RUN DRY_RENDER wrote $X/train_tm.toml and $X/tm_rewards.toml"
   exit 0
 fi
@@ -170,9 +194,12 @@ while :; do
   [[ -n "${GAL_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "galactus"\nkind = "galactus"\npath = "%s"\nweight = %s\n' "$GAL_DIR" "$GAL_WEIGHT" >> $X/train_tm.toml
   [[ -n "${MEGA_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "megabyte"\nkind = "megabyte"\npath = "%s"\nweight = %s\n' "$MEGA_DIR" "$MEGA_WEIGHT" >> $X/train_tm.toml
   [[ -n "${NEXTO_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "nexto"\nkind = "nexto"\npath = "%s"\nweight = %s\nstochastic = %s\n' "$NEXTO_DIR" "$NEXTO_WEIGHT" "${NEXTO_STOCH:-0.0}" >> $X/train_tm.toml
+  [[ -n "${NEXTO_WEIGHT:-}" ]] && append_nf_block $X/train_tm.toml
   [[ -n "${NECTO_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "necto"\nkind = "necto"\npath = "%s"\nweight = %s\nstochastic = %s\n' "$NECTO_DIR" "$NECTO_WEIGHT" "${NECTO_STOCH:-0.0}" >> $X/train_tm.toml
+  [[ -n "${NECTO_WEIGHT:-}" ]] && append_nf_block $X/train_tm.toml
   for e in ${EXTRA_OPPS:-}; do n=${e%%:*}
     printf '\n[[opponents.fixed]]\nname = "%s"\ncheckpoint = "%s"\nweight = %s\n' "$n" "$X/opponents/$n" "${e##*:}" >> $X/train_tm.toml; done
+  append_speed_toml $X/train_tm.toml
   grep -qE '^epochs = 1$' $X/train_tm.toml || die "rendered train_tm.toml: epochs != 1"
   ! grep -qE '^[a-z_]*bf16 = true' $X/train_tm.toml || die "rendered train_tm.toml: bf16 on"
   log "$RUN train: $left iterations from $now"

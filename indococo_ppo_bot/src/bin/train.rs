@@ -19,6 +19,7 @@
 //! indococo-train nexto-h2h <ckpt> <nexto_dir> <games> [threads] [dump.jsonl]  # Nexto (TorchScript), team size from INDOCOCO_TEAM_SIZE
 //! indococo-train necto-h2h <ckpt> <necto_dir> <games> [threads] [dump.jsonl]  # Necto (TorchScript), same
 //! indococo-train learn-replay <train.toml> <ckpt_dir> <memory_dump> <out_dir> [seed]
+//! indococo-train nf-bench <nexto_dir> <team_size 2|3> <rows> <iters> <replicas> <intra_threads> <chunk_rows> <parallel_callers>
 //! H2H_REWARD_CONFIG=<reward toml> selects the role params.
 //! INDOCOCO_OBS_TEAM=1 indococo-train widen-team <1v1_ckpt> <dst_ckpt>  # TM1 warm start (actor+critic)
 //! INDOCOCO_OBS_TEAM=1 INDOCOCO_OBS_PRED=1 indococo-train widen-pred <235_ckpt> <dst_ckpt>  # TM3 warm start
@@ -102,6 +103,13 @@ struct TrainConfig {
     /// `cpu` forces both onto the CPU.
     #[serde(default)]
     league_bots_device: LeagueBotsDevice,
+    /// High-priority CUDA stream for collection when `async_collect` is on.
+    /// Default false keeps today's low-priority pool stream.
+    #[serde(default)]
+    collect_stream_priority: bool,
+    /// Process-global LibTorch intra-op threads. 0 = do not call set_num_threads.
+    #[serde(default)]
+    nf_intra_threads: usize,
     /// ST35: prioritized fictitious self-play over the league (replaces the
     /// static `[opponents]` weights for every rollout pick). See
     /// `indococo_bot::pfsp`.
@@ -231,6 +239,16 @@ struct ExternalOpponentConfig {
     /// the eval harness). Default false so existing rollouts stay identical.
     #[serde(default)]
     kickoff_script: bool,
+    /// Nexto / Necto: copies of the TorchScript module. Default 1 (today).
+    #[serde(default = "default_nf_replicas")]
+    replicas: usize,
+    /// Nexto / Necto: infer chunk size. 0 = off (today).
+    #[serde(default)]
+    chunk_rows: usize,
+}
+
+fn default_nf_replicas() -> usize {
+    1
 }
 
 /// `RIPPLE_WEIGHT` overrides a toml `kind = "ripple"` entry. A positive value
@@ -263,6 +281,8 @@ fn ripple_external_specs(cfg: &OpponentsConfig) -> Vec<ExternalOpponentConfig> {
                 weight,
                 stochastic: 0.0,
                 kickoff_script: false,
+                replicas: 1,
+                chunk_rows: 0,
             });
         }
     }
@@ -308,10 +328,26 @@ fn load_external_opponents(
                         LeagueBotsDevice::Cpu => tch::Device::Cpu,
                         LeagueBotsDevice::Default | LeagueBotsDevice::Cuda => indococo_bot::nectofam::NfModel::default_device(),
                     };
-                    let policy = indococo_bot::nectofam::NfPolicy::load(kind, &o.path, tch_dev, o.stochastic)
+                    let policy = indococo_bot::nectofam::NfPolicy::load_with(
+                        kind,
+                        &o.path,
+                        tch_dev,
+                        o.stochastic,
+                        o.replicas.max(1),
+                        o.chunk_rows,
+                    )
                         .unwrap_or_else(|e| panic!("opponent {}: {e}", o.name))
                         .with_kickoff_script(o.kickoff_script);
-                    println!("LEAGUE {} ({k}): delay {}, stochastic {}, kickoff_script {}, device {:?}", o.name, policy.model.kind.delay(), policy.stochastic, policy.kickoff_script, tch_dev);
+                    println!(
+                        "LEAGUE {} ({k}): delay {}, stochastic {}, kickoff_script {}, device {:?}, replicas {}, chunk_rows {}",
+                        o.name,
+                        policy.model.kind.delay(),
+                        policy.stochastic,
+                        policy.kickoff_script,
+                        tch_dev,
+                        o.replicas.max(1),
+                        o.chunk_rows
+                    );
                     std::sync::Arc::new(policy)
                 }
                 other => panic!("opponent {}: unknown external kind {other:?}", o.name),
@@ -569,7 +605,17 @@ fn print_tf32_status() {
 
 fn train_cfg(cfg: TrainConfig) {
     print_tf32_status();
-    if cfg.async_collect {
+    if cfg.nf_intra_threads > 0 {
+        tch::set_num_threads(cfg.nf_intra_threads as i32);
+        println!(
+            "nf_intra_threads={} tch::get_num_threads()={}",
+            cfg.nf_intra_threads,
+            tch::get_num_threads()
+        );
+    }
+    if cfg.async_collect && cfg.collect_stream_priority {
+        rlgymppo::set_collect_stream_hook(indococo_bot::install_league_collect_stream_high);
+    } else if cfg.async_collect {
         rlgymppo::set_collect_stream_hook(indococo_bot::install_league_collect_stream);
     } else {
         rlgymppo::clear_collect_stream_hook();
@@ -1580,18 +1626,126 @@ fn newest_checkpoint(dir: &Path) -> Option<PathBuf> {
 /// folder starts from a fresh init. Prints one `SPEED` line per iteration.
 /// Iteration 1 has overlap 0. Later iterations report how much of that
 /// rollout's collection ran during the previous update.
-fn speed_variants() -> [(&'static str, bool, LeagueBotsDevice); 6] {
+/// CPU microbench of Nexto `infer`. `intra_threads = 0` leaves LibTorch's
+/// default; the process-wide thread count is always printed. `parallel_callers`
+/// threads call `infer` at once (2 mimics the two collector pools).
+fn nf_bench(
+    nexto_dir: &Path,
+    team_size: usize,
+    rows: usize,
+    iters: usize,
+    replicas: usize,
+    intra_threads: usize,
+    chunk_rows: usize,
+    parallel_callers: usize,
+) {
+    use indococo_bot::env::create_env_sized;
+    use indococo_bot::nectofam::{Kind, NfPolicy, ROW};
+    use rlgymppo::ExternalPolicy;
+    use std::time::Instant;
+
+    assert!(
+        team_size == 2 || team_size == 3,
+        "team_size must be 2 or 3, got {team_size}"
+    );
+    assert!(rows > 0 && iters > 0, "rows and iters must be positive");
+    init_from_default(true).expect("load collision meshes");
+    if intra_threads > 0 {
+        tch::set_num_threads(intra_threads as i32);
+    }
+    println!(
+        "nf-bench dir={} team_size={team_size} rows={rows} iters={iters} replicas={} intra_threads={intra_threads} chunk_rows={chunk_rows} callers={} tch::get_num_threads()={}",
+        nexto_dir.display(),
+        replicas.max(1),
+        parallel_callers.max(1),
+        tch::get_num_threads()
+    );
+    let policy = NfPolicy::load_with(
+        Kind::Nexto,
+        nexto_dir,
+        tch::Device::Cpu,
+        0.0,
+        replicas.max(1),
+        chunk_rows,
+    )
+    .unwrap_or_else(|e| panic!("load nexto: {e}"));
+
+    let mut obs = vec![0.0f32; rows * ROW];
+    let mut mask = vec![true; 90];
+    let mut env = create_env_sized(&RewardConfig::default(), &default_mix(), team_size);
+    let (mut state, _, _) = env.reset();
+    let mut rng = SmallRng::seed_from_u64(0x6e58_0b00);
+    let mut filled = 0usize;
+    while filled < rows {
+        for car in 0..state.cars.len() {
+            if filled >= rows {
+                break;
+            }
+            let start = filled * ROW;
+            policy.build(&state, car, &mut obs[start..start + ROW], &mut mask);
+            filled += 1;
+        }
+        let actions: Vec<usize> = (0..state.cars.len())
+            .map(|_| rng.random_range(0..90))
+            .collect();
+        let res = env.step(&state, &actions);
+        state = res.state;
+        if res.is_terminal || res.truncated {
+            let (s, _, _) = env.reset();
+            state = s;
+        }
+    }
+    let dummy_masks = vec![true; rows];
+    // Warmup.
+    let _ = policy.infer(&obs, &dummy_masks, rows);
+
+    let callers = parallel_callers.max(1);
+    let mut times_ms = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let t0 = Instant::now();
+        std::thread::scope(|scope| {
+            for _ in 0..callers {
+                scope.spawn(|| {
+                    let _ = policy.infer(&obs, &dummy_masks, rows);
+                });
+            }
+        });
+        times_ms.push(t0.elapsed().as_secs_f64() * 1e3);
+    }
+    let mut sorted = times_ms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = sorted.len();
+    let median = if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        0.5 * (sorted[n / 2 - 1] + sorted[n / 2])
+    };
+    let mean = times_ms.iter().sum::<f64>() / n as f64;
+    println!(
+        "nf-bench ms_per_round n={n} min={:.3} median={:.3} mean={:.3} max={:.3} callers={callers}",
+        sorted[0],
+        median,
+        mean,
+        sorted[n - 1]
+    );
+    for (i, ms) in times_ms.iter().enumerate() {
+        println!("  iter {i} {ms:.3} ms");
+    }
+}
+
+fn speed_variants() -> [(&'static str, bool, bool, LeagueBotsDevice); 7] {
     [
-        ("off", false, LeagueBotsDevice::Default),
-        ("async", true, LeagueBotsDevice::Default),
-        ("league_cuda", false, LeagueBotsDevice::Cuda),
-        ("league_cpu", false, LeagueBotsDevice::Cpu),
-        ("both", true, LeagueBotsDevice::Cuda),
-        ("both_cpu", true, LeagueBotsDevice::Cpu),
+        ("off", false, false, LeagueBotsDevice::Default),
+        ("async", true, false, LeagueBotsDevice::Default),
+        ("async_prio", true, true, LeagueBotsDevice::Default),
+        ("league_cuda", false, false, LeagueBotsDevice::Cuda),
+        ("league_cpu", false, false, LeagueBotsDevice::Cpu),
+        ("both", true, false, LeagueBotsDevice::Cuda),
+        ("both_cpu", true, false, LeagueBotsDevice::Cpu),
     ]
 }
 
-fn parse_speed_variants(spec: Option<&str>) -> Vec<(&'static str, bool, LeagueBotsDevice)> {
+fn parse_speed_variants(spec: Option<&str>) -> Vec<(&'static str, bool, bool, LeagueBotsDevice)> {
     let all = speed_variants();
     let Some(spec) = spec.filter(|s| !s.is_empty()) else {
         return all.to_vec();
@@ -1601,7 +1755,7 @@ fn parse_speed_variants(spec: Option<&str>) -> Vec<(&'static str, bool, LeagueBo
             let name = name.trim();
             all.iter()
                 .copied()
-                .find(|(n, _, _)| *n == name)
+                .find(|(n, _, _, _)| *n == name)
                 .unwrap_or_else(|| panic!("unknown SPEED_VARIANTS entry {name:?}"))
         })
         .collect()
@@ -1618,9 +1772,9 @@ fn speed_bench(config: &Path, iters: u64) {
     let variants = parse_speed_variants(std::env::var("SPEED_VARIANTS").ok().as_deref());
     println!(
         "speed-bench iters={iters} variants={} (iteration 1 overlap is 0; later lines are the overlapped collect)",
-        variants.iter().map(|(n, _, _)| *n).collect::<Vec<_>>().join(",")
+        variants.iter().map(|(n, _, _, _)| *n).collect::<Vec<_>>().join(",")
     );
-    for (name, async_collect, league) in variants {
+    for (name, async_collect, collect_stream_priority, league) in variants {
         let mut cfg: TrainConfig = toml::from_str(&text).expect("parse train config");
         // temp_dir honors TMPDIR, which the scratch layout sets to speedup_work/tmp.
         let dir = std::env::temp_dir().join(format!(
@@ -1634,6 +1788,7 @@ fn speed_bench(config: &Path, iters: u64) {
         std::fs::create_dir_all(&dir).expect("temp checkpoint dir");
         let live_checkpoints = cfg.checkpoints.clone();
         cfg.async_collect = async_collect;
+        cfg.collect_stream_priority = collect_stream_priority;
         cfg.league_bots_device = league;
         cfg.iterations = iters;
         cfg.critic_warmup_steps = 0;
@@ -1658,7 +1813,10 @@ fn speed_bench(config: &Path, iters: u64) {
             );
         }
         unsafe { std::env::set_var("INDOCOCO_METRICS", dir.join("metrics.jsonl")); }
-        println!("VARIANT {name} async_collect={async_collect} league_bots_device={league:?} dir={}", dir.display());
+        println!(
+            "VARIANT {name} async_collect={async_collect} collect_stream_priority={collect_stream_priority} league_bots_device={league:?} dir={}",
+            dir.display()
+        );
         train_cfg(cfg);
         if speed_bench_keep() {
             println!("VARIANT {name} kept {}", dir.display());
@@ -1807,6 +1965,16 @@ fn main() {
             args.get(5).map(Path::new),
         ),
         "speed-bench" => speed_bench(Path::new(arg(1)), arg(2).parse().expect("iters")),
+        "nf-bench" => nf_bench(
+            Path::new(arg(1)),
+            arg(2).parse().expect("team_size"),
+            arg(3).parse().expect("rows"),
+            arg(4).parse().expect("iters"),
+            arg(5).parse().expect("replicas"),
+            arg(6).parse().expect("intra_threads"),
+            arg(7).parse().expect("chunk_rows"),
+            arg(8).parse().expect("parallel_callers"),
+        ),
         "learn-replay" => learn_replay(
             Path::new(arg(1)),
             Path::new(arg(2)),
@@ -2820,6 +2988,8 @@ mod tests {
         assert!(c.opponents.fixed.is_empty());
         assert_eq!(c.state_setters, default_mix());
         assert!(!c.async_collect);
+        assert!(!c.collect_stream_priority);
+        assert_eq!(c.nf_intra_threads, 0);
         assert_eq!(c.league_bots_device, LeagueBotsDevice::Default);
     }
 
@@ -2831,21 +3001,29 @@ mod tests {
         let cpu = parse("league_bots_device = \"cpu\"\n");
         assert_eq!(cpu.league_bots_device, LeagueBotsDevice::Cpu);
         assert!(!cpu.async_collect);
+        assert!(!cpu.collect_stream_priority);
+        let prio = parse("async_collect = true\ncollect_stream_priority = true\nnf_intra_threads = 4\n");
+        assert!(prio.async_collect);
+        assert!(prio.collect_stream_priority);
+        assert_eq!(prio.nf_intra_threads, 4);
     }
 
     #[test]
     fn speed_variants_default_and_subset() {
         let default = parse_speed_variants(None);
         assert_eq!(
-            default.iter().map(|(n, _, _)| *n).collect::<Vec<_>>(),
-            ["off", "async", "league_cuda", "league_cpu", "both", "both_cpu"]
+            default.iter().map(|(n, _, _, _)| *n).collect::<Vec<_>>(),
+            ["off", "async", "async_prio", "league_cuda", "league_cpu", "both", "both_cpu"]
         );
-        let subset = parse_speed_variants(Some("off,async"));
-        assert_eq!(subset.len(), 2);
+        let subset = parse_speed_variants(Some("off,async,async_prio"));
+        assert_eq!(subset.len(), 3);
         assert_eq!(subset[0].0, "off");
         assert!(!subset[0].1);
+        assert!(!subset[0].2);
         assert!(subset[1].1);
-        assert_eq!(parse_speed_variants(Some("")).len(), 6);
+        assert!(!subset[1].2);
+        assert!(subset[2].1 && subset[2].2);
+        assert_eq!(parse_speed_variants(Some("")).len(), 7);
     }
 
     #[test]

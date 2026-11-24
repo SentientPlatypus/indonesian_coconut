@@ -48,6 +48,25 @@ void* ripple_stream_create(int device) {
 #endif
 }
 
+// `high != 0` requests a high-priority stream from the same pool.
+void* ripple_stream_create_priority(int device, int high) {
+#if defined(RIPPLE_LIBTORCH_CUDA)
+    if (!at::globalContext().hasCUDA()) {
+        return nullptr;
+    }
+    try {
+        auto stream = c10::cuda::getStreamFromPool(high != 0, device);
+        return new c10::cuda::CUDAStream(stream);
+    } catch (...) {
+        return nullptr;
+    }
+#else
+    (void)device;
+    (void)high;
+    return nullptr;
+#endif
+}
+
 void ripple_stream_set(void* stream) {
 #if defined(RIPPLE_LIBTORCH_CUDA)
     if (stream != nullptr) {

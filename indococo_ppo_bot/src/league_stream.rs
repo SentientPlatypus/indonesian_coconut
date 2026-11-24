@@ -23,9 +23,14 @@ unsafe extern "C" {
     fn ripple_allow_tf32_cudnn() -> i32;
     fn ripple_set_allow_tf32_cudnn(enabled: i32);
     fn ripple_stream_create(device: i32) -> *mut c_void;
+    fn ripple_stream_create_priority(device: i32, high: i32) -> *mut c_void;
     fn ripple_stream_set(stream: *mut c_void);
     fn ripple_stream_restore_default(device: i32);
 }
+
+/// When true, collector / league side streams come from the high-priority pool.
+static COLLECT_STREAM_HIGH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// LibTorch's current process-wide TF32 flags. Printed at trainer start
 /// so a silent disable is visible.
@@ -80,12 +85,27 @@ impl Drop for Tf32Guard {
     }
 }
 
-fn stream_of(slot: &RefCell<Option<*mut c_void>>) -> *mut c_void {
-    let mut slot = slot.borrow_mut();
-    if slot.is_none() {
-        *slot = Some(unsafe { ripple_stream_create(0) });
+fn create_stream() -> *mut c_void {
+    unsafe {
+        if COLLECT_STREAM_HIGH.load(std::sync::atomic::Ordering::Relaxed) {
+            ripple_stream_create_priority(0, 1)
+        } else {
+            ripple_stream_create(0)
+        }
     }
-    slot.unwrap_or(std::ptr::null_mut())
+}
+
+fn stream_of(slot: &RefCell<Option<(bool, *mut c_void)>>) -> *mut c_void {
+    let want = COLLECT_STREAM_HIGH.load(std::sync::atomic::Ordering::Relaxed);
+    let mut slot = slot.borrow_mut();
+    match *slot {
+        Some((pri, ptr)) if pri == want && !ptr.is_null() => ptr,
+        _ => {
+            let ptr = create_stream();
+            *slot = Some((want, ptr));
+            ptr
+        }
+    }
 }
 
 fn set_stream(ptr: *mut c_void) {
@@ -97,8 +117,20 @@ fn set_stream(ptr: *mut c_void) {
 /// Current-thread collector stream. The learner registers this as the
 /// collection-thread hook. A null stream (no CUDA) leaves the thread alone.
 pub fn install_collect_stream() {
+    COLLECT_STREAM_HIGH.store(false, std::sync::atomic::Ordering::Relaxed);
     std::thread_local! {
-        static STREAM: RefCell<Option<*mut c_void>> = const { RefCell::new(None) };
+        static STREAM: RefCell<Option<(bool, *mut c_void)>> = const { RefCell::new(None) };
+    }
+    STREAM.with(|slot| set_stream(stream_of(slot)));
+}
+
+/// Same hook as [`install_collect_stream`], but the collector stream is taken
+/// from the high-priority pool. Used when `async_collect` and
+/// `collect_stream_priority` are both on.
+pub fn install_collect_stream_high() {
+    COLLECT_STREAM_HIGH.store(true, std::sync::atomic::Ordering::Relaxed);
+    std::thread_local! {
+        static STREAM: RefCell<Option<(bool, *mut c_void)>> = const { RefCell::new(None) };
     }
     STREAM.with(|slot| set_stream(stream_of(slot)));
 }
@@ -108,7 +140,7 @@ pub fn install_collect_stream() {
 /// learner thread that is the default stream.
 pub fn with_league_forward<R>(f: impl FnOnce() -> R) -> R {
     std::thread_local! {
-        static STREAM: RefCell<Option<*mut c_void>> = const { RefCell::new(None) };
+        static STREAM: RefCell<Option<(bool, *mut c_void)>> = const { RefCell::new(None) };
     }
     let _tf32 = Tf32Guard::enter();
     STREAM.with(|slot| set_stream(stream_of(slot)));

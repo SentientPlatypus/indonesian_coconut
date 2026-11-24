@@ -4467,6 +4467,44 @@ touched. Every lever defaults off.
   (default false) is the key sub-lever for the Nov 10 collect inflation.
   No bf16, 1 PPO epoch, CHUNK 100M, numpy 1.26.4.
 
+### Flags (all default off; `team_launch_next.sh` only)
+
+- `NEXTO_REPLICAS`, `NEXTO_CHUNK`, `NF_INTRA`: written into the nexto/necto
+  external block and top-level `nf_intra_threads` only when set. Defaults
+  (`replicas = 1`, `chunk_rows = 0`, no `nf_intra_threads`) render as today.
+- `ASYNC=1` writes `async_collect = true`. `ASYNC_PRIO=1` also writes
+  `collect_stream_priority = true`.
+- Official `team_launch_tm11.sh` is not edited.
+
+### Phase 1 measurements (Nov 24, 2026)
+
+- **N0 nf-bench** (CPU, nice 19, during TM11 train, not mid; 240-run grid;
+  default `tch::get_num_threads()=16`; callers=2). Baseline (1/0/0) 2v2/384
+  median 51.157 ms. Best deploy combo **replicas=8, intra=2, chunk=64**:
+  23.916 ms (2.14×) on 2v2/384 and 38.539 ms (2.14×) on 3v3/576.
+- **Parity:** `nf_replica_chunk_parity` with `NEXTO_DIR` set, 2,000 rows
+  2v2 and 3v3, passed in 2.70 s (default path bit-identical; chunked path
+  within the stated 1e-4 / 99.9% argmax tolerances).
+- **nexto-h2h** 40-game 2v2, TM10 scratch ckpt, defaults on the new binary
+  vs `48e4dd3H1`: wr 0.600 vs 0.625, |Δ|=0.025, 2σ≈0.218. PASS within 2σ.
+  Not bitwise identical (`jitter=true`).
+- **Nexto-only collect**, mb 50k, mid windows (GPU free, CPU contended;
+  different mids, not interleaved). Base `48e4dd3H1` (20:43–20:52 UTC, 4
+  iters during mid evals): collection median 117.83 s (137.55, 93.92,
+  132.82, 102.84). New 8/2/64 (21:27–21:34 UTC, 12 iters until TM11
+  returned; started ~4 min into the mid): collection median 27.52 s,
+  0.23× base (first 4: median 36.85 s, 0.31×). Pass (≤ 0.5×) on medians.
+  The toml asked for 4 iters; `critic_warmup_steps` on the TM10 ckpt
+  scheduled a 67-iter policy_lr=0 warmup, so the new arm kept going until
+  the watchdog aborted. Collection timing is still valid (Nexto infer is
+  unchanged by critic-only updates). Bench scripts now force
+  `critic_warmup_steps = 0`.
+- **Async + `collect_stream_priority`:** implemented, default off; paired
+  mid-window s/iter benches and the lag/KL check are still pending (next
+  mid; warmup-0 so they stop at the requested iteration count).
+- Optional N-GPU Nexto retrace was not started (mid windows were used
+  for collect; 45 min cap still open).
+
 ## TM12 — Cross-exam note: Nexto kickoff fidelity + role-aware critic (staged 2026-11-24)
 
 Goal (user): generalizing 2v2/3v3 team play; Nexto is the key external opponent; success = Nexto > 0.55 (2v2) / 0.45 (3v3) for

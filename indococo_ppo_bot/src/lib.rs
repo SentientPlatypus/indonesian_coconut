@@ -44,6 +44,12 @@ pub fn install_league_collect_stream() {
     league_stream::install_collect_stream();
 }
 
+/// High-priority collection stream for `async_collect` + `collect_stream_priority`.
+#[cfg(feature = "torch")]
+pub fn install_league_collect_stream_high() {
+    league_stream::install_collect_stream_high();
+}
+
 /// Process-wide LibTorch TF32 flags, for the trainer start banner.
 #[cfg(feature = "torch")]
 pub fn tf32_cublas() -> i32 {
