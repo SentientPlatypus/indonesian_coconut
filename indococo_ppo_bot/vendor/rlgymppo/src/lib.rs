@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(not(feature = "tui"))]
 use std::io::{Read, stdin};
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ pub use agent::self_play::{FixedOpponent, OpponentMix, OpponentPick, SelfPlayCon
 pub use agent::skill_tracker::SkillTrackerConfig;
 use agent::skill_tracker::{AsyncSkillTracker, SkillTrackerUpdate, report_skill_ratings};
 pub use agent::transfer_learn::{TeacherConfig, TransferLearnConfig};
-use base::{Memory, TerminalState};
+pub use base::{Memory, TerminalState};
 pub use burn;
 use burn::module::{Module, Quantizer};
 use burn::nn::modules::norm::NormalizationConfig;
@@ -75,6 +75,23 @@ pub fn cumulative_steps() -> u64 {
 
 fn publish_cumulative_steps(steps: u64) {
     CUMULATIVE_STEPS.store(steps, Ordering::Relaxed);
+}
+
+static DUMPED_MEMORY: AtomicBool = AtomicBool::new(false);
+
+/// Write the first collected rollout to `INDOCOCO_DUMP_MEMORY` (a directory)
+/// once per process, then continue training.
+fn maybe_dump_memory(memory: &Memory) {
+    let Some(path) = std::env::var_os("INDOCOCO_DUMP_MEMORY") else {
+        return;
+    };
+    if DUMPED_MEMORY.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    memory
+        .dump_to_dir(Path::new(&path))
+        .unwrap_or_else(|e| panic!("INDOCOCO_DUMP_MEMORY {}: {e}", Path::new(&path).display()));
+    println!("Dumped learner memory to {}", Path::new(&path).display());
 }
 
 /// Register the function a collection thread calls so its CUDA launches use
@@ -1142,6 +1159,51 @@ where
         }
     }
 
+    /// Run exactly one PPO update on a dumped rollout and write `actor.bpk`,
+    /// `critic.bpk`, `metrics.json`, and `old_values.f32` to `out_dir`.
+    pub fn learn_replay(&mut self, memory: &Memory, seed: u64, out_dir: &Path) {
+        std::fs::create_dir_all(out_dir).expect("learn-replay out dir");
+        memory
+            .validate()
+            .unwrap_or_else(|e| panic!("dumped memory is invalid: {e}"));
+        self.rng = SmallRng::seed_from_u64(seed);
+        let mut metrics = Report::default();
+        let is_first_iteration = self.stats.cumulative_model_updates == 0;
+        let (model, _steps) = self.ppo.learn(
+            self.model.clone(),
+            memory,
+            &mut self.rng,
+            &mut metrics,
+            &mut self.stats,
+            is_first_iteration,
+        );
+        self.model = model;
+        let ready = self.model.valid();
+        ready
+            .actor
+            .clone()
+            .save_file(out_dir.join("actor.bpk"))
+            .expect("save actor.bpk");
+        ready
+            .critic
+            .clone()
+            .save_file(out_dir.join("critic.bpk"))
+            .expect("save critic.bpk");
+        let file = std::fs::File::create(out_dir.join("metrics.json")).expect("metrics.json");
+        serde_json::to_writer_pretty(file, &metrics.to_flat_map()).expect("write metrics.json");
+        let values = self
+            .ppo
+            .last_old_values
+            .as_ref()
+            .expect("learn-replay missing old_values");
+        let mut bytes = Vec::with_capacity(values.len() * 4);
+        for &x in values {
+            bytes.extend_from_slice(&x.to_le_bytes());
+        }
+        std::fs::write(out_dir.join("old_values.f32"), bytes).expect("old_values.f32");
+        println!("learn-replay wrote {}", out_dir.display());
+    }
+
     fn print_controls_prompt() {
         #[cfg(not(feature = "tui"))]
         {
@@ -1285,6 +1347,7 @@ where
         self.publish_renderer(&model);
         let play = self.pick_self_play();
         let (memory, report) = self.collector.run(model, play);
+        maybe_dump_memory(&memory);
         let elapsed = start.elapsed().as_secs_f64();
         (memory.clone(), report, elapsed)
     }
@@ -1626,6 +1689,7 @@ where
 
             // collect steps
             let (memory, mut metrics) = self.collector.run(nodiff_model, self_play);
+            maybe_dump_memory(&memory);
             let collect_elapsed = collect_start.elapsed().as_secs_f64();
 
             // train the model

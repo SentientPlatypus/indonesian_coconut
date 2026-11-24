@@ -4405,3 +4405,65 @@ Switch the training Galactus (and every Galactus number we act on) to the C++ en
 3. **Randomize** (physics or contact noise).
    - Cost: about 1 day.
    - It does not remove the systematic biases (pitch lock, ground forces). At best it makes policies robust and still leaves the Rust number untrustworthy.
+
+## Trainer speedups (Nov 24–25, 2026) — Cross-exam note
+
+Phase 1 implements concurrent mid-evals, a Nexto inference fix, and
+`async_collect` plus a high-priority collect stream. The smaller critic,
+gated learner items, and 100M A/B arms are phase 2. Live TM11 is not
+touched. Every lever defaults off.
+
+### Cross-exam (three legs, per the Nov 12 rule)
+
+- **Discord (read-only, Nov 24):** The 1M sps claims are mostly GPU-resident
+  sim + rewards + learner, captured with CUDA graphs. Bjarne (RLBot, 11/16):
+  all 29 rewards as GPU tensor ops in the same CUDA graph as the sim, about
+  895k steps/s on one RTX 5090 (8,192 arenas, 4 cars each). Skye (RLGym, 11/8):
+  RocketChad3 "1M player-SPS on a single GPU with 1M param attention" (per-car
+  count). blueshift (RLGym, 11/18): 600k now, as high as 1M on a 4090 once
+  both sim and training ran on the GPU. Foxe and naraeh wrote CUDA ports of
+  RocketSim; naraeh's is bit-exact, ~4–5M ticks/s on a 3080, 1v1 only for now.
+  CPU-sim setups top out around 500k overall and often quote collection-only
+  (~2× the overall figure). PigMasta (buta-ppo): "just over 1m collection sps"
+  but 650–710k total; he credits stepping physics for one group of envs while
+  the GPU runs inference for the other, bf16, CUDA graphs, RocketSim v3, and
+  Linux over Windows. whinerbox (4090, 10M-param net): 500k collection, 240k
+  overall. Stonki (5080, 650k-param policy): ~500k overall. CryyStall (RLBot,
+  9/7): millions of sps take good hardware plus closed-source optimizations.
+- **Outside research:** buta-ppo, RLGymPPO_CPP, and GigaLearn READMEs (notes
+  in `/workspace/sps_1m_research.md`). buta-ppo's published overall is ~580k
+  sps with a ~6M-param net, bf16, and CUDA graphs; on our L4 at our 15.6M-param
+  net size the same style of setup only reached ~111k. Our box does ~1.3M
+  steps/s of pure physics on 8 threads, so the sim is not the bottleneck.
+  APPO/IMPALA-style literature treats one-update policy lag as benign when
+  PPO clipping is on (clip fraction here is ~0.001, KL ~1.4e-4). That is the
+  reason `async_collect` is a speed lever rather than a learning-rule change;
+  quality is still gated on a later A/B, not assumed.
+- **Code + logs (this plan, `/workspace/speedup_plan.md`):** TM11 last
+  iteration: `Timing/consumption` 2.18 s, of which the logged PPO phases
+  (value inference 0.27, upload 0.22, staging 0.11, enqueue 0.25, optimizer
+  0.002, GAE 0.002) leave ~1.4 s in the final `Transaction::execute()`
+  readback. The learner is GPU-bound, not launch-bound, so CUDA graphs are
+  expected 0–5% and gated on a profile run (GO only if launch-gap share
+  ≥ 15%). Nexto: `NfModel { module: Mutex<CModule> }`, 2 pools serialize on
+  one lock, inference 17.1 s of a 19.6 s collect. `async_collect` already
+  exists (`learn_overlapped`) and was benchmarked Nov 10: collection inflated
+  from 2–4 s to 7.9–11.9 s because the collect stream is low-priority
+  (`getStreamFromPool(false, …)`). Mid-evals are CPU-only (flex + CPU
+  libtorch, EV_THREADS=8) and compete for CPU, never GPU. TM11 holds 12.2 /
+  23.0 GiB, so every GPU test while it lives uses `mini_batch_size = 50_000`
+  and a pid-only memory watchdog.
+
+### Reconciliation (phase 1)
+
+- Do not chase a GPU sim or CUDA graphs in this phase. Profile first; graphs
+  are a hard NO-GO unless the launch-gap share is ≥ 15%.
+- Concurrent mids (`CONCURRENT_MIDS`, default 0) hide the ~9 min mid-eval
+  pause. One-chunk lag on the guard rollback is documented and accepted.
+- Nexto: replica `Mutex`es, optional `chunk_rows`, and `nf_intra_threads`,
+  all defaulting to today's behavior. Optional CUDA retrace is time-boxed
+  to 45 min and may come back NO-GO.
+- `async_collect` stays default-off. The new `collect_stream_priority` flag
+  (default false) is the key sub-lever for the Nov 10 collect inflation.
+  No bf16, 1 PPO epoch, CHUNK 100M, numpy 1.26.4.
+

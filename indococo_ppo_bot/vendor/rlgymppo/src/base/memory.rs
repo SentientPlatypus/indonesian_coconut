@@ -1,6 +1,11 @@
+use std::fs;
+use std::io;
+use std::path::Path;
+
 use burn::prelude::*;
 use burn::tensor::{DType, Device, f16};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Terminal-state encoding.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -592,7 +597,210 @@ impl Memory {
         self.old_states
             .shrink_to(self.baseline_steps * self.old_state_width);
     }
+
+    /// Write this rollout to `dir` as a JSON header plus little-endian raw
+    /// buffers. Used by `INDOCOCO_DUMP_MEMORY` and `learn-replay`.
+    pub fn dump_to_dir(&self, dir: &Path) -> io::Result<()> {
+        fs::create_dir_all(dir)?;
+        let rows = self.len();
+        let header = MemoryDumpHeader {
+            version: 1,
+            endian: "little".into(),
+            rows,
+            state_width: self.state_width,
+            action_mask_width: self.action_mask_width,
+            old_state_width: self.old_state_width,
+            truncations: self.truncation_len(),
+        };
+        fs::write(
+            dir.join("header.json"),
+            serde_json::to_string_pretty(&header).expect("memory dump header"),
+        )?;
+        write_f32s(&dir.join("states.f32"), &self.states)?;
+        write_u64s(
+            &dir.join("actions.u64"),
+            self.actions.iter().map(|&a| a as u64),
+            self.actions.len(),
+        )?;
+        write_f32s(&dir.join("log_probs.f32"), &self.log_probs)?;
+        write_f32s(&dir.join("rewards.f32"), &self.rewards)?;
+        write_u8s(
+            &dir.join("terminals.u8"),
+            &self
+                .terminals
+                .iter()
+                .map(|t| terminal_to_wire(*t))
+                .collect::<Vec<_>>(),
+        )?;
+        write_f32s(&dir.join("trunc_next_states.f32"), &self.trunc_next_states)?;
+        write_u8s(&dir.join("action_masks.u8"), &self.action_masks)?;
+        write_f32s(&dir.join("old_states.f32"), &self.old_states)?;
+        Ok(())
+    }
+
+    /// Load a rollout written by [`Self::dump_to_dir`].
+    pub fn load_from_dir(dir: &Path) -> io::Result<Self> {
+        let header: MemoryDumpHeader = serde_json::from_slice(&fs::read(dir.join("header.json"))?)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        if header.version != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported memory dump version {}", header.version),
+            ));
+        }
+        if header.endian != "little" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported endian {}", header.endian),
+            ));
+        }
+        let rows = header.rows;
+        let states = read_f32s(&dir.join("states.f32"), rows.saturating_mul(header.state_width))?;
+        let actions_u64 = read_u64s(&dir.join("actions.u64"), rows)?;
+        let actions = actions_u64
+            .into_iter()
+            .map(|a| usize::try_from(a).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)))
+            .collect::<io::Result<Vec<_>>>()?;
+        let log_probs = read_f32s(&dir.join("log_probs.f32"), rows)?;
+        let rewards = read_f32s(&dir.join("rewards.f32"), rows)?;
+        let terminals = read_u8s(&dir.join("terminals.u8"), rows)?
+            .into_iter()
+            .map(|b| {
+                terminal_from_wire(b).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let trunc_next_states = read_f32s(
+            &dir.join("trunc_next_states.f32"),
+            header.truncations.saturating_mul(header.state_width),
+        )?;
+        let action_masks = read_u8s(
+            &dir.join("action_masks.u8"),
+            rows.saturating_mul(header.action_mask_width),
+        )?;
+        let old_states = read_f32s(
+            &dir.join("old_states.f32"),
+            rows.saturating_mul(header.old_state_width),
+        )?;
+        let memory = Self {
+            states,
+            state_width: header.state_width,
+            actions,
+            log_probs,
+            rewards,
+            terminals,
+            trunc_next_states,
+            action_masks,
+            action_mask_width: header.action_mask_width,
+            old_states,
+            old_state_width: header.old_state_width,
+            baseline_steps: rows,
+        };
+        memory
+            .validate()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(memory)
+    }
 }
+
+fn terminal_to_wire(terminal: TerminalState) -> u8 {
+    match terminal {
+        TerminalState::None => 0,
+        TerminalState::Normal => 1,
+        TerminalState::Truncated => 2,
+    }
+}
+
+fn terminal_from_wire(value: u8) -> Result<TerminalState, String> {
+    match value {
+        0 => Ok(TerminalState::None),
+        1 => Ok(TerminalState::Normal),
+        2 => Ok(TerminalState::Truncated),
+        other => Err(format!("invalid terminal code {other}")),
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct MemoryDumpHeader {
+    version: u32,
+    endian: String,
+    rows: usize,
+    state_width: usize,
+    action_mask_width: usize,
+    old_state_width: usize,
+    truncations: usize,
+}
+
+fn write_f32s(path: &Path, xs: &[f32]) -> io::Result<()> {
+    let mut buf = Vec::with_capacity(xs.len() * 4);
+    for &x in xs {
+        buf.extend_from_slice(&x.to_le_bytes());
+    }
+    fs::write(path, buf)
+}
+
+fn write_u64s(path: &Path, xs: impl IntoIterator<Item = u64>, count: usize) -> io::Result<()> {
+    let mut buf = Vec::with_capacity(count * 8);
+    for x in xs {
+        buf.extend_from_slice(&x.to_le_bytes());
+    }
+    fs::write(path, buf)
+}
+
+fn write_u8s(path: &Path, xs: &[u8]) -> io::Result<()> {
+    fs::write(path, xs)
+}
+
+fn read_f32s(path: &Path, expected: usize) -> io::Result<Vec<f32>> {
+    let bytes = fs::read(path)?;
+    if bytes.len() != expected.saturating_mul(4) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{}: got {} bytes, expected {expected} f32 values",
+                path.display(),
+                bytes.len()
+            ),
+        ));
+    }
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .collect())
+}
+
+fn read_u64s(path: &Path, expected: usize) -> io::Result<Vec<u64>> {
+    let bytes = fs::read(path)?;
+    if bytes.len() != expected.saturating_mul(8) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{}: got {} bytes, expected {expected} u64 values",
+                path.display(),
+                bytes.len()
+            ),
+        ));
+    }
+    Ok(bytes
+        .chunks_exact(8)
+        .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+        .collect())
+}
+
+fn read_u8s(path: &Path, expected: usize) -> io::Result<Vec<u8>> {
+    let bytes = fs::read(path)?;
+    if bytes.len() != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{}: got {} bytes, expected {expected}",
+                path.display(),
+                bytes.len()
+            ),
+        ));
+    }
+    Ok(bytes)
+}
+
 
 #[cfg(test)]
 mod regression_tests {
@@ -636,6 +844,41 @@ mod regression_tests {
                 assert!(rel_err < 0.001, "{original} -> {back}");
             }
         }
+    }
+
+
+    #[test]
+    fn dump_and_load_roundtrip_preserves_every_buffer() {
+        let mut memory = Memory::with_capacity(8);
+        push_steps(&mut memory, 0, 3, TerminalState::Truncated);
+        push_steps(&mut memory, 3, 2, TerminalState::Normal);
+        // A row with an action mask width and old-state width other than the
+        // helper's defaults: push_player after widths are set must match.
+        let dir = std::env::temp_dir().join(format!(
+            "rlgymppo-memory-dump-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        memory.dump_to_dir(&dir).expect("dump");
+        let loaded = Memory::load_from_dir(&dir).expect("load");
+        assert_eq!(loaded.len(), memory.len());
+        assert_eq!(loaded.state_width(), memory.state_width());
+        assert_eq!(loaded.action_mask_width(), memory.action_mask_width());
+        assert_eq!(loaded.old_state_width(), memory.old_state_width());
+        assert_eq!(loaded.states(), memory.states());
+        assert_eq!(loaded.actions(), memory.actions());
+        assert_eq!(loaded.log_probs(), memory.log_probs());
+        assert_eq!(loaded.rewards(), memory.rewards());
+        assert_eq!(loaded.terminals(), memory.terminals());
+        assert_eq!(loaded.trunc_next_states(), memory.trunc_next_states());
+        assert_eq!(loaded.action_masks(), memory.action_masks());
+        assert_eq!(loaded.old_states(), memory.old_states());
+        // Leave the dump on disk? Tests use a unique temp dir; remove it the
+        // same way the neighboring serde tests do, so /tmp does not grow.
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(all(test, feature = "flex"))]

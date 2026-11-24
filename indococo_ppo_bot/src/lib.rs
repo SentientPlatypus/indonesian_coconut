@@ -43,6 +43,17 @@ pub fn install_league_collect_stream() {
     league_stream::install_collect_stream();
 }
 
+/// Process-wide LibTorch TF32 flags, for the trainer start banner.
+#[cfg(feature = "torch")]
+pub fn tf32_cublas() -> i32 {
+    league_stream::tf32_cublas()
+}
+
+#[cfg(feature = "torch")]
+pub fn tf32_cudnn() -> i32 {
+    league_stream::tf32_cudnn()
+}
+
 /// Hidden layers of the policy and critic (`1v1.pt` DiscreteFF).
 pub const LAYERS: [usize; 4] = [2048, 2048, 1024, 1024];
 mod ripple_tests;

@@ -57,7 +57,11 @@ pub struct Ppo {
     /// `last_plasticity` so transfer rounds never emit frozen-critic keys
     /// and PPO never emits head keys.
     last_transfer_plasticity: Option<PolicyPlasticitySnapshot>,
+    /// Value-pass output of the most recent `learn` call, kept so
+    /// `learn-replay` can write `old_values.f32`.
+    pub(crate) last_old_values: Option<Vec<f32>>,
 }
+
 
 /// Parameter snapshot used by regenerative regularization. Cloned device
 /// tensors, so enabling `regen` holds one extra copy of the parameters.
@@ -138,6 +142,7 @@ impl Ppo {
             adv_scale_ema: 1.0,
             last_plasticity: None,
             last_transfer_plasticity: None,
+            last_old_values: None,
         }
     }
 
@@ -162,6 +167,7 @@ impl Ppo {
             adv_scale_ema: 1.0,
             last_plasticity: None,
             last_transfer_plasticity: None,
+            last_old_values: None,
         }
     }
 
@@ -369,6 +375,42 @@ impl Ppo {
     }
 }
 
+
+fn speed_profile_enabled() -> bool {
+    matches!(std::env::var("INDOCOCO_SPEED_PROFILE"), Ok(ref value) if value == "1")
+}
+
+/// One-element readback that waits for previously queued kernels. Timing
+/// only: the tensor is not used in the update.
+fn profile_sync(device: &Device) {
+    let token = Tensor::<1>::from_data(TensorData::new(vec![0.0f32], [1]), device);
+    let _ = Transaction::default().register(token).execute();
+}
+
+/// `1 - Var(returns - old_values) / Var(returns)`, population variance.
+fn explained_variance(returns: &[f32], old_values: &[f32]) -> f64 {
+    assert_eq!(returns.len(), old_values.len());
+    let n = returns.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let mean = |xs: &[f32]| xs.iter().copied().sum::<f32>() / xs.len() as f32;
+    let var = |xs: &[f32], m: f32| {
+        xs.iter().map(|x| (x - m).powi(2)).sum::<f32>() / xs.len() as f32
+    };
+    let return_var = var(returns, mean(returns));
+    if return_var <= f32::EPSILON {
+        return 0.0;
+    }
+    let resid: Vec<f32> = returns
+        .iter()
+        .zip(old_values)
+        .map(|(r, v)| r - v)
+        .collect();
+    let resid_var = var(&resid, mean(&resid));
+    f64::from(1.0 - resid_var / return_var)
+}
+
 impl Ppo {
     pub fn learn<R: Rng>(
         &mut self,
@@ -438,6 +480,11 @@ impl Ppo {
             &self.device,
         );
         let resident_secs = resident_start.elapsed().as_secs_f64();
+        let profile = speed_profile_enabled();
+        if profile {
+            profile_sync(&self.device);
+            metrics["Prof/resident upload"] = resident_start.elapsed().as_secs_f64().into();
+        }
 
         // Compute old critic values for GAE in chunks sliced from the
         // resident states: no upload per chunk, and no second shared-head
@@ -470,6 +517,10 @@ impl Ppo {
             values
         };
         metrics["PPO/value inference time"] = value_inference_start.elapsed().as_secs_f64().into();
+        if profile {
+            profile_sync(&self.device);
+            metrics["Prof/value pass"] = value_inference_start.elapsed().as_secs_f64().into();
+        }
 
         let return_std = if self.config.standardize_returns {
             stats.return_stat.get_std()
@@ -522,7 +573,12 @@ impl Ppo {
         };
 
         metrics["PPO/trunc bootstrap time"] = trunc_start.elapsed().as_secs_f64().into();
+        if profile {
+            profile_sync(&self.device);
+            metrics["Prof/trunc"] = trunc_start.elapsed().as_secs_f64().into();
+        }
 
+        let old_values_cpu = old_values.clone();
         let gae_start = Instant::now();
         let GAEOutput {
             returns,
@@ -543,6 +599,12 @@ impl Ppo {
         );
         metrics["GAE/time"] = gae_start.elapsed().as_secs_f64().into();
         metrics["GAE/reward clip portion"] = rew_clip_portion.into();
+        metrics["PPO/explained variance"] =
+            explained_variance(&returns, &old_values_cpu).into();
+        self.last_old_values = Some(old_values_cpu);
+        if profile {
+            metrics["Prof/GAE"] = gae_start.elapsed().as_secs_f64().into();
+        }
 
         // GAE distribution metrics.
         let n = returns.len().max(1) as f32;
@@ -653,6 +715,7 @@ impl Ppo {
         // resident tensor, and trains. VRAM holds the resident states plus
         // one batch instead of the full rollout plus one batch.
         let epoch_batches_ref = &epoch_batches;
+        let mut minibatch_prof: Vec<f64> = Vec::new();
         std::thread::scope(|scope| {
             // Bounded so at most two filled batches queue up: caps queued
             // CPU RAM and keeps the producer from racing pointlessly ahead.
@@ -701,6 +764,9 @@ impl Ppo {
                 );
                 let states = resident_b.clone().select(0, index).cast(DType::F32);
                 let batch = GpuBatch::from_staged(states, staged, &self.device);
+                if profile {
+                    profile_sync(&self.device);
+                }
                 upload_time += upload_start.elapsed();
                 self.train_gpu_batch(
                     &mut net,
@@ -708,21 +774,38 @@ impl Ppo {
                     &mut metric_totals,
                     &mut optim_time,
                     lr_scale,
+                    profile,
+                    &mut minibatch_prof,
                 );
                 batch_training_time += training_start.elapsed();
             }
+            if profile {
+                metrics["Prof/per-batch upload"] = upload_time.as_secs_f64().into();
+            }
             metrics["PPO/upload time"] = upload_time.as_secs_f64().into();
             metrics["PPO/optimizer step time"] = optim_time.as_secs_f64().into();
+            if profile {
+                profile_sync(&self.device);
+                metrics["Prof/optimizer step"] = optim_time.as_secs_f64().into();
+            }
         });
 
         metrics["PPO/training time"] = training_start.elapsed().as_secs_f64().into();
         metrics["PPO/batch staging time"] = batch_staging_time.as_secs_f64().into();
         metrics["PPO/batch training time"] = batch_training_time.as_secs_f64().into();
+        if profile {
+            for (i, dt) in minibatch_prof.iter().enumerate() {
+                metrics[format!("Prof/minibatch fwd+bwd {i}")] = (*dt).into();
+            }
+            metrics["Prof/minibatch fwd+bwd sum"] =
+                minibatch_prof.iter().copied().sum::<f64>().into();
+        }
 
         // Plasticity diagnostics, re-emitted every iteration from the cache
         // so the keys stay present between recomputations. Gated by
         // `plasticity_log_interval` (`None` pays nothing).
         {
+            let plast_start = Instant::now();
             let sample_len = rollout_size.min(2048);
             let sample = resident_b.clone().narrow(0, 0, sample_len).cast(DType::F32);
             self.maybe_log_plasticity(
@@ -733,6 +816,11 @@ impl Ppo {
                 sample,
                 metrics,
             );
+            if profile {
+                profile_sync(&self.device);
+                metrics["Prof/plasticity and magnitudes"] =
+                    plast_start.elapsed().as_secs_f64().into();
+            }
         }
 
         stats.cumulative_timesteps += rollout_size as u64;
@@ -743,6 +831,7 @@ impl Ppo {
             1.max(rollout_size.div_ceil(self.config.batch_size) * self.config.epochs) as f32;
 
         // Synchronize the accumulated scalar metrics only once after all epochs.
+        let readback_start = Instant::now();
         let [entropy_data, kl_data, clip_data, policy_data, critic_data] = Transaction::default()
             .register(metric_totals.entropy)
             .register(metric_totals.divergence)
@@ -772,6 +861,9 @@ impl Ppo {
             .execute();
         let [policy_magnitude, critic_magnitude] =
             [0, 1].map(|i| f64::from(squared_distances[i].try_to_vec::<f32>().unwrap()[0]).sqrt());
+        if profile {
+            metrics["Prof/final metric readback"] = readback_start.elapsed().as_secs_f64().into();
+        }
 
         metrics["Loss/entropy"] = mean_entropy.into();
         metrics["Loss/KL divergence"] = mean_divergence.into();
@@ -803,6 +895,8 @@ impl Ppo {
         metric_totals: &mut MetricTotals,
         optim_time: &mut Duration,
         lr_scale: f64,
+        profile: bool,
+        minibatch_prof: &mut Vec<f64>,
     ) {
         let mut actor_gradients = GradientsAccumulator::new();
         let mut critic_gradients = GradientsAccumulator::new();
@@ -821,6 +915,7 @@ impl Ppo {
             let mask_batch = mini_batch.action_masks;
             let clip_eps_batch = mini_batch.clip_eps;
 
+            let mb_start = Instant::now();
             self.train_mini_batch(
                 net,
                 state_batch,
@@ -836,6 +931,10 @@ impl Ppo {
                 &mut shared_head_gradients,
                 metric_totals,
             );
+            if profile {
+                profile_sync(&self.device);
+                minibatch_prof.push(mb_start.elapsed().as_secs_f64());
+            }
         }
 
         let optim_start = Instant::now();
@@ -1528,6 +1627,31 @@ fn policy_plasticity_snapshot(
         head_norm,
         head_rank,
         head_dormant,
+    }
+}
+
+#[cfg(test)]
+mod explained_variance_tests {
+    use super::explained_variance;
+
+    #[test]
+    fn perfect_predictions_give_one() {
+        let returns = [1.0f32, 2.0, 3.0, 4.0];
+        assert!((explained_variance(&returns, &returns) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mean_predictions_give_zero() {
+        let returns = [1.0f32, 2.0, 3.0, 4.0];
+        let old = [2.5f32; 4];
+        assert!(explained_variance(&returns, &old).abs() < 1e-6);
+    }
+
+    #[test]
+    fn constant_returns_give_zero() {
+        let returns = [3.0f32, 3.0, 3.0];
+        let old = [1.0f32, 2.0, 3.0];
+        assert_eq!(explained_variance(&returns, &old), 0.0);
     }
 }
 

@@ -27,6 +27,16 @@ unsafe extern "C" {
     fn ripple_stream_restore_default(device: i32);
 }
 
+/// LibTorch's current process-wide TF32 flags. Printed at trainer start
+/// so a silent disable is visible.
+pub fn tf32_cublas() -> i32 {
+    unsafe { ripple_allow_tf32_cublas() }
+}
+
+pub fn tf32_cudnn() -> i32 {
+    unsafe { ripple_allow_tf32_cudnn() }
+}
+
 struct Tf32State {
     depth: i32,
     saved_cublas: i32,

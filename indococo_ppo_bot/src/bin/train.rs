@@ -18,6 +18,7 @@
 //! indococo-train ripple-dump <ripple_dir> <steps> <out.jsonl>  # Dump Ripple tensors for Python parity
 //! indococo-train nexto-h2h <ckpt> <nexto_dir> <games> [threads] [dump.jsonl]  # Nexto (TorchScript), team size from INDOCOCO_TEAM_SIZE
 //! indococo-train necto-h2h <ckpt> <necto_dir> <games> [threads] [dump.jsonl]  # Necto (TorchScript), same
+//! indococo-train learn-replay <train.toml> <ckpt_dir> <memory_dump> <out_dir> [seed]
 //! H2H_REWARD_CONFIG=<reward toml> selects the role params.
 //! INDOCOCO_OBS_TEAM=1 indococo-train widen-team <1v1_ckpt> <dst_ckpt>  # TM1 warm start (actor+critic)
 //! INDOCOCO_OBS_TEAM=1 INDOCOCO_OBS_PRED=1 indococo-train widen-pred <235_ckpt> <dst_ckpt>  # TM3 warm start
@@ -532,7 +533,25 @@ fn train(config: &Path) {
     train_cfg(cfg);
 }
 
+fn print_tf32_status() {
+    #[cfg(feature = "torch")]
+    {
+        let cublas = indococo_bot::tf32_cublas();
+        let cudnn = indococo_bot::tf32_cudnn();
+        let override_flag = std::env::var("TORCH_ALLOW_TF32_CUBLAS_OVERRIDE").ok();
+        println!(
+            "TF32 cublas={cublas} cudnn={cudnn} TORCH_ALLOW_TF32_CUBLAS_OVERRIDE={override_flag:?}"
+        );
+        if cublas == 0 && override_flag.as_deref() == Some("1") {
+            eprintln!(
+                "WARNING: TF32 cublas is OFF despite TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1; not changing it"
+            );
+        }
+    }
+}
+
 fn train_cfg(cfg: TrainConfig) {
+    print_tf32_status();
     if cfg.async_collect {
         rlgymppo::set_collect_stream_hook(indococo_bot::install_league_collect_stream);
     } else {
@@ -1454,6 +1473,64 @@ fn rates(setters_toml: &Path, candidate: &Path, opponent: &str, steps: usize, th
     println!("{out}");
 }
 
+/// One PPO update on a dumped rollout, using the same LearnerConfig as
+/// `train` (PPO hyperparams, layer sizes, device, checkpoint stats and
+/// optimizers). Collection is slimmed so this does not start a 384-game
+/// simulator; that does not change the update math.
+fn learn_replay(config: &Path, ckpt_dir: &Path, memory_dump: &Path, out_dir: &Path, seed: u64) {
+    let text = std::fs::read_to_string(config).expect("read train config");
+    let mut cfg: TrainConfig = toml::from_str(&text).expect("parse train config");
+    assert!(
+        ckpt_dir.join("actor.bpk").is_file(),
+        "learn-replay ckpt_dir must contain actor.bpk: {}",
+        ckpt_dir.display()
+    );
+    cfg.checkpoints = ckpt_dir.to_path_buf();
+    cfg.opponents = OpponentsConfig::default();
+    cfg.pfsp = None;
+    cfg.async_collect = false;
+    cfg.skill_tracker = false;
+    cfg.self_play_old_versions = false;
+    cfg.iterations = 0;
+    cfg.save_every = u64::MAX / 4;
+    // One game per pool is enough to probe obs/action sizes.
+    cfg.games = cfg.pools.max(1);
+    cfg.threads = cfg.pools.max(1);
+
+    print_tf32_status();
+    rlgymppo::clear_collect_stream_hook();
+    rlgymppo::set_opponent_pick_hook(indococo_bot::setters::set_current_opponent);
+    let rewards = read_rewards(&cfg.reward_config);
+    init_from_default(true).expect("load collision meshes");
+    let dev = device(&cfg.backend);
+    indococo_bot::team::set_step_source(rlgymppo::cumulative_steps);
+    if let Some(t) = &cfg.team {
+        indococo_bot::obs::set_obs_shuffle(t.obs_shuffle && indococo_bot::obs::obs_team());
+        if !t.mode_mix.is_empty() {
+            let mix: Vec<(usize, f64)> = t
+                .mode_mix
+                .iter()
+                .map(|(k, &p)| (k.parse().unwrap_or_else(|_| panic!("[team] mode_mix key {k:?}")), p))
+                .filter(|&(_, p)| p > 0.0)
+                .collect();
+            indococo_bot::env::set_mode_mix(&mix);
+        }
+    }
+    let memory = rlgymppo::Memory::load_from_dir(memory_dump)
+        .unwrap_or_else(|e| panic!("load memory dump {}: {e}", memory_dump.display()));
+    let phase = Phase {
+        policy_lr: cfg.policy_lr,
+        iterations: Some(1),
+    };
+    let (rewards, setters) = (rewards, cfg.state_setters.clone());
+    let mut learner = learner_config(&cfg, phase, dev, Vec::new(), Vec::new()).init(
+        move |id| indococo_bot::env::create_env_for_game(&rewards, &setters, id),
+        default_adamw_optimizer(),
+    );
+    learner.load();
+    learner.learn_replay(&memory, seed, out_dir);
+}
+
 fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
@@ -1484,23 +1561,49 @@ fn newest_checkpoint(dir: &Path) -> Option<PathBuf> {
 /// folder starts from a fresh init. Prints one `SPEED` line per iteration.
 /// Iteration 1 has overlap 0. Later iterations report how much of that
 /// rollout's collection ran during the previous update.
-fn speed_bench(config: &Path, iters: u64) {
-    assert!(iters > 0, "speed-bench needs at least one iteration");
-    let text = std::fs::read_to_string(config).expect("read train config");
-    unsafe { std::env::set_var("INDOCOCO_SPEED", "1"); }
-    let variants = [
+fn speed_variants() -> [(&'static str, bool, LeagueBotsDevice); 6] {
+    [
         ("off", false, LeagueBotsDevice::Default),
         ("async", true, LeagueBotsDevice::Default),
         ("league_cuda", false, LeagueBotsDevice::Cuda),
         ("league_cpu", false, LeagueBotsDevice::Cpu),
         ("both", true, LeagueBotsDevice::Cuda),
         ("both_cpu", true, LeagueBotsDevice::Cpu),
-    ];
+    ]
+}
+
+fn parse_speed_variants(spec: Option<&str>) -> Vec<(&'static str, bool, LeagueBotsDevice)> {
+    let all = speed_variants();
+    let Some(spec) = spec.filter(|s| !s.is_empty()) else {
+        return all.to_vec();
+    };
+    spec.split(',')
+        .map(|name| {
+            let name = name.trim();
+            all.iter()
+                .copied()
+                .find(|(n, _, _)| *n == name)
+                .unwrap_or_else(|| panic!("unknown SPEED_VARIANTS entry {name:?}"))
+        })
+        .collect()
+}
+
+fn speed_bench_keep() -> bool {
+    matches!(std::env::var("SPEED_BENCH_KEEP"), Ok(ref v) if v == "1")
+}
+
+fn speed_bench(config: &Path, iters: u64) {
+    assert!(iters > 0, "speed-bench needs at least one iteration");
+    let text = std::fs::read_to_string(config).expect("read train config");
+    unsafe { std::env::set_var("INDOCOCO_SPEED", "1"); }
+    let variants = parse_speed_variants(std::env::var("SPEED_VARIANTS").ok().as_deref());
     println!(
-        "speed-bench iters={iters} (iteration 1 overlap is 0; later lines are the overlapped collect)"
+        "speed-bench iters={iters} variants={} (iteration 1 overlap is 0; later lines are the overlapped collect)",
+        variants.iter().map(|(n, _, _)| *n).collect::<Vec<_>>().join(",")
     );
     for (name, async_collect, league) in variants {
         let mut cfg: TrainConfig = toml::from_str(&text).expect("parse train config");
+        // temp_dir honors TMPDIR, which the scratch layout sets to speedup_work/tmp.
         let dir = std::env::temp_dir().join(format!(
             "indococo-speed-{name}-{}-{}",
             std::process::id(),
@@ -1536,9 +1639,13 @@ fn speed_bench(config: &Path, iters: u64) {
             );
         }
         unsafe { std::env::set_var("INDOCOCO_METRICS", dir.join("metrics.jsonl")); }
-        println!("VARIANT {name} async_collect={async_collect} league_bots_device={league:?}");
+        println!("VARIANT {name} async_collect={async_collect} league_bots_device={league:?} dir={}", dir.display());
         train_cfg(cfg);
-        let _ = std::fs::remove_dir_all(&dir);
+        if speed_bench_keep() {
+            println!("VARIANT {name} kept {}", dir.display());
+        } else {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 
@@ -1624,6 +1731,13 @@ fn main() {
             args.get(5).map(Path::new),
         ),
         "speed-bench" => speed_bench(Path::new(arg(1)), arg(2).parse().expect("iters")),
+        "learn-replay" => learn_replay(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            Path::new(arg(3)),
+            Path::new(arg(4)),
+            args.get(5).map_or(0, |s| s.parse().expect("seed")),
+        ),
         "reward-audit" => reward_audit(
             Path::new(arg(1)),
             Path::new(arg(2)),
@@ -2641,6 +2755,21 @@ mod tests {
         let cpu = parse("league_bots_device = \"cpu\"\n");
         assert_eq!(cpu.league_bots_device, LeagueBotsDevice::Cpu);
         assert!(!cpu.async_collect);
+    }
+
+    #[test]
+    fn speed_variants_default_and_subset() {
+        let default = parse_speed_variants(None);
+        assert_eq!(
+            default.iter().map(|(n, _, _)| *n).collect::<Vec<_>>(),
+            ["off", "async", "league_cuda", "league_cpu", "both", "both_cpu"]
+        );
+        let subset = parse_speed_variants(Some("off,async"));
+        assert_eq!(subset.len(), 2);
+        assert_eq!(subset[0].0, "off");
+        assert!(!subset[0].1);
+        assert!(subset[1].1);
+        assert_eq!(parse_speed_variants(Some("")).len(), 6);
     }
 
     #[test]
