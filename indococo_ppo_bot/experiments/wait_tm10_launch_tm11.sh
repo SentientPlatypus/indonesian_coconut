@@ -30,7 +30,7 @@ tm10_running() { # exact cmdline prefix match over /proc; never by process-name 
   local d cmd
   for d in /proc/[0-9]*; do
     cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
-    [[ $cmd == "$TM10_CMD"* ]] && return 0
+    [[ $cmd == "$TM10_CMD"* || $cmd == "$X10/indococo-train "* ]] && return 0
   done
   return 1
 }
@@ -53,8 +53,14 @@ fi
 if [[ -f $F10/DONE && -s $F10/TEAM_PROMOTE.json && -s $F10/FINAL_CKPT ]]; then
   dec=$($EVP start --cand "$(cat "$F10/FINAL_CKPT")" --fallback "$TM9" --promote "$F10/TEAM_PROMOTE.json")
 else
-  last=$(ls "$X10/checkpoints" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)
-  cand=$(cat "$F10/FINAL_CKPT" 2>/dev/null || echo "$X10/checkpoints/$last")
+  # Prefer FINAL_CKPT when present; otherwise the last mid.jsonl row that has
+  # both h2h modes (a newer unevaluated checkpoint dir must not win).
+  # mid.jsonl "ckpt" may be a full path (TM10) or a bare folder name.
+  cand=$(cat "$F10/FINAL_CKPT" 2>/dev/null || "$PYT" -c 'import json,os,sys
+L=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+L=[d for d in L if d.get("h2h_2v2") is not None and d.get("h2h_3v3") is not None]
+c=L[-1]["ckpt"] if L else ""
+print(c if not c or os.path.isabs(c) else os.path.join(sys.argv[2], "checkpoints", c))' "$X10/logs/mid.jsonl" "$X10" 2>/dev/null)
   dec=$($EVP start --cand "$cand" --fallback "$TM9" --mid "$X10/logs/mid.jsonl")
   log "TM10 finals incomplete (no DONE/TEAM_PROMOTE): decided from mids"
 fi
