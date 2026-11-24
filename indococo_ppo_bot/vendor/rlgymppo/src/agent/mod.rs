@@ -599,8 +599,11 @@ impl Ppo {
         );
         metrics["GAE/time"] = gae_start.elapsed().as_secs_f64().into();
         metrics["GAE/reward clip portion"] = rew_clip_portion.into();
+        // Metric only. `returns` are unnormalized Monte-Carlo sums; `target_vals`
+        // and `old_values` are in the critic's normalized space. Training math
+        // is unchanged.
         metrics["PPO/explained variance"] =
-            explained_variance(&returns, &old_values_cpu).into();
+            explained_variance(&target_vals, &old_values_cpu).into();
         self.last_old_values = Some(old_values_cpu);
         if profile {
             metrics["Prof/GAE"] = gae_start.elapsed().as_secs_f64().into();
