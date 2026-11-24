@@ -1765,6 +1765,30 @@ fn speed_bench_keep() -> bool {
     matches!(std::env::var("SPEED_BENCH_KEEP"), Ok(ref v) if v == "1")
 }
 
+
+/// Parse a train.toml and exit. Used to dry-run rendered launcher configs
+/// without starting a trainer (no GPU, no env, no writes).
+fn parse_config(path: &Path) {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("parse-config: cannot read {}: {e}", path.display());
+        std::process::exit(2);
+    });
+    let cfg: TrainConfig = toml::from_str(&text).unwrap_or_else(|e| {
+        eprintln!("parse-config FAIL {}: {e}", path.display());
+        std::process::exit(1);
+    });
+    println!(
+        "parse-config ok path={} nf_intra_threads={} async_collect={} collect_stream_priority={} epochs={} policy_bf16={} critic_bf16={}",
+        path.display(),
+        cfg.nf_intra_threads,
+        cfg.async_collect,
+        cfg.collect_stream_priority,
+        cfg.epochs,
+        cfg.policy_bf16,
+        cfg.critic_bf16
+    );
+}
+
 fn speed_bench(config: &Path, iters: u64) {
     assert!(iters > 0, "speed-bench needs at least one iteration");
     let text = std::fs::read_to_string(config).expect("read train config");
@@ -1964,6 +1988,7 @@ fn main() {
             args.get(4).map_or(8, |t| t.parse().expect("threads")),
             args.get(5).map(Path::new),
         ),
+        "parse-config" => parse_config(Path::new(arg(1))),
         "speed-bench" => speed_bench(Path::new(arg(1)), arg(2).parse().expect("iters")),
         "nf-bench" => nf_bench(
             Path::new(arg(1)),
@@ -3006,6 +3031,48 @@ mod tests {
         assert!(prio.async_collect);
         assert!(prio.collect_stream_priority);
         assert_eq!(prio.nf_intra_threads, 4);
+    }
+
+    #[test]
+    fn speed_keys_before_first_table_parse() {
+        let base = include_str!("../../config/train.toml");
+        let tables = concat!(
+            "\n[[opponents.external]]\n",
+            "name = \"nexto\"\n",
+            "kind = \"nexto\"\n",
+            "path = \"/tmp/nexto\"\n",
+            "weight = 0.3\n",
+            "replicas = 8\n",
+            "chunk_rows = 64\n",
+        );
+        let with_tables = format!("{base}{tables}");
+        // Same bug as appending after the last table: these keys must be rejected.
+        let after = format!(
+            "{with_tables}nf_intra_threads = 2\nasync_collect = true\ncollect_stream_priority = true\n"
+        );
+        let err = toml::from_str::<TrainConfig>(&after)
+            .expect_err("keys after [[opponents.external]] must fail")
+            .to_string();
+        assert!(
+            err.contains("nf_intra_threads")
+                || err.contains("unknown")
+                || err.contains("did not expect")
+                || err.contains("unused"),
+            "unexpected deny_unknown_fields error: {err}"
+        );
+
+        let keys = "nf_intra_threads = 2\nasync_collect = true\ncollect_stream_priority = true\n";
+        let idx = with_tables
+            .find("[[opponents.external]]")
+            .expect("fixture table");
+        let before = format!("{}{}{}", &with_tables[..idx], keys, &with_tables[idx..]);
+        let c: TrainConfig = toml::from_str(&before).expect("top-level speed keys");
+        assert_eq!(c.nf_intra_threads, 2);
+        assert!(c.async_collect);
+        assert!(c.collect_stream_priority);
+        assert_eq!(c.opponents.external.len(), 1);
+        assert_eq!(c.opponents.external[0].replicas, 8);
+        assert_eq!(c.opponents.external[0].chunk_rows, 64);
     }
 
     #[test]

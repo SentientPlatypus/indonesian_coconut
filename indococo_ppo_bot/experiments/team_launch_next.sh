@@ -137,16 +137,37 @@ nf_mode() { # n kind ckpt games name [traj_prefix]
   ev "$5" env INDOCOCO_TEAM_SIZE="$1" ${6:+TRAJ_DUMP="$6"} "$EVAL_BIN" "$2-h2h" "$3" "$d" "$4" "$EV_THREADS"; }
 
 # Optional speed keys, written only when the matching env is set (default off).
+# Insert before the first [table]. Appending after [[opponents.*]] would land
+# the keys inside that table, and deny_unknown_fields would refuse to start.
 append_speed_toml() {
   local f=$1
+  local lines=()
   if [[ -n ${NF_INTRA:-} ]]; then
-    printf '\nnf_intra_threads = %s\n' "$NF_INTRA" >> "$f"
+    lines+=("nf_intra_threads = ${NF_INTRA}")
   fi
   if [[ "${ASYNC_PRIO:-0}" == 1 ]]; then
-    printf '\nasync_collect = true\ncollect_stream_priority = true\n' >> "$f"
+    lines+=("async_collect = true" "collect_stream_priority = true")
   elif [[ "${ASYNC:-0}" == 1 ]]; then
-    printf '\nasync_collect = true\n' >> "$f"
+    lines+=("async_collect = true")
   fi
+  if (( ${#lines[@]} == 0 )); then
+    return 0
+  fi
+  python3 - "$f" "${lines[@]}" << 'PY'
+import pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+m = re.search(r"(?m)^\[", text)
+head, tail = (text[:m.start()], text[m.start():]) if m else (text, "")
+for line in sys.argv[2:]:
+    key = line.split("=", 1)[0].strip()
+    head, n = re.subn(rf"(?m)^{re.escape(key)}\s*=.*\n", line + "\n", head, count=1)
+    if n == 0:
+        if head and not head.endswith("\n"):
+            head += "\n"
+        head += line + "\n"
+path.write_text(head + tail)
+PY
 }
 
 append_nf_block() {
@@ -169,7 +190,6 @@ if [[ "${DRY_RENDER:-0}" == 1 ]]; then
   [[ -n "${NEXTO_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "nexto"\nkind = "nexto"\npath = "%s"\nweight = %s\nstochastic = %s\n' "$NEXTO_DIR" "$NEXTO_WEIGHT" "${NEXTO_STOCH:-0.0}" >> $X/train_tm.toml
   [[ -n "${NEXTO_WEIGHT:-}" ]] && append_nf_block $X/train_tm.toml
   [[ -n "${NECTO_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "necto"\nkind = "necto"\npath = "%s"\nweight = %s\nstochastic = %s\n' "$NECTO_DIR" "$NECTO_WEIGHT" "${NECTO_STOCH:-0.0}" >> $X/train_tm.toml
-  [[ -n "${NECTO_WEIGHT:-}" ]] && append_nf_block $X/train_tm.toml
   for e in ${EXTRA_OPPS:-}; do n=${e%%:*}
     printf '\n[[opponents.fixed]]\nname = "%s"\ncheckpoint = "%s"\nweight = %s\n' "$n" "$X/opponents/$n" "${e##*:}" >> $X/train_tm.toml; done
   append_speed_toml $X/train_tm.toml
@@ -196,7 +216,6 @@ while :; do
   [[ -n "${NEXTO_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "nexto"\nkind = "nexto"\npath = "%s"\nweight = %s\nstochastic = %s\n' "$NEXTO_DIR" "$NEXTO_WEIGHT" "${NEXTO_STOCH:-0.0}" >> $X/train_tm.toml
   [[ -n "${NEXTO_WEIGHT:-}" ]] && append_nf_block $X/train_tm.toml
   [[ -n "${NECTO_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "necto"\nkind = "necto"\npath = "%s"\nweight = %s\nstochastic = %s\n' "$NECTO_DIR" "$NECTO_WEIGHT" "${NECTO_STOCH:-0.0}" >> $X/train_tm.toml
-  [[ -n "${NECTO_WEIGHT:-}" ]] && append_nf_block $X/train_tm.toml
   for e in ${EXTRA_OPPS:-}; do n=${e%%:*}
     printf '\n[[opponents.fixed]]\nname = "%s"\ncheckpoint = "%s"\nweight = %s\n' "$n" "$X/opponents/$n" "${e##*:}" >> $X/train_tm.toml; done
   append_speed_toml $X/train_tm.toml

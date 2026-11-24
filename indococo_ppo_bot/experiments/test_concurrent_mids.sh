@@ -282,6 +282,185 @@ PY
   fi
 }
 
+# T0b: NF_INTRA=2 ASYNC_PRIO=1 keys land at top-level (before the first table),
+# not inside the last [[opponents.*]] table. Nexto gets replicas/chunk_rows;
+# Necto does not. Defaults (no env) stay inert — covered by t0 identity.
+t0_speed_keys() {
+  local steps=57957300000
+  CHUNK_T=100000000
+  STEPS=100000000
+  RUN=T0SPEED
+  C=$C_REPO
+  X=$R_ROOT/exp_$RUN
+  seed_exp "$X" "$C" "$steps" "$STUB"
+  EVAL_STUB_DIR=$TMP/canned_t0speed
+  EVAL_STUB_SLEEP=0
+  STUB_SLEEP=0
+  common_env
+  export REWARD_TMPL=tm11.toml
+  export TRAIN_TMPL=train_tm11.toml
+  export START_IS_TEAM=1
+  export OBS_PRED=1
+  export GAL_WEIGHT=0.21
+  export NEXTO_WEIGHT=0.30
+  export NEXTO_STOCH=0.2
+  export GAL_DIR=/home/ubuntu/eval_bots/galactus/rust
+  export NEXTO_DIR=/home/ubuntu/eval_bots/nexto
+  export NF_INTRA=2
+  export ASYNC_PRIO=1
+  export NEXTO_REPLICAS=8
+  export NEXTO_CHUNK=64
+  set +e
+  DRY_RENDER=1 CONCURRENT_MIDS=0 bash "$C/experiments/team_launch_next.sh" >"$TMP/t0_speed.log" 2>&1
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    unset NF_INTRA ASYNC_PRIO ASYNC NEXTO_REPLICAS NEXTO_CHUNK
+    fail t0-speed-render "exit $rc log=$(tail -20 $TMP/t0_speed.log)"
+    return
+  fi
+  local toml=$X/train_tm.toml
+  set +e
+  "$PYT" - "$toml" << 'PY'
+import sys, pathlib
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib  # type: ignore
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+data = tomllib.loads(text)
+
+def fail(msg):
+    print("TOML_FAIL", msg)
+    sys.exit(1)
+
+for key, want in (("nf_intra_threads", 2), ("async_collect", True), ("collect_stream_priority", True)):
+    if key not in data:
+        fail(f"missing top-level {key}")
+    if data[key] != want:
+        fail(f"{key}={data[key]!r} want {want!r}")
+
+first = None
+for line in text.splitlines():
+    if line.startswith("["):
+        first = line
+        break
+if first is None:
+    fail("no table found")
+table_pos = text.find(first)
+for key in ("nf_intra_threads", "async_collect", "collect_stream_priority"):
+    pos = text.find(f"{key} =")
+    if pos < 0 or pos > table_pos:
+        fail(f"{key} is not before first table {first}")
+
+externals = data.get("opponents", {}).get("external", [])
+if not externals:
+    fail("no opponents.external")
+for ev in externals:
+    for key in ("nf_intra_threads", "async_collect", "collect_stream_priority"):
+        if key in ev:
+            fail(f"{key} leaked into opponents.external name={ev.get('name')}")
+
+by_name = {ev["name"]: ev for ev in externals}
+if "nexto" not in by_name:
+    fail("nexto missing")
+if by_name["nexto"].get("replicas") != 8 or by_name["nexto"].get("chunk_rows") != 64:
+    fail(f"nexto replicas/chunk_rows = {by_name['nexto']}")
+print("TOML_OK first_table", first, "externals", list(by_name))
+PY
+  local prc=$?
+  set -e
+  if [[ $prc -eq 0 ]]; then
+    pass t0-speed-keys-top-level
+  else
+    fail t0-speed-keys-top-level "see $toml log=$(tail -5 $TMP/t0_speed.log)"
+  fi
+
+  # Isolated fixture: necto is absent from tm_TM11.env, so exercise both tables
+  # against the same functions the launcher uses.
+  local fns=$TMP/append_fns.sh
+  "$PYT" - "$C/experiments/team_launch_next.sh" "$fns" << 'PY'
+from pathlib import Path
+import sys
+src = Path(sys.argv[1]).read_text().splitlines()
+out = []
+grab = False
+for line in src:
+    if line.startswith("append_speed_toml()"):
+        grab = True
+    if grab:
+        out.append(line)
+    if grab and line.startswith("append_nf_block()"):
+        # include the body until the closing brace at column 0
+        continue
+    if grab and line == "}" and "append_nf_block" in "\n".join(out):
+        # last closing of append_nf_block
+        if out[-1] == "}" and any(l.startswith("append_nf_block()") for l in out):
+            # stop after this closing if we have both functions
+            nclose = sum(1 for l in out if l == "}")
+            nfn = sum(1 for l in out if l.startswith("append_"))
+            if nclose >= 2 and nfn >= 2:
+                break
+Path(sys.argv[2]).write_text("\n".join(out) + "\n")
+PY
+  # shellcheck source=/dev/null
+  source "$fns"
+  local fix=$TMP/nf_fixture.toml
+  cat > "$fix" << 'EOF'
+epochs = 1
+policy_bf16 = false
+critic_bf16 = false
+
+[[opponents.external]]
+name = "nexto"
+kind = "nexto"
+path = "/tmp/nexto"
+weight = 0.3
+stochastic = 0.2
+EOF
+  NEXTO_REPLICAS=8 NEXTO_CHUNK=64 append_nf_block "$fix"
+  cat >> "$fix" << 'EOF'
+
+[[opponents.external]]
+name = "necto"
+kind = "necto"
+path = "/tmp/necto"
+weight = 0.1
+stochastic = 0.0
+EOF
+  NF_INTRA=2 ASYNC_PRIO=1 append_speed_toml "$fix"
+  set +e
+  "$PYT" - "$fix" << 'PY'
+import sys, pathlib
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib  # type: ignore
+text = pathlib.Path(sys.argv[1]).read_text()
+data = tomllib.loads(text)
+assert data["nf_intra_threads"] == 2 and data["async_collect"] is True
+first = next(l for l in text.splitlines() if l.startswith("["))
+assert text.find("nf_intra_threads =") < text.find(first)
+by = {e["name"]: e for e in data["opponents"]["external"]}
+assert by["nexto"]["replicas"] == 8 and by["nexto"]["chunk_rows"] == 64
+assert "replicas" not in by["necto"] and "chunk_rows" not in by["necto"]
+for e in by.values():
+    assert "nf_intra_threads" not in e
+print("FIXTURE_OK")
+PY
+  local frc=$?
+  set -e
+  unset NF_INTRA ASYNC_PRIO ASYNC NEXTO_REPLICAS NEXTO_CHUNK
+  if [[ $frc -eq 0 ]]; then
+    pass t0-nf-block-nexto-only
+  else
+    fail t0-nf-block-nexto-only "fixture=$(cat $fix)"
+  fi
+}
+
+
 # Run one stubbed launcher. Args: name mode S E h2h_rate chunks
 run_stub_case() {
   local name=$1 mode=$2 s=$3 e=$4 h2h=$5 chunks=$6
@@ -316,6 +495,7 @@ run_stub_case() {
 }
 
 t0
+t0_speed_keys
 
 # T1(a): E < S, mode 1: every MID_WAIT is 0; mid.jsonl identical to mode 0.
 # 2 chunks, S=2, E=0.
