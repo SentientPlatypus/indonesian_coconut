@@ -282,8 +282,11 @@ pub fn kickoff_phase(state: &GameState) -> bool {
 pub const KICKOFF_TAKER_TOL: f32 = 180.0;
 
 /// Whether car `me` is this team's kickoff taker. Same rule as
-/// [`NfBot`]: closest to the ball within [`KICKOFF_TAKER_TOL`], and on a
-/// distance tie the left-most car (in that team's frame) goes.
+/// [`NfBot`] (unchanged since TM8): closest to the ball within
+/// [`KICKOFF_TAKER_TOL`], and on a within-tolerance teammate the condition
+/// `if !is_left { not taker }` keeps the right-most car in that team's
+/// frame (the historical comment said "Left goes"). Do not flip this: eval
+/// Nexto kickoffs for TM8–TM11 used this rule.
 pub fn is_kickoff_taker(state: &GameState, me: usize) -> bool {
     let ball = state.ball.phys.pos;
     let d: Vec<f32> = state
@@ -980,8 +983,11 @@ mod tests {
     }
 
     #[test]
-    fn kickoff_taker_left_goes_on_a_tie() {
-        // Two blue cars at the same distance from mid; the left one (smaller x for blue) goes.
+    fn kickoff_taker_matches_nfbot_tie_break() {
+        // Two cars per team at the same distance from mid. Production NfBot
+        // (TM8+) keeps the right-most car in that team's frame (`if !is_left
+        // { taker = false }`). KickoffScript must match that, not bot.py's
+        // left-goes, so eval numbers stay comparable.
         let st = ko_state(&[
             (Team::Blue, -2048.0, -2560.0),
             (Team::Blue, 2048.0, -2560.0),
@@ -989,11 +995,11 @@ mod tests {
             (Team::Orange, 2048.0, 2560.0),
         ]);
         assert!(kickoff_phase(&st));
-        assert!(is_kickoff_taker(&st, 0), "blue left should go");
-        assert!(!is_kickoff_taker(&st, 1), "blue right should stay");
-        // Orange: left-goes is mirrored (larger x in world is left in orange's frame).
-        assert!(!is_kickoff_taker(&st, 2), "orange world-left is orange-right");
-        assert!(is_kickoff_taker(&st, 3), "orange world-right is orange-left");
+        assert!(!is_kickoff_taker(&st, 0), "blue left stays, matching NfBot");
+        assert!(is_kickoff_taker(&st, 1), "blue right goes, matching NfBot");
+        // Orange's right in its frame is smaller world x.
+        assert!(is_kickoff_taker(&st, 2), "orange world-left is orange-right and goes");
+        assert!(!is_kickoff_taker(&st, 3), "orange world-right is orange-left and stays");
     }
 
     #[test]
