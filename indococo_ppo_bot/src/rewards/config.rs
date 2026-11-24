@@ -1346,8 +1346,8 @@ mod extends_tests {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
         let c = RewardConfig::from_file(&dir.join("tm11.toml")).unwrap();
         let tm10 = RewardConfig::from_file(&dir.join("tm10.toml")).unwrap();
-        assert_eq!(c.weights.defend_carry, 20.0);
-        assert_eq!(c.weights.carry_break, 300.0);
+        assert_eq!(c.weights.defend_carry, 40.0);
+        assert_eq!(c.weights.carry_break, 600.0);
         assert_eq!(c.weights.kickoff_outcome, 120.0);
         assert_eq!(c.weights.playmaking_demo, 150.0);
         assert_eq!(c.weights.playmaking_bump, 20.0);

@@ -4206,7 +4206,10 @@ configs, tmux window, TEAM_NO_FOLLOWUP). TM11 starts from TM10's final if it hel
     grounded roof carry that threatens our net.
   - The break event is +1 when a defender's touch or bump ends the carry and it isn't regained
     for 8 steps (cap 3 per episode).
-  - Weights 20 / 300 (calibrated in the smoke run: <fill>), about 0.3% of the reward. The 1–3%
+  - Weights 40 / 600 (calibrated in the smoke run: RewardAbs shares defend_carry 0.0510%,
+    carry_break 0.0287%, combined s=0.0797% < 1%, so k=min(0.01/s, 40/20, 600/300)=2,
+    hitting the hard caps; post-scale combined share ≈ 0.16%. kickoff_outcome share 0.171%
+    ≤ 1% so W stays 120), about 0.16% of the reward. The 1–3%
     target would need goal-scale payouts, which invite farming, so it is capped at 40 / 600.
 - **`kickoff_outcome`** (individual): at 1.5 s after the first touch (the audit's window),
   clamp(team-frame ball y / 1500, ±1). Paid to the 1st and 2nd man in 3v3, the taker (full) and

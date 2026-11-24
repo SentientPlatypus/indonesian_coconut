@@ -7,8 +7,8 @@
 extends = "tm10.toml"
 
 [weights]
-defend_carry = 20.0
-carry_break = 300.0
+defend_carry = 40.0
+carry_break = 600.0
 kickoff_outcome = 120.0
 
 [defend_carry]
