@@ -56,28 +56,12 @@ open(dst, "w").write(t)
 print("wrote", dst)
 PY
 
-tm11_train_pid() {
-  # Exact argv match, no pgrep -f. Never prints a pid we would kill except for display.
-  python3 - << 'PY'
-import pathlib
-for p in pathlib.Path("/proc").iterdir():
-    if not p.name.isdigit():
-        continue
-    try:
-        cmd = open(p/"cmdline", "rb").read().replace(b"\x00", b" ").decode()
-    except Exception:
-        continue
-    if cmd.startswith("/home/ubuntu/ippo_runs/exp_TM11/indococo-train train"):
-        print(p.name)
-        break
-PY
-}
+# Detect any team trainer (exp_TM* / official indococo-train-tm*-*).
+# shellcheck source=/dev/null
+source "$(dirname "$0")/lib_detect.sh"
 
-gpu_used_mib() {
-  nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' '
-}
 
-echo "$(date -Is) waiter start; will launch $BIN speed-bench when TM11 train pid is gone and GPU used is low"
+echo "$(date -Is) waiter start; will launch $BIN speed-bench when any team trainer is gone and GPU used is low"
 # Wait up to 45 minutes for a clean window.
 deadline=$(( $(date +%s) + 45*60 ))
 while :; do
@@ -86,13 +70,13 @@ while :; do
     echo "$(date -Is) TIMEOUT waiting for mid window" | tee -a "$LOG"
     exit 3
   fi
-  pid=$(tm11_train_pid || true)
+  pid=$(tm_train_pid || true)
   used=$(gpu_used_mib || echo 99999)
   if [[ -z ${pid:-} ]] && [[ ${used:-99999} -lt 3000 ]]; then
     echo "$(date -Is) CLEAN WINDOW used=${used}MiB — launching profile" | tee -a "$LOG"
     break
   fi
-  echo "$(date -Is) waiting tm11=${pid:-none} used=${used}MiB"
+  echo "$(date -Is) waiting trainer=${pid:-none} used=${used}MiB"
   sleep 5
 done
 

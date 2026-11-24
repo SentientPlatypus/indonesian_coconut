@@ -1,7 +1,9 @@
 #!/bin/bash
-# Wait for a mid/gap window with the 2nd heavy slot free (no TM12 job).
+# Wait for a mid/gap window with the 2nd heavy slot free (no TM12 *build*).
+# A live TM12/TMn trainer is already TRAIN via tm_state (any exp_TM* or
+# official indococo-train-tm*-* bin). This script also refuses TM12 builds.
 # Usage: wait_async_slot.sh [timeout_sec]
-# Does not kill anything. TM12 is detected via /proc cwd and cmdline files,
+# Does not kill anything. TM12 builds are detected via /proc cwd and cmdline,
 # never by pgrep -f.
 set -euo pipefail
 timeout_sec=${1:-7200}

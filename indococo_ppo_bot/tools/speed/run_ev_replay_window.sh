@@ -1,7 +1,7 @@
 #!/bin/bash
-# Wait for a TM11 mid window (trainer gone, GPU used < 3000 MiB), then
+# Wait for a team-trainer mid window (trainer gone, GPU used < 3000 MiB), then
 # learn-replay the existing dump with the EV-fixed binary. Does not overwrite
-# the pre-fix replay_{a,b,prof} dirs. Never touches TM11.
+# the pre-fix replay_{a,b,prof} dirs. Never touches the live team trainer.
 set -euo pipefail
 W=/opt/dlami/nvme/speedup_work
 BIN=/opt/dlami/nvme/ippo_bins/indococo-train-speed-0072244EV
@@ -27,24 +27,10 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export INDOCOCO_OBS_EXT=1 INDOCOCO_OBS_TEAM=1 INDOCOCO_OBS_PRED=1
 export PYTHONDONTWRITEBYTECODE=1
 
-tm11_train_pid() {
-  python3 - << 'PY'
-import pathlib
-for p in pathlib.Path("/proc").iterdir():
-    if not p.name.isdigit():
-        continue
-    try:
-        cmd = open(p/"cmdline", "rb").read().replace(b"\x00", b" ").decode()
-    except Exception:
-        continue
-    if cmd.startswith("/home/ubuntu/ippo_runs/exp_TM11/indococo-train train"):
-        print(p.name)
-        break
-PY
-}
-gpu_used_mib() {
-  nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' '
-}
+# Detect any team trainer (exp_TM* / official indococo-train-tm*-*).
+# shellcheck source=/dev/null
+source "$(dirname "$0")/lib_detect.sh"
+
 
 : > "$LOG"
 echo "$(date -Is) ev-replay waiter start; bin=$BIN" | tee -a "$LOG"
@@ -55,13 +41,13 @@ while :; do
     echo "$(date -Is) TIMEOUT waiting for mid window" | tee -a "$LOG"
     exit 3
   fi
-  pid=$(tm11_train_pid || true)
+  pid=$(tm_train_pid || true)
   used=$(gpu_used_mib || echo 99999)
   if [[ -z ${pid:-} ]] && [[ ${used:-99999} -lt 3000 ]]; then
     echo "$(date -Is) CLEAN WINDOW used=${used}MiB — launching learn-replay" | tee -a "$LOG"
     break
   fi
-  echo "$(date -Is) waiting tm11=${pid:-none} used=${used}MiB"
+  echo "$(date -Is) waiting trainer=${pid:-none} used=${used}MiB"
   sleep 5
 done
 
