@@ -29,7 +29,13 @@ run_eval() {
   set +e
   # New session: the timeout process is the session/process-group leader, so
   # kill -- -$pid cleans up its children if this shell is interrupted.
-  setsid timeout --kill-after=60 "$tout" nice -n 19 "$@" >"$tmp" 2>"$err" &
+  # EVAL_TASKSET, when set (e.g. 24-31), pins the eval process group with
+  # taskset. Default unset matches TM11 (no pin).
+  if [[ -n ${EVAL_TASKSET:-} ]]; then
+    setsid timeout --kill-after=60 "$tout" taskset -c "$EVAL_TASKSET" nice -n 19 "$@" >"$tmp" 2>"$err" &
+  else
+    setsid timeout --kill-after=60 "$tout" nice -n 19 "$@" >"$tmp" 2>"$err" &
+  fi
   pid=$!
   # shellcheck disable=SC2064 # expand pid and tmp now, not at trap time
   trap 'if [[ -n "${pid:-}" ]]; then kill -- -"$pid" 2>/dev/null || true; fi; rm -f "'"$tmp"'"' EXIT INT TERM

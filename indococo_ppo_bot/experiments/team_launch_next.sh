@@ -13,6 +13,10 @@
 # DRY_RENDER=1: write tm_rewards.toml and train_tm.toml into $X and exit
 # before training. SKIP_PREFLIGHT=1 is for stub tests only (default 0).
 # EVAL_OMP, when set, is OMP_NUM_THREADS for eval commands only.
+# EVAL_TORCH_THREADS, when set, is also OMP/MKL/OPENBLAS/TORCH_NUM_THREADS for
+# eval commands (defaults to EVAL_OMP if that is set). EVAL_TASKSET pins evals
+# (e.g. 24-31). TRAIN_TASKSET pins the trainer. All default unset (TM11).
+# SKIP_FINALS=1 exits after TRAIN_DONE / mid bookkeeping (tests only; default 0).
 #
 # BT pin, fail-closed mid/guard/alarm/finals, numpy 1.26.4, CHUNK 100M, no
 # automatic follow-up: same as TM11.
@@ -115,8 +119,9 @@ ev() {
     if [[ -n $src && -f $src ]]; then cat "$src"; else echo '{}'; fi
     return 0
   fi
-  if [[ -n ${EVAL_OMP:-} ]]; then
-    ( cd "$MESH_REPO" && OMP_NUM_THREADS="$EVAL_OMP" run_eval "$name" "$@" ) 2>>"$X/logs/eval_fail.log"
+  if [[ -n ${EVAL_OMP:-} || -n ${EVAL_TORCH_THREADS:-} ]]; then
+    local ot=${EVAL_TORCH_THREADS:-$EVAL_OMP}
+    ( cd "$MESH_REPO" &&       OMP_NUM_THREADS="$ot" MKL_NUM_THREADS="$ot" OPENBLAS_NUM_THREADS="$ot" TORCH_NUM_THREADS="$ot"       run_eval "$name" "$@" ) 2>>"$X/logs/eval_fail.log"
   else
     ( cd "$MESH_REPO" && run_eval "$name" "$@" ) 2>>"$X/logs/eval_fail.log"
   fi
@@ -171,7 +176,11 @@ while :; do
   grep -qE '^epochs = 1$' $X/train_tm.toml || die "rendered train_tm.toml: epochs != 1"
   ! grep -qE '^[a-z_]*bf16 = true' $X/train_tm.toml || die "rendered train_tm.toml: bf16 on"
   log "$RUN train: $left iterations from $now"
-  ( cd "$MESH_REPO" && nice -n 19 "$B" train $X/train_tm.toml ) 2>&1 | tee -a $X/logs/train.log
+  if [[ -n ${TRAIN_TASKSET:-} ]]; then
+    ( cd "$MESH_REPO" && nice -n 19 taskset -c "$TRAIN_TASKSET" "$B" train $X/train_tm.toml ) 2>&1 | tee -a $X/logs/train.log
+  else
+    ( cd "$MESH_REPO" && nice -n 19 "$B" train $X/train_tm.toml ) 2>&1 | tee -a $X/logs/train.log
+  fi
   [[ ${PIPESTATUS[0]} -eq 0 ]] || die "train failed"
   prev=$now; ck=$X/checkpoints/$(latest); now=$(steps_in $ck)
   (( now > prev )) || die "steps did not advance ($prev -> $now)"
@@ -217,6 +226,10 @@ if [[ ${CONCURRENT_MIDS:-0} == 1 ]]; then
   fi
 fi
 touch $X/TRAIN_DONE
+if [[ "${SKIP_FINALS:-0}" == 1 ]]; then
+  log "$RUN SKIP_FINALS=1; exiting after mid bookkeeping"
+  exit 0
+fi
 bestck=$($EVP pick "$X/logs/mid.jsonl" 2>/dev/null)
 [[ -n "$bestck" && -d "$bestck" ]] || { log "no complete mid; final = latest checkpoint"; bestck=$X/checkpoints/$(latest); }
 F=$R/${RUN,,}_final; mkdir -p "$F"; W=$F

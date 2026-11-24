@@ -30,8 +30,13 @@ mid_evals() {
   done
   if [[ "${EVAL_STUB:-0}" != 1 ]]; then
     AUDIT_PY=$C/tools/team/tm8_audit/tm8_audit_traces.py
-    timeout --kill-after=60 1800 nice -n 19 "$PYT" "$AUDIT_PY" "nexto_2v2:a:$W/nexto_2v2.nexto.*.jsonl" "nexto_3v3:a:$W/nexto_3v3.nexto.*.jsonl" \
-      > "$W/kickoff_audit.jsonl" 2> "$W/kickoff_audit.err" || log "kickoff audit failed at $now (see $W/kickoff_audit.err)"
+    if [[ -n ${EVAL_TASKSET:-} ]]; then
+      timeout --kill-after=60 1800 taskset -c "$EVAL_TASKSET" nice -n 19 "$PYT" "$AUDIT_PY" "nexto_2v2:a:$W/nexto_2v2.nexto.*.jsonl" "nexto_3v3:a:$W/nexto_3v3.nexto.*.jsonl" \
+        > "$W/kickoff_audit.jsonl" 2> "$W/kickoff_audit.err" || log "kickoff audit failed at $now (see $W/kickoff_audit.err)"
+    else
+      timeout --kill-after=60 1800 nice -n 19 "$PYT" "$AUDIT_PY" "nexto_2v2:a:$W/nexto_2v2.nexto.*.jsonl" "nexto_3v3:a:$W/nexto_3v3.nexto.*.jsonl" \
+        > "$W/kickoff_audit.jsonl" 2> "$W/kickoff_audit.err" || log "kickoff audit failed at $now (see $W/kickoff_audit.err)"
+    fi
   fi
   if [[ -s $ST25_CK/actor.bpk ]]; then ev h2h_1v1_st25 env INDOCOCO_TEAM_SIZE=1 "$B" h2h "$ck" "$ST25_CK" "$MID_GAMES" "$EV_THREADS" > "$W/h2h_1v1_st25.json"; else echo '{}' > "$W/h2h_1v1_st25.json"; fi
   if [[ "${EVAL_STUB:-0}" == 1 && ! -f "$W/kickoff_audit.jsonl" ]]; then
