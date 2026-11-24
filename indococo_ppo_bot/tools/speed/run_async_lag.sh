@@ -44,6 +44,10 @@ def setk(text, key, val):
     line = f"{key} = {val}"
     if pat.search(text):
         return pat.sub(line, text, count=1)
+    # Top-level only: never append after a [table] (deny_unknown_fields).
+    m = re.search(r'(?m)^\[', text)
+    if m:
+        return text[:m.start()] + line + "\n" + text[m.start():]
     return text.rstrip()+"\n"+line+"\n"
 text = setk(text, "checkpoints", f'"{ckpt}"')
 text = setk(text, "iterations", iters)

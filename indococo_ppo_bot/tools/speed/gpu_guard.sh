@@ -46,7 +46,9 @@ while kill -0 "$OURPID" 2>/dev/null; do
     tag=" CONTAMINATED"
   fi
   echo "$(date -Is) our=${our_mib}MiB free=${free}MiB total=${total}MiB tm11=${TM11_PID:-none}${tag}" >> "$LOG"
-  if [ "$our_mib" -gt 9800 ] || [ "$free" -lt 1000 ]; then
+  MAX_MIB=${GPU_GUARD_MAX_MIB:-9800}
+  MIN_FREE=${GPU_GUARD_MIN_FREE:-1000}
+  if [ "$our_mib" -gt "$MAX_MIB" ] || [ "$free" -lt "$MIN_FREE" ]; then
     echo "$(date -Is) TRIP our=${our_mib} free=${free} — kill $OURPID" | tee -a "$LOG"
     kill "$OURPID" || true
     exit 2

@@ -4499,11 +4499,31 @@ touched. Every lever defaults off.
   the watchdog aborted. Collection timing is still valid (Nexto infer is
   unchanged by critic-only updates). Bench scripts now force
   `critic_warmup_steps = 0`.
-- **Async + `collect_stream_priority`:** implemented, default off; paired
-  mid-window s/iter benches and the lag/KL check are still pending (next
-  mid; warmup-0 so they stop at the requested iteration count).
+- **Async + `collect_stream_priority`:** mid-window, GPU free, CPU
+  contended by mid evals, mb 50k, flags default off.
+  - `off` (12 iters, drop first 3): collection median 2.440 s, consumption
+    ~2.41 s, implied wall ~4.85 s.
+  - `async` (9/12, then the 9800 MiB mid-guard tripped): two collect
+    spikes 90.9 s and 100.8 s; drop3 collection median 5.841 s. Slower
+    than off — the Nov 10 collect-stream inflation. NO-GO without
+    `collect_stream_priority`.
+  - `async_prio` (fresh process, 12/12 in 114 s, same mid, nexto-h2h
+    running): collection 6.431, 4.027, 3.349, 3.987, 4.757, 3.971, 3.718,
+    3.979, 4.392, 54.891, 4.998, 4.529; drop3 median 4.392 s (one 54.9 s
+    spike). Implied wall ~4.4 s vs off ~4.85 s ≈ **0.9×**, not the hoped
+    1.6×. Not interleaved ABC in one process; one round; no clean
+    uncontended pair.
+  - Lag/KL, N=10, same TM10 scratch seed, `critic_warmup_steps=0` (PHASE
+    iterations=Some(10)). All three arms wrote checkpoints with
+    cumulative_timesteps 57,957.2M → 57,960.2M (exactly 10×300k).
+    Iter 1 KL is ~0 on every arm (off 7.2e-8, async 5.0e-8, prio 6.4e-7),
+    so the 5% relative gate is not meaningful at that scale. Iters 2–10:
+    async and prio KL are often 2–10× sync early, later closer to 1.4–2×;
+    clip stays tiny (off ≤ 6.5e-4, async ≤ 1.3e-3, prio ≤ 2.1e-3). The
+    written 5%/2× quality gate is not met. Absolute movement is small.
+    Flags stay default off. No separate one-iter resume probe.
 - Optional N-GPU Nexto retrace was not started (mid windows were used
-  for collect; 45 min cap still open).
+  for collect and async; 45 min cap still open).
 
 ## TM12 — Cross-exam note: Nexto kickoff fidelity + role-aware critic (staged 2026-11-24)
 
