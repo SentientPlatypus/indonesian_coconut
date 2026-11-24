@@ -4467,3 +4467,41 @@ touched. Every lever defaults off.
   (default false) is the key sub-lever for the Nov 10 collect inflation.
   No bf16, 1 PPO epoch, CHUNK 100M, numpy 1.26.4.
 
+## TM12 — Cross-exam note: Nexto kickoff fidelity + role-aware critic (staged 2026-11-24)
+
+Goal (user): generalizing 2v2/3v3 team play; Nexto is the key external opponent; success = Nexto > 0.55 (2v2) / 0.45 (3v3) for
+3+ mids with double commits and pair800 down. TM11 (from the TM10 final, BT = TM9 final) is not touched.
+
+### Cross-exam (three legs, per the Nov 12 rule)
+
+- **Discord (read-only; not re-checked live on Nov 24, from the TM6–TM11 legs):** Rou_Ad trained against Nexto kickoffs in 2s/3s and
+  PigMasta noted Nexto is weak to slow kickoffs (Nov 23); PigMasta's kickoff taker flag (we have it, tie-break unified in TM8);
+  Vermatten / Lamp passivity warnings for rotation/support rewards; PigMasta ~1 % demo share, Rolv "a demo habit is hard to unlearn";
+  TeamMaxing contested (JPK314, JeffA233).
+- **Outside research:** MAPPO (Yu et al. 2021): training-only critic with agent-specific global state beats global-only /
+  concatenated-obs critics on SMAC; Overcooked replication 3/3 vs 0/3 seeds at equal budget on a coordination-heavy layout;
+  role-conditioned critics (DRG-MAPPO). In-house: pre-concede (ST31) and pre-demo (ST30) replay failed their gates.
+- **Code + logs:** the training Nexto (`NfPolicy`) never plays Nexto's scripted speedflip kickoff, while every Nexto eval does
+  (`nectofam.rs:41-43`, `"kickoff_script": true`). 3v3 kickoff vs Nexto at 1.5 s is 0.150 / 0.414 over 19 TM11 mids
+  (TM10 0.148 / 0.431, TM7 0.15 / 0.44) — TM11's criterion (≥ 0.20 / ≤ 0.33) failed. TM11 vs the TM9 pin (mids 0.534 / 0.544)
+  equals TM10's final vs TM9 (0.524 / 0.548); Nexto-game live pair800 (2v2 0.088, 3v3 0.186), double commit (0.025 / 0.041),
+  concedes with pair800 in the last 3 s (0.32 / 0.61) are unchanged from TM10. Carry breaks/min flat (0.015–0.017); demos flat
+  (0.126–0.131/min, no farming). TM11's new terms are ~0.16–0.17 % of reward each. The critic sees only the actor's obs.
+
+### Reconciliation (what TM12 does)
+
+- Lever 1: `kickoff_script = true` for the training Nexto (per-tick speedflip as taker, β 0.5 for non-takers, as in bot.py;
+  default false), kickoff setter `opp_weights = { nexto = 0.30 }`. PFSP clamps unchanged.
+- Lever 2 (only if its smoke passes before launch; else dropped and reported): critic-only inputs (hysteretic role one-hot, ETA rank, teammates'
+  roles), zero-init widened critic, actor/obs/bpk unchanged. Not combined with KWI-19's smaller critic.
+- Lever 3 (eval-only): Nexto-game dc / pair800 / concede-structure keys in mid.jsonl; Necto kickoff audit as held-out; BT = TM10.
+- Unchanged: warm start, obs, team_spirit 0.9 schedule, all TM10/TM11 terms, 1 epoch, no bf16, CHUNK 100M, LR schedule, PFSP.
+  No KWI-19 speedups unless the user approves after the speedup report.
+
+### Success criteria (TM12 final vs TM10 final, 504 games)
+
+- Gate: mean h2h ≥ 0.52, each mode ≥ 0.48; external mean not below TM10's by > 0.04.
+- 3v3 kickoff vs Nexto at 1.5 s: win ≥ 0.20, loss ≤ 0.33; Necto kickoff audit not worse than the start checkpoint's.
+- Nexto 2v2 ≥ 0.55, 3v3 ≥ 0.45 for 3+ mids, with Nexto-game double commit and pair800 below TM10's (2v2 0.0251 / 0.0904,
+  3v3 0.0400 / 0.1869).
+- No passive alarm two mids in a row; demos/min not above 0.16 in training (farming check).
