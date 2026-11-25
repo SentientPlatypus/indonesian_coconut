@@ -47,6 +47,28 @@ pub fn get_states_batch_range(
     Tensor::from_data(TensorData::new(half, [rows, width]), (device, DType::F16))
 }
 
+/// Same upload as [`get_states_batch_range`], with the host convert and the
+/// H2D split timed separately. `sync` should drain the device (e.g. the
+/// learner's `profile_sync`) so `h2d_secs` includes the copy, not just the
+/// launch.
+pub fn get_states_batch_range_split(
+    data: &[f32],
+    width: usize,
+    start: usize,
+    end: usize,
+    device: &Device,
+    sync: impl FnOnce(&Device),
+) -> (Tensor<2>, f64, f64) {
+    let rows = end - start;
+    let convert_start = std::time::Instant::now();
+    let half = convert_states_to_f16(&data[start * width..end * width]);
+    let convert_secs = convert_start.elapsed().as_secs_f64();
+    let h2d_start = std::time::Instant::now();
+    let tensor = Tensor::from_data(TensorData::new(half, [rows, width]), (device, DType::F16));
+    sync(device);
+    (tensor, convert_secs, h2d_start.elapsed().as_secs_f64())
+}
+
 #[derive(Clone)]
 pub struct Memory {
     /// Per-step observations stored row-major as `[step * state_width..]`.
@@ -861,6 +883,7 @@ impl Memory {
             action_mask_width: self.action_mask_width,
             old_state_width: self.old_state_width,
             truncations: self.truncation_len(),
+            critic_extra_width: self.critic_extra_width,
         };
         fs::write(
             dir.join("header.json"),
@@ -885,6 +908,8 @@ impl Memory {
         write_f32s(&dir.join("trunc_next_states.f32"), &self.trunc_next_states)?;
         write_u8s(&dir.join("action_masks.u8"), &self.action_masks)?;
         write_f32s(&dir.join("old_states.f32"), &self.old_states)?;
+        write_f32s(&dir.join("critic_extras.f32"), &self.critic_extras)?;
+        write_f32s(&dir.join("trunc_next_extras.f32"), &self.trunc_next_extras)?;
         Ok(())
     }
 
@@ -931,6 +956,16 @@ impl Memory {
             &dir.join("old_states.f32"),
             rows.saturating_mul(header.old_state_width),
         )?;
+        // Pre-TM12 dumps omit critic extras; treat missing files as empty
+        // so learn-replay can still load an existing profile memory dump.
+        let critic_extras = read_f32s_optional(
+            &dir.join("critic_extras.f32"),
+            rows.saturating_mul(header.critic_extra_width),
+        )?;
+        let trunc_next_extras = read_f32s_optional(
+            &dir.join("trunc_next_extras.f32"),
+            header.truncations.saturating_mul(header.critic_extra_width),
+        )?;
         let memory = Self {
             states,
             state_width: header.state_width,
@@ -943,6 +978,9 @@ impl Memory {
             action_mask_width: header.action_mask_width,
             old_states,
             old_state_width: header.old_state_width,
+            critic_extras,
+            critic_extra_width: header.critic_extra_width,
+            trunc_next_extras,
             baseline_steps: rows,
         };
         memory
@@ -978,6 +1016,9 @@ struct MemoryDumpHeader {
     action_mask_width: usize,
     old_state_width: usize,
     truncations: usize,
+    // Default 0 so existing version-1 dumps without this field still parse.
+    #[serde(default)]
+    critic_extra_width: usize,
 }
 
 fn write_f32s(path: &Path, xs: &[f32]) -> io::Result<()> {
@@ -1016,6 +1057,13 @@ fn read_f32s(path: &Path, expected: usize) -> io::Result<Vec<f32>> {
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
         .collect())
+}
+
+fn read_f32s_optional(path: &Path, expected: usize) -> io::Result<Vec<f32>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    read_f32s(path, expected)
 }
 
 fn read_u64s(path: &Path, expected: usize) -> io::Result<Vec<u64>> {
@@ -1126,6 +1174,9 @@ mod regression_tests {
         assert_eq!(loaded.trunc_next_states(), memory.trunc_next_states());
         assert_eq!(loaded.action_masks(), memory.action_masks());
         assert_eq!(loaded.old_states(), memory.old_states());
+        assert_eq!(loaded.critic_extra_width(), memory.critic_extra_width());
+        assert_eq!(loaded.critic_extras(), memory.critic_extras());
+        assert_eq!(loaded.trunc_next_extras(), memory.trunc_next_extras());
         // Leave the dump on disk? Tests use a unique temp dir; remove it the
         // same way the neighboring serde tests do, so /tmp does not grow.
         let _ = std::fs::remove_dir_all(&dir);

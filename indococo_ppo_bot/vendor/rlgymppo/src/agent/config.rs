@@ -2,6 +2,7 @@ use burn::grad_clipping::GradientClippingConfig;
 use burn::optim::{AdamWConfig, ModuleOptimizer};
 use burn::tensor::Device;
 use rlgymppo_model::TrainPrecision;
+use serde::{Deserialize, Serialize};
 
 use super::Ppo;
 use super::model::{Actic, Net};
@@ -163,6 +164,23 @@ pub struct PercentileAdvConfig {
     pub ema_decay: f32,
 }
 
+
+/// How action-validity masks are uploaded to the device.
+///
+/// `I64` is the historical path (`Tensor::<2, Int>::from_data` uses the
+/// device default int dtype, typically i64). `U8` uploads the `u8` bytes
+/// and casts to f32 on the device. `Auto` skips the upload entirely when
+/// every stored mask is 1 (bit-identical to applying an all-ones mask)
+/// and otherwise uses `U8`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MaskUpload {
+    #[default]
+    I64,
+    U8,
+    Auto,
+}
+
 pub struct PpoLearnerConfig {
     pub gamma: f32,
     pub lambda: f32,
@@ -250,6 +268,11 @@ pub struct PpoLearnerConfig {
     /// Report plasticity diagnostics (`Update/* weight norm`, `stable rank`,
     /// `dormant frac`) every N updates. `None` (the default) disables them.
     pub plasticity_log_interval: Option<usize>,
+    /// How action masks are uploaded. Default `I64` is today's path.
+    pub mask_upload: MaskUpload,
+    /// Under `feature=torch`, convert resident states into a reusable pinned
+    /// host f16 buffer and H2D with `to_device_(non_blocking)`. Default off.
+    pub pinned_upload: bool,
     /// Matmul precision of the actor and critic during the PPO update.
     /// Defaults to `f32` for both; see [`TrainPrecision`].
     pub precision: TrainPrecision,
@@ -288,6 +311,8 @@ impl Default for PpoLearnerConfig {
             adaptive_clip: None,
             percentile_adv_scaling: None,
             plasticity_log_interval: None,
+            mask_upload: MaskUpload::I64,
+            pinned_upload: false,
             precision: TrainPrecision::default(),
         }
     }

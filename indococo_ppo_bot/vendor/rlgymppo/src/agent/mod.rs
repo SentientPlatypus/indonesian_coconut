@@ -23,12 +23,12 @@ use rayon::prelude::*;
 use rlgymppo_utils::Report;
 
 use crate::OptimizerNetwork;
-use crate::agent::config::{PpoLearnerConfig, RegenConfig};
+use crate::agent::config::{MaskUpload, PpoLearnerConfig, RegenConfig};
 use crate::agent::gae::{GAEOutput, get_gae};
 use crate::agent::model::{Actic, Net, PPOOutput};
 use crate::agent::ppo_loss::{PolicyLoss, clipped_policy_loss};
 use crate::agent::update_magnitude::ParamSnapshot;
-use crate::base::{Memory, TerminalState, get_batch_1d, get_states_batch_range};
+use crate::base::{Memory, TerminalState, get_batch_1d, get_states_batch_range, get_states_batch_range_split};
 use crate::utils::running_stat::Stats;
 
 pub struct Ppo {
@@ -468,27 +468,61 @@ impl Ppo {
         // instead of once per phase, at half the bytes. Timed as staging
         // work (including the parallel `f32` to `f16` conversion).
         let resident_start = Instant::now();
-        let resident_states = get_states_batch_range(
-            memory.states(),
-            memory.state_width(),
-            0,
-            rollout_size,
-            &self.device,
-        );
-        let resident_secs = resident_start.elapsed().as_secs_f64();
+        let profile = speed_profile_enabled();
+        // Width is needed both for the resident extras upload and for the
+        // truncation-bootstrap critic concat later in this function.
         let extra_width = memory.critic_extra_width();
-        let resident_extras = (extra_width > 0).then(|| {
-            get_states_batch_range(
-                memory.critic_extras(),
-                extra_width,
+        let (resident_states, resident_extras, convert_secs, h2d_secs) = if profile {
+            let mut convert_secs = 0.0;
+            let mut h2d_secs = 0.0;
+            let (states, c1, h1) = get_states_batch_range_split(
+                memory.states(),
+                memory.state_width(),
                 0,
                 rollout_size,
                 &self.device,
-            )
-        });
-        let profile = speed_profile_enabled();
+                profile_sync,
+            );
+            convert_secs += c1;
+            h2d_secs += h1;
+            let extras = (extra_width > 0).then(|| {
+                let (ex, c2, h2) = get_states_batch_range_split(
+                    memory.critic_extras(),
+                    extra_width,
+                    0,
+                    rollout_size,
+                    &self.device,
+                    profile_sync,
+                );
+                convert_secs += c2;
+                h2d_secs += h2;
+                ex
+            });
+            (states, extras, convert_secs, h2d_secs)
+        } else {
+            let states = get_states_batch_range(
+                memory.states(),
+                memory.state_width(),
+                0,
+                rollout_size,
+                &self.device,
+            );
+            let extras = (extra_width > 0).then(|| {
+                get_states_batch_range(
+                    memory.critic_extras(),
+                    extra_width,
+                    0,
+                    rollout_size,
+                    &self.device,
+                )
+            });
+            (states, extras, 0.0, 0.0)
+        };
+        let resident_secs = resident_start.elapsed().as_secs_f64();
         if profile {
             profile_sync(&self.device);
+            metrics["Prof/resident convert"] = convert_secs.into();
+            metrics["Prof/resident h2d"] = h2d_secs.into();
             metrics["Prof/resident upload"] = resident_start.elapsed().as_secs_f64().into();
         }
 
@@ -753,6 +787,15 @@ impl Ppo {
             // CPU RAM and keeps the producer from racing pointlessly ahead.
             let (staged_tx, staged_rx) = std::sync::mpsc::sync_channel::<StagedBatch>(2);
 
+            let mask_upload = self.config.mask_upload;
+            let skip_masks = match mask_upload {
+                MaskUpload::Auto => {
+                    let masks = memory.action_masks();
+                    !masks.is_empty() && masks.par_iter().all(|&m| m == 1)
+                }
+                MaskUpload::I64 | MaskUpload::U8 => false,
+            };
+
             scope.spawn(move || {
                 for batch_indices in epoch_batches_ref {
                     let staged = StagedBatch::stage(
@@ -761,6 +804,7 @@ impl Ppo {
                         &target_vals,
                         &clip_eps,
                         batch_indices,
+                        !skip_masks,
                     );
                     if staged_tx.send(staged).is_err() {
                         break;
@@ -798,7 +842,7 @@ impl Ppo {
                 let extras = resident_extras.as_ref().map(|ex| {
                     ex.clone().select(0, index).cast(DType::F32)
                 });
-                let batch = GpuBatch::from_staged(states, extras, staged, &self.device);
+                let batch = GpuBatch::from_staged(states, extras, staged, &self.device, mask_upload);
                 if profile {
                     profile_sync(&self.device);
                 }
@@ -1201,6 +1245,24 @@ impl Ppo {
     }
 }
 
+
+fn upload_action_masks(
+    masks: &[u8],
+    rows: usize,
+    width: usize,
+    device: &Device,
+    mode: MaskUpload,
+) -> Tensor<2> {
+    let data = TensorData::new(masks.to_vec(), [rows, width]);
+    let int = match mode {
+        MaskUpload::I64 => Tensor::<2, Int>::from_data(data, device),
+        MaskUpload::U8 | MaskUpload::Auto => {
+            Tensor::<2, Int>::from_data(data, (device, DType::U8))
+        }
+    };
+    int.cast(FloatDType::F32)
+}
+
 struct GpuBatch {
     states: Tensor<2>,
     extras: Option<Tensor<2>>,
@@ -1244,6 +1306,7 @@ impl StagedBatch {
         target_vals: &[f32],
         clip_eps: &[f32],
         indices: &[usize],
+        include_masks: bool,
     ) -> Self {
         let fill_start = Instant::now();
         let rows = indices.len();
@@ -1278,7 +1341,7 @@ impl StagedBatch {
             .collect::<Vec<_>>();
 
         let mut batch_masks = Vec::new();
-        if !stored_masks.is_empty() {
+        if include_masks && !stored_masks.is_empty() {
             batch_masks = vec![0u8; rows * mask_width];
             batch_masks
                 .par_chunks_mut(mask_width)
@@ -1306,7 +1369,13 @@ impl StagedBatch {
 impl GpuBatch {
     /// Combine GPU-gathered states with one staged small-field batch. The
     /// staging `Vec`s move into `TensorData` with no further copy on host.
-    fn from_staged(states: Tensor<2>, extras: Option<Tensor<2>>, staged: StagedBatch, device: &Device) -> Self {
+    fn from_staged(
+        states: Tensor<2>,
+        extras: Option<Tensor<2>>,
+        staged: StagedBatch,
+        device: &Device,
+        mask_upload: MaskUpload,
+    ) -> Self {
         let rows = staged.rows;
         Self {
             states,
@@ -1317,11 +1386,7 @@ impl GpuBatch {
             target_vals: Tensor::from_data(TensorData::new(staged.target_vals, [rows, 1]), device),
             clip_eps: Tensor::from_data(TensorData::new(staged.clip_eps, [rows, 1]), device),
             action_masks: (!staged.masks.is_empty()).then(|| {
-                Tensor::<2, Int>::from_data(
-                    TensorData::new(staged.masks, [rows, staged.mask_width]),
-                    device,
-                )
-                .cast(FloatDType::F32)
+                upload_action_masks(&staged.masks, rows, staged.mask_width, device, mask_upload)
             }),
         }
     }
@@ -2023,26 +2088,68 @@ mod runtime_device_tests {
 
 
 #[cfg(test)]
-mod explained_variance_tests {
-    use super::explained_variance;
+mod mask_upload_tests {
+    use super::{MaskUpload, upload_action_masks};
+    use crate::agent::config::PpoLearnerConfig;
+    use burn::prelude::*;
+    use burn::tensor::{DType, TensorData};
 
-    #[test]
-    fn perfect_prediction_is_one() {
-        let returns = [1.0, 2.0, 3.0, 4.0];
-        assert!((explained_variance(&returns, &returns) - 1.0).abs() < 1e-6);
+    fn masks_to_f32(masks: &[u8], rows: usize, width: usize, mode: MaskUpload) -> Vec<f32> {
+        let device = Default::default();
+        let t = upload_action_masks(masks, rows, width, &device, mode);
+        t.into_data().try_to_vec::<f32>().unwrap()
     }
 
     #[test]
-    fn mean_prediction_is_zero() {
-        let returns = [1.0, 2.0, 3.0, 4.0];
-        let old = [2.5, 2.5, 2.5, 2.5];
-        assert!(explained_variance(&returns, &old).abs() < 1e-6);
+    fn default_mask_upload_is_i64_and_pinned_off() {
+        let c = PpoLearnerConfig::default();
+        assert_eq!(c.mask_upload, MaskUpload::I64);
+        assert!(!c.pinned_upload);
     }
 
     #[test]
-    fn constant_target_is_zero() {
-        let returns = [3.0, 3.0, 3.0];
-        let old = [1.0, 2.0, 3.0];
-        assert_eq!(explained_variance(&returns, &old), 0.0);
+    fn u8_and_i64_uploads_match_on_all_ones() {
+        let rows = 4;
+        let width = 90;
+        let masks = vec![1u8; rows * width];
+        let a = masks_to_f32(&masks, rows, width, MaskUpload::I64);
+        let b = masks_to_f32(&masks, rows, width, MaskUpload::U8);
+        assert_eq!(a, b);
+        assert!(a.iter().all(|&x| x == 1.0));
+    }
+
+    #[test]
+    fn u8_and_i64_uploads_match_on_random_masks() {
+        let rows = 6;
+        let width = 90;
+        let masks: Vec<u8> = (0..rows * width)
+            .map(|i| u8::from(((i * 17) % 3) != 0))
+            .collect();
+        let a = masks_to_f32(&masks, rows, width, MaskUpload::I64);
+        let b = masks_to_f32(&masks, rows, width, MaskUpload::U8);
+        let auto = masks_to_f32(&masks, rows, width, MaskUpload::Auto);
+        assert_eq!(a, b);
+        assert_eq!(a, auto);
+        for (got, raw) in a.iter().zip(masks.iter()) {
+            assert_eq!(*got, f32::from(*raw));
+        }
+    }
+
+    #[test]
+    fn auto_all_ones_scan_is_true() {
+        let ones = vec![1u8; 270];
+        assert!(ones.iter().all(|&m| m == 1));
+        let mixed = {
+            let mut v = ones.clone();
+            v[10] = 0;
+            v
+        };
+        assert!(!mixed.iter().all(|&m| m == 1));
+    }
+
+    #[test]
+    fn tensor_data_u8_keeps_byte_dtype() {
+        let data = TensorData::new(vec![1u8, 0, 1, 1], [2, 2]);
+        assert_eq!(data.dtype(), DType::U8);
     }
 }

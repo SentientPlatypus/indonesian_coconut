@@ -47,7 +47,7 @@ use rand::{Rng, RngExt, SeedableRng};
 use rlgymppo::rlgym::GameState;
 use rlgymppo::rlgym::rocketsim::init_from_default;
 use rlgymppo::{
-    Actic, ComputePrecision, DecayShape, ExternalOpponent, FixedOpponent, LearnerConfig, LrSchedule, Net,
+    Actic, ComputePrecision, DecayShape, ExternalOpponent, FixedOpponent, LearnerConfig, LrSchedule, MaskUpload, Net,
     PpoLearnerConfig, SelfPlayConfig, SkillTrackerConfig, TrainPrecision, default_adamw_optimizer,
 };
 use serde::{Deserialize, Serialize};
@@ -55,7 +55,7 @@ use serde::{Deserialize, Serialize};
 #[path = "../bc_cli.rs"]
 mod bc_cli;
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TrainConfig {
     reward_config: PathBuf,
@@ -110,6 +110,15 @@ struct TrainConfig {
     /// Process-global LibTorch intra-op threads. 0 = do not call set_num_threads.
     #[serde(default)]
     nf_intra_threads: usize,
+    /// Action-mask upload path. Default `"i64"` is today's conversion to the
+    /// device int dtype. `"u8"` uploads bytes and casts on the GPU. `"auto"`
+    /// skips the upload when every mask is 1, otherwise uses `"u8"`.
+    #[serde(default)]
+    mask_upload: MaskUpload,
+    /// Reusable pinned host f16 buffer for the resident state upload.
+    /// Default false keeps today's pageable path. Gated behind a measured split.
+    #[serde(default)]
+    pinned_upload: bool,
     /// ST35: prioritized fictitious self-play over the league (replaces the
     /// static `[opponents]` weights for every rollout pick). See
     /// `indococo_bot::pfsp`.
@@ -514,6 +523,8 @@ fn learner_config(
                 policy: precision(cfg.policy_bf16),
                 critic: precision(cfg.critic_bf16),
             },
+            mask_upload: cfg.mask_upload,
+            pinned_upload: cfg.pinned_upload,
             ..Default::default()
         },
         self_play: SelfPlayConfig {
@@ -1588,12 +1599,41 @@ fn learn_replay(config: &Path, ckpt_dir: &Path, memory_dump: &Path, out_dir: &Pa
         iterations: Some(1),
     };
     let (rewards, setters) = (rewards, cfg.state_setters.clone());
-    let mut learner = learner_config(&cfg, phase, dev, Vec::new(), Vec::new()).init(
-        move |id| indococo_bot::env::create_env_for_game(&rewards, &setters, id),
-        default_adamw_optimizer(),
-    );
-    learner.load();
-    learner.learn_replay(&memory, seed, out_dir);
+    let repeat: usize = std::env::var("LEARN_REPLAY_REPEAT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(1);
+    let rewards_fn = rewards;
+    for i in 0..repeat {
+        // Reload the checkpoint and optimizer before every rep so each starts
+        // from identical weights. Only rep 0 writes actor/critic/old_values;
+        // every rep writes metrics_rep{i}.json.
+        let mut learner = learner_config(&cfg, phase, dev.clone(), Vec::new(), Vec::new()).init(
+            {
+                let rewards = rewards_fn.clone();
+                let setters = setters.clone();
+                move |id| indococo_bot::env::create_env_for_game(&rewards, &setters, id)
+            },
+            default_adamw_optimizer(),
+        );
+        learner.load();
+        let dest = if i == 0 {
+            out_dir.to_path_buf()
+        } else {
+            out_dir.join(format!("_rep{i}"))
+        };
+        learner.learn_replay(&memory, seed, &dest);
+        let metrics_src = dest.join("metrics.json");
+        let metrics_dest = out_dir.join(format!("metrics_rep{i}.json"));
+        if metrics_src != metrics_dest {
+            std::fs::copy(&metrics_src, &metrics_dest)
+                .unwrap_or_else(|e| panic!("copy {}: {e}", metrics_src.display()));
+        } else {
+            std::fs::copy(&metrics_src, out_dir.join("metrics_rep0.json"))
+                .unwrap_or_else(|e| panic!("copy metrics_rep0: {e}"));
+        }
+    }
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -1778,11 +1818,13 @@ fn parse_config(path: &Path) {
         std::process::exit(1);
     });
     println!(
-        "parse-config ok path={} nf_intra_threads={} async_collect={} collect_stream_priority={} epochs={} policy_bf16={} critic_bf16={}",
+        "parse-config ok path={} nf_intra_threads={} async_collect={} collect_stream_priority={} mask_upload={:?} pinned_upload={} epochs={} policy_bf16={} critic_bf16={}",
         path.display(),
         cfg.nf_intra_threads,
         cfg.async_collect,
         cfg.collect_stream_priority,
+        cfg.mask_upload,
+        cfg.pinned_upload,
         cfg.epochs,
         cfg.policy_bf16,
         cfg.critic_bf16
@@ -3015,6 +3057,8 @@ mod tests {
         assert!(!c.async_collect);
         assert!(!c.collect_stream_priority);
         assert_eq!(c.nf_intra_threads, 0);
+        assert_eq!(c.mask_upload, MaskUpload::I64);
+        assert!(!c.pinned_upload);
         assert_eq!(c.league_bots_device, LeagueBotsDevice::Default);
     }
 
@@ -3073,6 +3117,19 @@ mod tests {
         assert_eq!(c.opponents.external.len(), 1);
         assert_eq!(c.opponents.external[0].replicas, 8);
         assert_eq!(c.opponents.external[0].chunk_rows, 64);
+    }
+
+    #[test]
+    fn mask_upload_and_pinned_parse_and_default_off() {
+        let c = parse("");
+        assert_eq!(c.mask_upload, MaskUpload::I64);
+        assert!(!c.pinned_upload);
+        let on = parse("mask_upload = \"auto\"\npinned_upload = true\n");
+        assert_eq!(on.mask_upload, MaskUpload::Auto);
+        assert!(on.pinned_upload);
+        let u8 = parse("mask_upload = \"u8\"\n");
+        assert_eq!(u8.mask_upload, MaskUpload::U8);
+        assert!(!u8.pinned_upload);
     }
 
     #[test]

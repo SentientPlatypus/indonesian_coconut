@@ -1774,6 +1774,8 @@ mod regression_tests {
             terminals,
             action_masks: vec![1u8; len],
             action_mask_width: 1,
+            critic_extras: Vec::new(),
+            critic_extra_width: 0,
             baseline_steps: 0,
         }
     }

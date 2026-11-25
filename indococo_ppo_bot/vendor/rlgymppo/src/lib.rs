@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use agent::Ppo;
 pub use agent::config::{
-    AdaptiveClipConfig, DecayShape, GaeEstimator, LrSchedule, PercentileAdvConfig,
+    AdaptiveClipConfig, DecayShape, GaeEstimator, LrSchedule, MaskUpload, PercentileAdvConfig,
     PpoLearnerConfig, RegenConfig,
 };
 pub use agent::external::{ExternalOpponent, ExternalPolicy, Opponent, OpponentRef};
