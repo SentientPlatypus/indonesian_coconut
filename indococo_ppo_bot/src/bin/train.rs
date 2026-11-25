@@ -19,6 +19,7 @@
 //! indococo-train nexto-h2h <ckpt> <nexto_dir> <games> [threads] [dump.jsonl]  # Nexto (TorchScript), team size from INDOCOCO_TEAM_SIZE
 //! indococo-train necto-h2h <ckpt> <necto_dir> <games> [threads] [dump.jsonl]  # Necto (TorchScript), same
 //! indococo-train learn-replay <train.toml> <ckpt_dir> <memory_dump> <out_dir> [seed]
+//! indococo-train reinit-critic <src_ckpt> <dst_dir> <l1,l2,l3,l4> <seed>  # fresh critic, copy actor+stats
 //! indococo-train nf-bench <nexto_dir> <team_size 2|3> <rows> <iters> <replicas> <intra_threads> <chunk_rows> <parallel_callers>
 //! H2H_REWARD_CONFIG=<reward toml> selects the role params.
 //! INDOCOCO_OBS_TEAM=1 indococo-train widen-team <1v1_ckpt> <dst_ckpt>  # TM1 warm start (actor+critic)
@@ -119,6 +120,9 @@ struct TrainConfig {
     /// Default false keeps today's pageable path. Gated behind a measured split.
     #[serde(default)]
     pinned_upload: bool,
+    /// Hidden widths of the critic. Absent / None uses [`LAYERS`] (same as the actor).
+    #[serde(default)]
+    critic_layers: Option<Vec<usize>>,
     /// ST35: prioritized fictitious self-play over the league (replaces the
     /// static `[opponents]` weights for every rollout pick). See
     /// `indococo_bot::pfsp`.
@@ -549,7 +553,7 @@ fn learner_config(
         norm: rlgymppo::NormSelection::None,
         shared_head_layer_sizes: vec![],
         policy_layer_sizes: LAYERS.to_vec(),
-        critic_layer_sizes: LAYERS.to_vec(),
+        critic_layer_sizes: critic_layer_sizes(cfg),
         render_device: device.clone(),
         device: device.autodiff(),
         skill_tracker_device: None,
@@ -693,20 +697,78 @@ fn probe_input() -> Vec<f32> {
         .collect()
 }
 
+fn critic_layer_sizes(cfg: &TrainConfig) -> Vec<usize> {
+    cfg.critic_layers.clone().unwrap_or_else(|| LAYERS.to_vec())
+}
+
 fn new_model(dev: &Device) -> Actic {
     model_with_input(obs_size(), dev)
 }
 
 fn model_with_input(input: usize, dev: &Device) -> Actic {
+    model_with_critic_layers(input, dev, &LAYERS)
+}
+
+fn model_with_critic_layers(input: usize, dev: &Device, critic_layers: &[usize]) -> Actic {
     Actic::new(
         input,
         N_ACTIONS,
         LAYERS.to_vec(),
-        LAYERS.to_vec(),
+        critic_layers.to_vec(),
         &[],
         dev,
         None,
     )
+}
+
+/// Copy `actor.bpk` and `stats.toml` from `src`, write a freshly initialized
+/// critic of `layers` (burn default Kaiming init, `device.seed(seed)`), and
+/// write no optimizer files. Matches how launchers seed `$X/checkpoints/$INIT`.
+fn reinit_critic(src: &Path, dst: &Path, layers_spec: &str, seed: u64) {
+    let layers: Vec<usize> = layers_spec
+        .split(',')
+        .map(|s| s.trim().parse().expect("critic layer size"))
+        .collect();
+    assert!(
+        !layers.is_empty(),
+        "reinit-critic needs at least one hidden width, got {layers_spec:?}"
+    );
+    assert!(
+        src.join("actor.bpk").is_file(),
+        "reinit-critic src must contain actor.bpk: {}",
+        src.display()
+    );
+    assert!(
+        src.join("stats.toml").is_file(),
+        "reinit-critic src must contain stats.toml: {}",
+        src.display()
+    );
+    std::fs::create_dir_all(dst).unwrap_or_else(|e| {
+        panic!("reinit-critic cannot create {}: {e}", dst.display())
+    });
+    std::fs::copy(src.join("actor.bpk"), dst.join("actor.bpk")).unwrap_or_else(|e| {
+        panic!("reinit-critic copy actor.bpk: {e}")
+    });
+    std::fs::copy(src.join("stats.toml"), dst.join("stats.toml")).unwrap_or_else(|e| {
+        panic!("reinit-critic copy stats.toml: {e}")
+    });
+    let dev = Device::flex();
+    // Seed immediately before critic init so the seed uniquely determines
+    // the new critic (actor init would otherwise consume RNG from the device).
+    dev.seed(seed);
+    let extra = indococo_bot::critic_extras::width();
+    let critic_in = obs_size() + extra;
+    let critic = Net::new(critic_in, 1, layers.clone(), &dev, None, true);
+    let params = critic.num_params();
+    critic
+        .save_file(dst.join("critic.bpk"))
+        .unwrap_or_else(|e| panic!("reinit-critic save critic.bpk: {e}"));
+    println!(
+        "reinit-critic ok src={} dst={} critic_layers={:?} seed={seed} critic_in={critic_in} extra={extra} params={params}",
+        src.display(),
+        dst.display(),
+        layers
+    );
 }
 
 /// Python `DiscreteFF` keys `model.{0,2,4,6,8}` <-> Burn `linear_layers.{0..4}`.
@@ -1818,13 +1880,14 @@ fn parse_config(path: &Path) {
         std::process::exit(1);
     });
     println!(
-        "parse-config ok path={} nf_intra_threads={} async_collect={} collect_stream_priority={} mask_upload={:?} pinned_upload={} epochs={} policy_bf16={} critic_bf16={}",
+        "parse-config ok path={} nf_intra_threads={} async_collect={} collect_stream_priority={} mask_upload={:?} pinned_upload={} critic_layers={:?} epochs={} policy_bf16={} critic_bf16={}",
         path.display(),
         cfg.nf_intra_threads,
         cfg.async_collect,
         cfg.collect_stream_priority,
         cfg.mask_upload,
         cfg.pinned_upload,
+        cfg.critic_layers,
         cfg.epochs,
         cfg.policy_bf16,
         cfg.critic_bf16
@@ -2048,6 +2111,12 @@ fn main() {
             Path::new(arg(3)),
             Path::new(arg(4)),
             args.get(5).map_or(0, |s| s.parse().expect("seed")),
+        ),
+        "reinit-critic" => reinit_critic(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3),
+            arg(4).parse().expect("seed"),
         ),
         "reward-audit" => reward_audit(
             Path::new(arg(1)),
@@ -3130,6 +3199,85 @@ mod tests {
         let u8 = parse("mask_upload = \"u8\"\n");
         assert_eq!(u8.mask_upload, MaskUpload::U8);
         assert!(!u8.pinned_upload);
+    }
+
+    #[test]
+    fn critic_layers_default_to_layers_and_parse() {
+        let c = parse("");
+        assert!(c.critic_layers.is_none());
+        assert_eq!(critic_layer_sizes(&c), LAYERS.to_vec());
+        let small = parse("critic_layers = [1024, 1024, 512, 512]\n");
+        assert_eq!(small.critic_layers.as_deref(), Some([1024, 1024, 512, 512].as_slice()));
+        assert_eq!(
+            critic_layer_sizes(&small),
+            vec![1024, 1024, 512, 512]
+        );
+        assert_eq!(critic_layer_sizes(&c), LAYERS.to_vec());
+    }
+
+    #[test]
+    fn reinit_critic_round_trip_and_shape_mismatch() {
+        let dev = Device::flex();
+        let root = std::env::temp_dir().join(format!(
+            "indococo-reinit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let src = root.join("src");
+        let dst = root.join("dst");
+        std::fs::create_dir_all(&src).expect("src dir");
+        dev.seed(1);
+        let src_model = model_with_input(obs_size(), &dev);
+        src_model
+            .actor
+            .clone()
+            .save_file(src.join("actor.bpk"))
+            .expect("save src actor");
+        src_model
+            .critic
+            .clone()
+            .save_file(src.join("critic.bpk"))
+            .expect("save src critic");
+        // Minimal stats.toml: only fields with defaults can be omitted if
+        // Stats has serde defaults; write a cumulative_timesteps key at least.
+        std::fs::write(src.join("stats.toml"), "cumulative_timesteps = 0\n")
+            .expect("write stats");
+        let layers = [1024usize, 1024, 512, 512];
+        let spec = "1024,1024,512,512";
+        reinit_critic(&src, &dst, spec, 0);
+        assert!(dst.join("actor.bpk").is_file());
+        assert!(dst.join("critic.bpk").is_file());
+        assert!(dst.join("stats.toml").is_file());
+        // No optimizer files.
+        for name in ["policy_opt.mpk", "value_opt.mpk", "optimizer.mpk", "policy_opt.bpk", "value_opt.bpk"] {
+            assert!(!dst.join(name).exists(), "unexpected optimizer file {name}");
+        }
+        // Same actor bytes.
+        let src_actor = std::fs::read(src.join("actor.bpk")).unwrap();
+        let dst_actor = std::fs::read(dst.join("actor.bpk")).unwrap();
+        assert_eq!(src_actor, dst_actor, "reinit-critic must copy actor.bpk unchanged");
+        // Load with matching critic_layers succeeds.
+        let ok = model_with_critic_layers(obs_size(), &dev, &layers)
+            .critic
+            .try_load_file(dst.join("critic.bpk"));
+        assert!(ok.is_ok(), "load with critic_layers should succeed: {ok:?}");
+        // Load without (default LAYERS template) fails, and the message is loud.
+        let err = model_with_input(obs_size(), &dev)
+            .critic
+            .try_load_file(dst.join("critic.bpk"))
+            .expect_err("load without critic_layers must fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("shape")
+                || msg.to_lowercase().contains("mismatch")
+                || msg.contains("2048")
+                || msg.contains("1024"),
+            "shape-mismatch error should mention shapes, got: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -35,8 +35,7 @@ def main():
     if "l2" in arm:
         text = set_top(text, "pinned_upload", "true")
     if "l3" in arm:
-        # critic_layers is added later with the L3 lever; keep the key out until then.
-        pass
+        text = set_top(text, "critic_layers", "[1024, 1024, 512, 512]")
     pathlib.Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     pathlib.Path(args.out).write_text(text)
     print("wrote", args.out, "arm", arm)

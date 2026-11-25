@@ -167,13 +167,19 @@ pub fn load_model<P: AsRef<Path>>(model: Actic, file_path: P, _device: &Device) 
                 path.display()
             )
         });
+    let expected_critic_shapes: Vec<Vec<usize>> = model
+        .critic
+        .linear_layers()
+        .iter()
+        .map(|layer| layer.weight.lazy_shape().as_slice().to_vec())
+        .collect();
     let critic = model
         .critic
         .try_load_file(path.join("critic.bpk"))
         .unwrap_or_else(|error| {
             panic!(
-                "Failed to load critic checkpoint in {}: {error}",
-                path.display()
+                "Critic checkpoint shape does not match the model config.\n                   expected critic weight shapes: {expected_critic_shapes:?}\n                   checkpoint: {}\n                   load error: {error}\n                   Never silently reinitializing the critic.",
+                path.join("critic.bpk").display()
             )
         });
     let shared_head = model.shared_head.map(|head| {
