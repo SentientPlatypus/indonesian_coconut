@@ -29,6 +29,8 @@ use crate::agent::model::{Actic, Net, PPOOutput};
 use crate::agent::ppo_loss::{PolicyLoss, clipped_policy_loss};
 use crate::agent::update_magnitude::ParamSnapshot;
 use crate::base::{Memory, TerminalState, get_batch_1d, get_states_batch_range, get_states_batch_range_split};
+#[cfg(feature = "torch")]
+use crate::base::{PinnedF16Staging, get_states_batch_range_pinned, tch_device_of};
 use crate::utils::running_stat::Stats;
 
 pub struct Ppo {
@@ -60,6 +62,12 @@ pub struct Ppo {
     /// Value-pass output of the most recent `learn` call, kept so
     /// `learn-replay` can write `old_values.f32`.
     pub(crate) last_old_values: Option<Vec<f32>>,
+    /// Reusable pinned host buffers for the resident f16 upload. Allocated
+    /// on first use when `pinned_upload` is on and the device is CUDA.
+    #[cfg(feature = "torch")]
+    pinned_states: Option<PinnedF16Staging>,
+    #[cfg(feature = "torch")]
+    pinned_extras: Option<PinnedF16Staging>,
 }
 
 
@@ -143,6 +151,10 @@ impl Ppo {
             last_plasticity: None,
             last_transfer_plasticity: None,
             last_old_values: None,
+            #[cfg(feature = "torch")]
+            pinned_states: None,
+            #[cfg(feature = "torch")]
+            pinned_extras: None,
         }
     }
 
@@ -168,6 +180,10 @@ impl Ppo {
             last_plasticity: None,
             last_transfer_plasticity: None,
             last_old_values: None,
+            #[cfg(feature = "torch")]
+            pinned_states: None,
+            #[cfg(feature = "torch")]
+            pinned_extras: None,
         }
     }
 
@@ -387,6 +403,8 @@ fn profile_sync(device: &Device) {
     let _ = Transaction::default().register(token).execute();
 }
 
+fn nop_sync(_device: &Device) {}
+
 /// `1 - Var(y - yhat) / Var(y)`, population variance. Metric only.
 fn explained_variance(y: &[f32], yhat: &[f32]) -> f64 {
     assert_eq!(y.len(), yhat.len());
@@ -472,6 +490,96 @@ impl Ppo {
         // Width is needed both for the resident extras upload and for the
         // truncation-bootstrap critic concat later in this function.
         let extra_width = memory.critic_extra_width();
+        #[cfg(feature = "torch")]
+        let pinned_dev = if self.config.pinned_upload {
+            tch_device_of(&self.device).filter(|d| matches!(d, tch::Device::Cuda(_)))
+        } else {
+            None
+        };
+        #[cfg(feature = "torch")]
+        let (resident_states, resident_extras, convert_secs, h2d_secs) = if let Some(tch_dev) = pinned_dev {
+            let sync_fn: fn(&Device) = if profile { profile_sync } else { nop_sync };
+            let states_st = self
+                .pinned_states
+                .get_or_insert_with(|| PinnedF16Staging::new(rollout_size, memory.state_width(), tch_dev));
+            let (states, c1, h1) = get_states_batch_range_pinned(
+                states_st,
+                memory.states(),
+                memory.state_width(),
+                0,
+                rollout_size,
+                &self.device,
+                tch_dev,
+                sync_fn,
+            );
+            let mut convert_secs = c1;
+            let mut h2d_secs = h1;
+            let extras = (extra_width > 0).then(|| {
+                let ex_st = self
+                    .pinned_extras
+                    .get_or_insert_with(|| PinnedF16Staging::new(rollout_size, extra_width, tch_dev));
+                let (ex, c2, h2) = get_states_batch_range_pinned(
+                    ex_st,
+                    memory.critic_extras(),
+                    extra_width,
+                    0,
+                    rollout_size,
+                    &self.device,
+                    tch_dev,
+                    sync_fn,
+                );
+                convert_secs += c2;
+                h2d_secs += h2;
+                ex
+            });
+            (states, extras, convert_secs, h2d_secs)
+        } else if profile {
+            let mut convert_secs = 0.0;
+            let mut h2d_secs = 0.0;
+            let (states, c1, h1) = get_states_batch_range_split(
+                memory.states(),
+                memory.state_width(),
+                0,
+                rollout_size,
+                &self.device,
+                profile_sync,
+            );
+            convert_secs += c1;
+            h2d_secs += h1;
+            let extras = (extra_width > 0).then(|| {
+                let (ex, c2, h2) = get_states_batch_range_split(
+                    memory.critic_extras(),
+                    extra_width,
+                    0,
+                    rollout_size,
+                    &self.device,
+                    profile_sync,
+                );
+                convert_secs += c2;
+                h2d_secs += h2;
+                ex
+            });
+            (states, extras, convert_secs, h2d_secs)
+        } else {
+            let states = get_states_batch_range(
+                memory.states(),
+                memory.state_width(),
+                0,
+                rollout_size,
+                &self.device,
+            );
+            let extras = (extra_width > 0).then(|| {
+                get_states_batch_range(
+                    memory.critic_extras(),
+                    extra_width,
+                    0,
+                    rollout_size,
+                    &self.device,
+                )
+            });
+            (states, extras, 0.0, 0.0)
+        };
+        #[cfg(not(feature = "torch"))]
         let (resident_states, resident_extras, convert_secs, h2d_secs) = if profile {
             let mut convert_secs = 0.0;
             let mut h2d_secs = 0.0;

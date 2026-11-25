@@ -69,6 +69,109 @@ pub fn get_states_batch_range_split(
     (tensor, convert_secs, h2d_start.elapsed().as_secs_f64())
 }
 
+/// Reusable CUDA-pinned host `f16` buffer for the resident state upload.
+/// Only used when `pinned_upload` is on and the device is LibTorch CUDA.
+#[cfg(feature = "torch")]
+pub struct PinnedF16Staging {
+    host: tch::Tensor,
+    cap: usize,
+    width: usize,
+    pin_dev: tch::Device,
+}
+
+#[cfg(feature = "torch")]
+impl PinnedF16Staging {
+    pub fn new(rows: usize, width: usize, pin_dev: tch::Device) -> Self {
+        let rows = rows.max(1);
+        let width = width.max(1);
+        let host = tch::Tensor::empty(
+            [rows as i64, width as i64],
+            (tch::Kind::Half, tch::Device::Cpu),
+        )
+        .pin_memory(pin_dev);
+        assert!(
+            host.is_contiguous(),
+            "pinned staging tensor must be contiguous"
+        );
+        Self {
+            host,
+            cap: rows,
+            width,
+            pin_dev,
+        }
+    }
+
+    fn ensure(&mut self, rows: usize, width: usize, pin_dev: tch::Device) {
+        if self.width != width || self.cap < rows || self.pin_dev != pin_dev {
+            *self = Self::new(rows.max(self.cap), width, pin_dev);
+        }
+    }
+}
+
+/// Map a burn `Device` to a tch CUDA (or CPU) device by hardware identity.
+/// Returns `None` for Flex / CubeCL devices; the caller should fall back.
+#[cfg(feature = "torch")]
+pub fn tch_device_of(device: &Device) -> Option<tch::Device> {
+    #[allow(deprecated)]
+    {
+        for i in 0..8 {
+            if *device == Device::libtorch_cuda(i) {
+                return Some(tch::Device::Cuda(i));
+            }
+        }
+        if *device == Device::libtorch() {
+            return Some(tch::Device::Cpu);
+        }
+    }
+    None
+}
+
+/// Same convert as [`get_states_batch_range`], writing `f16::from_f32` values
+/// into a reusable pinned host buffer and issuing a non-blocking H2D copy.
+/// Bitwise identical to the pageable path when the destination is CUDA.
+#[cfg(feature = "torch")]
+pub fn get_states_batch_range_pinned(
+    staging: &mut PinnedF16Staging,
+    data: &[f32],
+    width: usize,
+    start: usize,
+    end: usize,
+    device: &Device,
+    tch_dev: tch::Device,
+    sync: impl FnOnce(&Device),
+) -> (Tensor<2>, f64, f64) {
+    let rows = end - start;
+    let src = &data[start * width..end * width];
+    debug_assert_eq!(src.len(), rows * width);
+    staging.ensure(rows, width, tch_dev);
+    let convert_start = std::time::Instant::now();
+    // SAFETY: `host` is a contiguous pinned f16 tensor of at least
+    // `rows * width` elements (ensure() grows cap/width first). The
+    // pointer is valid for the write, no other alias is live, and the
+    // tensor outlives this block. Writes use the same f16::from_f32
+    // conversion as the pageable path.
+    unsafe {
+        let ptr = staging.host.data_ptr() as *mut f16;
+        let dst = std::slice::from_raw_parts_mut(ptr, rows * width);
+        dst.par_iter_mut()
+            .zip(src.par_iter())
+            .for_each(|(slot, &x)| *slot = f16::from_f32(x));
+    }
+    let convert_secs = convert_start.elapsed().as_secs_f64();
+    let h2d_start = std::time::Instant::now();
+    let view = if rows == staging.cap && width == staging.width {
+        staging.host.shallow_clone()
+    } else {
+        staging.host.narrow(0, 0, rows as i64)
+    };
+    let gpu = view.to_device_(tch_dev, tch::Kind::Half, true, false);
+    sync(device);
+    let h2d_secs = h2d_start.elapsed().as_secs_f64();
+    let primitive = burn_tch::TchTensor::new(gpu);
+    let tensor = Tensor::<2>::from_primitive::<burn_tch::LibTorch>(primitive);
+    (tensor, convert_secs, h2d_secs)
+}
+
 #[derive(Clone)]
 pub struct Memory {
     /// Per-step observations stored row-major as `[step * state_width..]`.

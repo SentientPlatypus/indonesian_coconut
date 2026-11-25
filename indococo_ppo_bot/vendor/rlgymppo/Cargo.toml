@@ -23,6 +23,9 @@ rustc-hash = "2.1.1"
 serde = { version = "1.0.208", features = ["derive"] }
 serde_json = "1.0"
 toml = { version = "1.1.2", features = ["preserve_order"] }
+# Optional, torch feature only: pinned host staging + from_primitive wrap.
+tch = { version = "0.22.0", optional = true, default-features = false }
+burn-tch = { version = "0.22.1", optional = true }
 
 [features]
 default = []
@@ -36,5 +39,5 @@ cuda = ["burn/cuda"]
 flex = ["burn/flex"]
 metal = ["burn/metal"]
 rocm = ["burn/rocm"]
-torch = ["burn/tch"]
+torch = ["burn/tch", "burn/extension", "dep:tch", "dep:burn-tch"]
 wgpu = ["burn/wgpu"]
