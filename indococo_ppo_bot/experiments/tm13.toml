@@ -1,0 +1,50 @@
+# TM13 reward config = TM12 plus GCO-lite anneal of 27 non-goal shaping terms
+# 1.0 -> 0.3 over 1.5B steps (relative to spirit_origin), 3v3 kickoff hygiene
+# (charge double_commit in 3v3; kickoff_outcome pays only the taker in 3v3).
+# Keep-full (not annealed): goal, goal_prob, goal_dist, vel_ball_to_goal, energy,
+# touch, possession, concede_role, double_commit, demo, defend_carry, carry_break,
+# clear_path, pass, double_tap, kickoff_outcome, kickoff_same_pad, kickoff_taker.
+# spirit_origin is set at launch to the TM13 start. team_best is never written.
+extends = "tm12.toml"
+
+[kickoff_outcome]
+horizon_steps = 22
+y_scale = 1500.0
+min_team = 2
+last_scale_2v2 = 0.5
+last_scale_3v3 = 0.0
+second_scale_3v3 = 0.0
+
+[team]
+kickoff_charge_3v3 = ["double_commit"]
+
+# Tables merge with tm12: playmaking / defend_carry / carry_break / kickoff_outcome
+# ramps stay. The 27 GCO-lite keys anneal 1.0 -> 0.3 over 1.5B steps.
+[team.term_ramp]
+face_ball = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+speed_to_ball = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+boost_keep = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+boost_change = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+airdribble = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+airdribble_seq = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+aerial_distance = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+range_carry = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+high_ball = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+aerial_boost = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+flick = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+pressure_flick = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+musty = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+flip_reset = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+flip_reset_use = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+air_double_touch = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+wall_pop = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+front_bump_setup = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+shadow_cover = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+shadow_box = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+support_role = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+last_man_goalside = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+teammate_spacing = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+teammate_far = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+contact_quality = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+safe_boost = [[0.0, 1.0], [1_500_000_000.0, 0.3]]
+ang_vel = [[0.0, 1.0], [1_500_000_000.0, 0.3]]

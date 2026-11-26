@@ -4563,3 +4563,77 @@ Goal (user): generalizing 2v2/3v3 team play; Nexto is the key external opponent;
 - Nexto 2v2 ≥ 0.55, 3v3 ≥ 0.45 for 3+ mids, with Nexto-game double commit and pair800 below TM10's (2v2 0.0251 / 0.0904,
   3v3 0.0400 / 0.1869).
 - No passive alarm two mids in a row; demos/min not above 0.16 in training (farming check).
+
+## TM13 — Cross-exam note: GCO-lite, Galactus share, entropy, pre-goal starts (staged 2026-11-26)
+
+Goal (user): break the TM10–TM12 plateau without touching the live TM12 trainer. Success is a
+clearer climb vs Galactus and a halt of the 3v3 kickoff-duplicate drift, with Nexto/h2h not
+regressing past the TM12 gates, and no reward-hacking alarms (demos/min still under 0.16).
+Start and BT are the TM10 final (`1795503212`). team_best is never written. Do not launch
+until TM12 ends; the parent starts the run.
+
+### Cross-exam (three legs, per the Nov 12 rule)
+
+- **Discord (read-only; from the TM13 Discord leg, 2026-11-26, `/workspace/tm13_discord_leg1.md`):**
+  THEBIGTHREE (Terminal, 11/22): GCO (goal/concede-only) "sauce" is start states 1–10 s before
+  goals from filtered human (or own-bot) replays — self-play has no signal for ~90% of a match;
+  "the last part is really the key." JPK314: replay setters are common; Jumper775: GCO works
+  with good settings and a non-bugged learner, PFSP helps but is not enough. SubparNova / JPK314:
+  a GCO plateau is not the rewards; restart rather than stepmaxx. THEBIGTHREE: shaped rewards
+  set the skill ceiling; GCO raises the plateau via exploration. Bello (Brattin): anneal
+  non-goal rewards and use heavy state setting. Galactus (SoldierDoge): loop a few B steps,
+  revert on regression, then change rewards; flip-reset/musty rewards were farmed. Vibes
+  (Nuclear): strategy gap more than mechanics; passiveness in 1vX hurt. Older legs still apply
+  (Vermatten / Lamp passivity, PigMasta demos ~1%, Rolv "a demo habit is hard to unlearn").
+- **Outside research:** GCO / sparse-goal + pre-goal starts (THEBIGTHREE write-up; in-house
+  ST31 pre-concede and ST30 pre-demo replay both failed their gates — those were 1v1 and
+  pre-negative, not pre-goal team states). Prioritized fictitious self-play (OpenAI Five /
+  AlphaStar-style) is weak if the only hard opponent is clamp-capped (here Galactus at
+  [0, 0.06] = 4.9% of rollouts). Entropy coefficients well above the vendor default keep the
+  policy close to uniform (TM12 entropy ~85% of uniform). MAPPO / role-conditioned critics
+  stayed a TM12 lever and are not reused (start is the 270-wide TM10 team/pred checkpoint).
+- **Code + logs (audit 2026-11-26, TM12 to 61,584M):** no active reward hacking — every reward
+  mean is flat within about ±3% over 15B steps, demos 0.128/min (under 0.16), playmaking 0.01%
+  of |r|. The policy is locked into a 57-term shaped style: air terms 17.5% of positive
+  non-zero-sum shaping (in-air ratio 0.47); first-man pay +1.14/step vs teammate_spacing
+  −0.63/step for the others; boost_keep +0.147/step on 67% of car-steps. One real drift:
+  3v3 kickoff duplicate share rises inside every run (TM10 0.058→0.075, TM11 0.074→0.129,
+  TM12 0.070→0.109), likely kickoff_outcome plus first-man pay. Binding constraint is the
+  objective and the opponent mix (85% self / near-self; Galactus training win rate 10.7% at
+  a 4.9% share), not optimizer or capacity. Entropy coefficient is about 4× the vendor default.
+
+### Reconciliation (what TM13 does)
+
+- Lever 1: GCO-lite. Anneal 27 non-goal shaping terms 1.0 → 0.3 over 1.5B steps from
+  spirit_origin (`tm13.toml`). Keep-full: goal, goal_prob, goal_dist, vel_ball_to_goal,
+  energy, touch, possession, concede_role, double_commit, demo, defend_carry, carry_break,
+  clear_path, pass, double_tap, kickoff_outcome, kickoff_same_pad, kickoff_taker.
+- Lever 2: Galactus PFSP clamp [0.10, 0.18] and self_share 0.65 → 0.55, in 2v2/3v3 intent.
+  Opponent pick is per mixed-mode rollout, so 1v1 arenas in a Galactus rollout still face
+  it (a clean 1v1 skip would need collector changes; documented as accepted).
+- Lever 3: entropy coefficient 0.008 (was 0.016); `ENTROPY_ALARM=3.2` in tm12_eval.py
+  (one-sided floor on mid "entropy" or metrics `Loss/entropy`).
+- Lever 4: pre-goal team replay setter (versioned ICSN snapshots, per-mode banks, 180°
+  mirror, `snapshots-pregoal` recorder). Present in `train_tm13.toml` at weight 0. Flip
+  `LEVER4=1` in `tm_TM13.env` (one line) after its round-trip tests and `tm13_smoke.sh`
+  pass; otherwise leave 0. Missing/empty banks are a no-op.
+- Lever 5 / hygiene: 3v3 `kickoff_charge_3v3 = ["double_commit"]`; `second_scale_3v3 = 0`
+  so kickoff_outcome pays only the taker in 3v3. One-sided Nexto start gate (candidate
+  above the reference is fine). `widen_critic_extras` no longer feeds raw `.bpk` bytes
+  to the safetensors parser.
+- Speedups (approved): P1 (Nexto replicas=8, chunk_rows=64, nf_intra=2; CONCURRENT_MIDS
+  reserved, launcher mid loop still serial), L1 `mask_upload = "auto"`, L2
+  `pinned_upload = true`. L3 small critic off. Async off. 1 epoch, no bf16, CHUNK 100M.
+- Unchanged: warm start from TM10, obs, team_spirit 0.9, LR schedule, Nexto
+  `kickoff_script`, no critic extras, team_best read-only.
+
+### Success criteria (TM13 final vs TM10 final, same game counts as TM12)
+
+- Gate: mean h2h ≥ 0.52, each mode ≥ 0.48; external mean not below TM10's by > 0.04.
+- Galactus 2v2/3v3 clearly above the TM12 lineage (training win rate was 10.7%).
+- 3v3 kickoff duplicate share does not keep rising across mids; vs Nexto at 1.5 s:
+  win ≥ 0.20, loss ≤ 0.33.
+- Nexto 2v2 ≥ 0.55, 3v3 ≥ 0.45 for 3+ mids, with Nexto-game double commit and pair800
+  not worse than TM10.
+- No passive alarm two mids in a row; entropy stays ≥ 3.2; demos/min not above 0.16.
+- Throughput of the staged smoke ≥ 55k sps, no panics.

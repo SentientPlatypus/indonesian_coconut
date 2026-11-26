@@ -649,14 +649,33 @@ self-plays a checkpoint (greedy, 5% random actions) over a setter mix and,
 in kickoff/random episodes only, records the game state whenever a car is
 off the ground above 300 uu with the ball above it (>400 uu, within 1000 uu),
 taken 0-15 steps (0-1 s) before that moment so the policy still has to set the
-reset up (30-step cooldown per car). Records are raw little-endian f32,
-`SNAPSHOT_LEN` = 57 floats (ball pos/vel/ang_vel, then per car pos, vel,
-ang_vel, rotation columns, boost, has_jumped, has_double_jumped, has_flipped,
-air_time_since_jump, flip_time; `setters::encode_snapshot`). The `replay`
-setter samples them (label `replay` in metrics, rates and `setter_scale`).
-Data flow: FR6-final self-play -> `fr7_snap/train.f32` (training setter),
-FR4-final self-play -> `fr7_snap/eval.f32` (rates_fr7.toml), so the eval
-states are not the training states. ~340 snapshots per 50k steps.
+reset up (30-step cooldown per car). Records are raw little-endian f32.
+
+**Formats.** The original bank is a stream of 57-float records (`SNAPSHOT_LEN`:
+ball pos/vel/ang_vel, then two cars: pos, vel, ang_vel, rotation columns,
+boost, has_jumped, has_double_jumped, has_flipped, air_time_since_jump,
+flip_time; `setters::encode_snapshot`). TM13 also writes a versioned ICSN
+format that carries the car count and per-car team, so 2v2 (4 cars) and 3v3
+(6 cars) banks are first-class. The `replay` setter still reads the old
+2-car 57-float files, and `paths = { "2" = "...", "3" = "..." }` selects a
+per-mode bank. Half the time it applies a 180° z-mirror that swaps blue and
+orange. A missing or empty bank is a no-op (the episode stays at kickoff) so
+a run can start before the banks exist.
+
+**Pre-goal recorder (lever 4).**
+`indococo-train snapshots-pregoal <setters.toml> <ckpt> <steps> <threads> <out-prefix>`
+keeps a 150-step ring per arena and, on every scored or conceded goal, writes
+2–3 states from that ring at lags uniformly in 15..=150 steps (about 1–10 s).
+It writes `<out-prefix>_2v2.f32` and `<out-prefix>_3v3.f32`. The training
+setter is present in `train_tm13.toml` at weight 0; flip `LEVER4=1` in
+`tm_TM13.env` (one line) to give it weight 0.15, taken from aerial_pass /
+backboard_double_tap / air_near_ball.
+
+The `replay` setter samples either bank (label `replay` in metrics, rates and
+`setter_scale`). Data flow: FR6-final self-play -> `fr7_snap/train.f32`
+(training setter), FR4-final self-play -> `fr7_snap/eval.f32` (rates_fr7.toml),
+so the eval states are not the training states. ~340 aerial snapshots per 50k
+steps. Pre-goal banks are recorded separately (~50k states/mode, later).
 
 ### Behavior cloning data (FR5)
 

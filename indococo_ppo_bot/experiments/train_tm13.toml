@@ -1,0 +1,140 @@
+# TM13 (EXPERIMENTS.md "TM13 — Cross-exam note"): train_tm12.toml plus
+# GCO-lite (reward in tm13.toml), Galactus PFSP cap [0.10, 0.18] (teams;
+# 1v1 envs in a Galactus rollout still face it — opponent is per-rollout),
+# self_share 0.55, entropy 0.008, P1+L1+L2 speedups (mask_upload=auto,
+# pinned_upload=true, Nexto 8/64/2 via the launcher; CONCURRENT_MIDS reserved).
+# L3 small critic is off. Lever 4 pre-goal replay is present at weight 0;
+# set LEVER4=1 in tm_TM13.env (one line) to turn it on at 0.15, taken from
+# aerial_pass / backboard_double_tap / air_near_ball. No critic extras.
+# kickoff_script for the training Nexto is appended by the launcher.
+
+reward_config = "@RUN@/tm_rewards.toml"
+checkpoints = "@RUN@/checkpoints"
+backend = "torch"
+threads = 24
+pools = 2
+games = 384
+timesteps_per_iteration = @TPI@
+mini_batch_size = @MB@
+epochs = 1
+policy_lr = @LR@
+critic_lr = @LR@
+entropy = 0.008
+gamma = @GAMMA@
+lambda = 0.95
+policy_bf16 = false
+critic_bf16 = false
+save_every = 50_000_000
+keep_checkpoints = 40
+iterations = @ITERATIONS@
+critic_warmup_steps = @WARM@
+self_play_old_versions = true
+skill_tracker = false
+# L1 + L2 (defaults in the library are i64 / false). L3 critic_layers unset.
+mask_upload = "auto"
+pinned_upload = true
+
+[lr_schedule]
+kind = "cosine"
+hold_steps = @HOLD@
+decay_steps = @DECAY@
+min_scale = @MINLR@
+
+[team]
+mode_mix = { "1" = 0.15, "2" = 0.35, "3" = 0.50 }
+obs_shuffle = true
+
+# Opponent team = ONE sampled version per rollout (teammates are always the
+# current policy). OPPCH of rollouts vs a frozen team: past selves (weight
+# PASTW) and the league (Galactus / Megabyte team ports, the 1v1 finals
+# widened on load). The launcher appends the external and fixed entries.
+[opponents]
+chance = @OPPCH@
+past_versions_weight = @PASTW@
+
+# TM2 setter mix (sum 1.0). Mechanic drills 22% (TM1 10%): backboard_double_tap
+# 0.10, reset_shot 0.05 (air_near_ball in the attacking third, goalward
+# carry), musty_setup 0.03, air_near_ball 0.02, air_reset 0.02; taken from
+# team_play, replay and random. Cars 2.. of 2-car setters go to support spots.
+[[state_setters]]
+kind = "kickoff"
+weight = 0.15
+mode_weights = { "3" = 0.20 }
+opp_weights = { nexto = 0.30 }
+[[state_setters]]
+kind = "random"
+weight = 0.05
+ball_speed = true
+car_speed = true
+[[state_setters]]
+kind = "random"
+weight = 0.05
+ball_speed = true
+cars_on_ground = true
+[[state_setters]]
+kind = "team_play"
+weight = 0.15
+[[state_setters]]
+kind = "replay"
+weight = 0.09
+mode_weights = { "2" = 0.0, "3" = 0.0 }
+path = "@SNAP@"
+# Lever 4 (pre-goal team replay). Weight 0 = off. Flip via LEVER4=1 in
+# tm_TM13.env (one line); the launcher sets this weight to 0.15 and trims
+# aerial_pass / backboard_double_tap / air_near_ball by 0.15 in proportion.
+[[state_setters]]
+kind = "replay"
+weight = 0.0
+paths = { "2" = "@PREGOAL@_2v2.f32", "3" = "@PREGOAL@_3v3.f32" }
+[[state_setters]]
+kind = "aerial_defense"
+weight = 0.08
+[[state_setters]]
+kind = "demo_threat"
+weight = 0.04
+distance = [1800.0, 3000.0]
+[[state_setters]]
+kind = "aerial_pass"
+weight = 0.08
+[[state_setters]]
+kind = "backboard_double_tap"
+weight = 0.10
+[[state_setters]]
+kind = "reset_shot"
+weight = 0.04
+[[state_setters]]
+kind = "musty_setup"
+weight = 0.03
+[[state_setters]]
+kind = "air_near_ball"
+weight = 0.02
+[[state_setters]]
+kind = "air_reset"
+weight = 0.02
+[[state_setters]]
+kind = "breakaway"
+weight = 0.05
+[[state_setters]]
+kind = "goalie_shot"
+weight = 0.05
+
+[[state_setters]]
+kind = "defend_carry"
+weight = 0.09
+opp_weights = { galactus = 0.25 }
+
+
+[pfsp]
+self_share = 0.55
+past_share = 0.20
+floor = 0.03
+smooth = 0.25
+low_x = 0.25
+[pfsp.clamp]
+nexto = [0.05, 0.10]
+galactus = [0.10, 0.18]
+TM3_final = [0.0, 0.06]
+
+# No TM12 critic extras (start is the TM10 270-wide team/pred checkpoint).
+[critic]
+extra_inputs = []
