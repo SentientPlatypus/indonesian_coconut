@@ -3456,7 +3456,8 @@ mod tests {
         }
         assert_eq!(found, 1, "expected one pre-goal replay setter");
         let total: f32 = c.state_setters.iter().map(|s| s.weight).sum();
-        assert!((total - 1.0).abs() < 1e-5, "setter weights sum to {total}");
+        // Same as train_tm12.toml (1v1 replay 0.09 is extra; mode-gated off in 2v2/3v3).
+        assert!((total - 1.09).abs() < 1e-5, "setter weights sum to {total}");
     }
 }
 
