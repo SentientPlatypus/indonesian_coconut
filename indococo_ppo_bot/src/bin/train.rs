@@ -34,7 +34,7 @@ use burn::tensor::Device;
 use burn_store::{BurnToPyTorchAdapter, ModuleSnapshot, PytorchStore, SafetensorsStore};
 use indococo_bot::LAYERS;
 use indococo_bot::action::N_ACTIONS;
-use indococo_bot::env::{BotEnv, create_env};
+use indococo_bot::env::{BotEnv, create_env, create_env_sized};
 use indococo_bot::events::StepEvents;
 use indococo_bot::obs::{base_obs_size, obs_size};
 use indococo_bot::resets;
@@ -1182,12 +1182,33 @@ fn load_net_any(path: &Path, kind: NetKind, dev: &Device) -> Result<Net, String>
     Ok(net)
 }
 
+/// Parses the little-endian u64 header length and JSON header of a
+/// safetensors blob. A Burnpack (`.bpk`) or any other prefix is rejected
+/// instead of slicing past the buffer (the previous panic at
+/// `bytes[8..8 + n]` when `n` was garbage).
+fn safetensors_header(bytes: &[u8]) -> (usize, serde_json::Map<String, serde_json::Value>) {
+    assert!(
+        bytes.len() >= 8,
+        "safetensors shorter than the 8-byte header length, got {}",
+        bytes.len()
+    );
+    let n = u64::from_le_bytes(bytes[..8].try_into().expect("header len")) as usize;
+    let end = 8 + n;
+    assert!(
+        end <= bytes.len(),
+        "safetensors header len {n} (le) ends at {end} past a {}-byte buffer; not a safetensors file (first8={:02x?})",
+        bytes.len(),
+        &bytes[..8]
+    );
+    let header: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&bytes[8..end]).expect("safetensors header");
+    (n, header)
+}
+
 /// Rewrites `linear_layers.0.weight` (`[from, out]`, f32 row-major) as
 /// `[to, out]` with zero rows for the new inputs.
 fn widen_safetensors(bytes: &[u8], from: usize, to: usize) -> Vec<u8> {
-    let n = u64::from_le_bytes(bytes[..8].try_into().expect("header len")) as usize;
-    let header: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_slice(&bytes[8..8 + n]).expect("safetensors header");
+    let (n, header) = safetensors_header(bytes);
     let data = &bytes[8 + n..];
     let mut keys: Vec<(String, serde_json::Value)> = header.into_iter().collect();
     keys.sort_by_key(|(k, v)| if k == "__metadata__" { 0 } else { v["data_offsets"][0].as_u64().unwrap_or(0) + 1 });
@@ -1224,9 +1245,7 @@ fn widen_safetensors(bytes: &[u8], from: usize, to: usize) -> Vec<u8> {
 /// Rewrites `linear_layers.0.weight` (`[from, out]`, f32 row-major) as
 /// `[to, out]`: input row `k` moves to row `map(k)`, all other rows zero.
 fn remap_safetensors(bytes: &[u8], from: usize, to: usize, map: fn(usize) -> usize) -> Vec<u8> {
-    let n = u64::from_le_bytes(bytes[..8].try_into().expect("header len")) as usize;
-    let header: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_slice(&bytes[8..8 + n]).expect("safetensors header");
+    let (n, header) = safetensors_header(bytes);
     let data = &bytes[8 + n..];
     let mut keys: Vec<(String, serde_json::Value)> = header.into_iter().collect();
     keys.sort_by_key(|(k, v)| if k == "__metadata__" { 0 } else { v["data_offsets"][0].as_u64().unwrap_or(0) + 1 });
@@ -1424,8 +1443,7 @@ fn first_layer_extends(narrow: &Net, wide: &Net, from: usize) -> bool {
         let mut st = SafetensorsStore::from_bytes(None);
         m.clone().save_into(&mut st).expect("save");
         let bytes = st.get_bytes().expect("bytes");
-        let n = u64::from_le_bytes(bytes[..8].try_into().expect("len")) as usize;
-        let header: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&bytes[8..8 + n]).expect("header");
+        let (n, header) = safetensors_header(&bytes);
         let data = &bytes[8 + n..];
         header
             .into_iter()
@@ -1986,12 +2004,21 @@ fn widen_critic_extras(src: &Path, dst: &Path) {
         return;
     }
     assert_eq!(from, obs_size(), "widen-critic-extras needs a {0}-wide critic, got {from}", obs_size());
-    let bytes = std::fs::read(src.join("critic.bpk")).expect("read critic");
-    let wide = widen_safetensors(&bytes, from, to);
-    std::fs::write(dst.join("critic.bpk"), &wide).expect("write critic");
+    // critic.bpk is a Burnpack, not a safetensors file. Convert, widen the
+    // first layer, and write a Burnpack back (writing raw safetensors as .bpk
+    // would also fail to reload).
+    let src_c = model_with_input(from, &dev)
+        .critic
+        .try_load_file(src.join("critic.bpk"))
+        .expect("src critic");
+    let mut st = SafetensorsStore::from_bytes(None);
+    src_c.clone().save_into(&mut st).expect("critic to safetensors");
+    let wide = widen_safetensors(&st.get_bytes().expect("safetensors bytes"), from, to);
+    let mut st = SafetensorsStore::from_bytes(Some(wide));
+    let mut dst_c = model_with_input(to, &dev).critic;
+    dst_c.load_from(&mut st).expect("load widened critic");
+    dst_c.save_file(dst.join("critic.bpk")).expect("write critic");
     // Step-0 identity: source critic on obs equals widened critic on obs||zeros.
-    let src_c = model_with_input(from, &dev).critic.try_load_file(src.join("critic.bpk")).expect("src critic");
-    let dst_c = model_with_input(to, &dev).critic.try_load_file(dst.join("critic.bpk")).expect("dst critic");
     let n = 8;
     let mut rows = Vec::with_capacity(n * from);
     for i in 0..n * from {
@@ -2034,6 +2061,13 @@ fn main() {
             args.get(4).map(Path::new),
         ),
         "snapshots" => snapshots(
+            Path::new(arg(1)),
+            Path::new(arg(2)),
+            arg(3).parse().expect("steps"),
+            arg(4).parse().expect("threads"),
+            Path::new(arg(5)),
+        ),
+        "snapshots-pregoal" => snapshots_pregoal(
             Path::new(arg(1)),
             Path::new(arg(2)),
             arg(3).parse().expect("steps"),
@@ -2924,6 +2958,56 @@ mod tests {
         }
     }
 
+    /// `widen_safetensors` keeps existing first-layer rows, zero-pads new
+    /// rows, and refuses a non-safetensors (e.g. raw .bpk) blob instead of
+    /// slicing past the buffer.
+    #[test]
+    fn widen_safetensors_round_trip_and_rejects_non_safetensors() {
+        let dev = Device::flex();
+        let (from, to) = (8usize, 12usize);
+        let narrow = model_with_input(from, &dev).critic;
+        let mut st = SafetensorsStore::from_bytes(None);
+        narrow.clone().save_into(&mut st).expect("save");
+        let bytes = st.get_bytes().expect("bytes");
+        let wide_bytes = widen_safetensors(&bytes, from, to);
+        let mut st = SafetensorsStore::from_bytes(Some(wide_bytes.clone()));
+        let mut wide = model_with_input(to, &dev).critic;
+        wide.load_from(&mut st).expect("load widened");
+        assert!(first_layer_extends(&narrow, &wide, from), "zero rows / identical tensors");
+        let rows = 4;
+        let x: Vec<f32> = (0..rows * from).map(|i| (i as f32) * 0.17 - 1.0).collect();
+        let mut xw = Vec::with_capacity(rows * to);
+        for r in 0..rows {
+            xw.extend_from_slice(&x[r * from..(r + 1) * from]);
+            xw.extend(std::iter::repeat(0.0).take(to - from));
+        }
+        let a = narrow.forward(Tensor::<2>::from_data(TensorData::new(x, [rows, from]), &dev));
+        let b = wide.forward(Tensor::<2>::from_data(TensorData::new(xw, [rows, to]), &dev));
+        let d = (a - b).abs().max().into_data().try_to_vec::<f32>().expect("diff")[0];
+        assert!(d < 1e-4, "max |output diff| {d}");
+
+        // Round-trip through a Burnpack file, the path widen_critic_extras uses.
+        let dir = std::env::temp_dir().join(format!("widen_bpk_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tmp");
+        let src = dir.join("critic.bpk");
+        narrow.clone().save_file(&src).expect("save bpk");
+        let loaded = model_with_input(from, &dev).critic.try_load_file(&src).expect("reload bpk");
+        let mut st = SafetensorsStore::from_bytes(None);
+        loaded.save_into(&mut st).expect("bpk to safetensors");
+        let again = widen_safetensors(&st.get_bytes().expect("bytes"), from, to);
+        assert_eq!(again, wide_bytes, "bpk->safetensors->widen should match a direct widen");
+    }
+
+    #[test]
+    #[should_panic(expected = "not a safetensors file")]
+    fn widen_safetensors_rejects_raw_bpk_header() {
+        // 32-byte buffer whose first 8 bytes, read as a little-endian u64,
+        // are much larger than the buffer (the critic.bpk failure mode).
+        let mut bytes = vec![0u8; 32];
+        bytes[..8].copy_from_slice(&31_601_668u64.to_le_bytes());
+        let _ = widen_safetensors(&bytes, 8, 12);
+    }
+
     fn cfg(warmup: u64, iterations: u64) -> TrainConfig {
         let text = include_str!("../../config/train.toml");
         let mut c: TrainConfig = toml::from_str(text).expect("train.toml");
@@ -2939,7 +3023,7 @@ mod tests {
         let mut text = include_str!("../../experiments/train_tm2.toml").to_string();
         for (k, v) in [
             ("@RUN@", "/tmp/tm2"), ("@ITERATIONS@", "1"), ("@WARM@", "0"), ("@HOLD@", "0"),
-            ("@SNAP@", "/tmp/snap.f32"), ("@TPI@", "300_000"), ("@MB@", "100_000"), ("@LR@", "5e-5"),
+            ("@SNAP@", "/tmp/snap.f32"), ("@PREGOAL@", "/tmp/pregoal"), ("@TPI@", "300_000"), ("@MB@", "100_000"), ("@LR@", "5e-5"),
             ("@ENT@", "0.016"), ("@GAMMA@", "0.995"), ("@OPPCH@", "0.40"), ("@PASTW@", "1.0"),
             ("@DECAY@", "1_000_000_000"), ("@MINLR@", "0.4"),
         ] {
@@ -2969,7 +3053,7 @@ mod tests {
         let mut text = text.to_string();
         for (k, v) in [
             ("@RUN@", "/tmp/tm11"), ("@ITERATIONS@", "1"), ("@WARM@", "0"), ("@HOLD@", "0"),
-            ("@SNAP@", "/tmp/snap.f32"), ("@TPI@", "300_000"), ("@MB@", "100_000"), ("@LR@", "5e-5"),
+            ("@SNAP@", "/tmp/snap.f32"), ("@PREGOAL@", "/tmp/pregoal"), ("@TPI@", "300_000"), ("@MB@", "100_000"), ("@LR@", "5e-5"),
             ("@ENT@", "0.016"), ("@GAMMA@", "0.995"), ("@OPPCH@", "0.40"), ("@PASTW@", "1.0"),
             ("@DECAY@", "1_000_000_000"), ("@MINLR@", "0.4"),
         ] {
@@ -3439,6 +3523,124 @@ fn snapshots(setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize, out
     );
 }
 
+/// 10 s ring at 15 Hz. On a goal (scored or conceded) emit 2–3 states at
+/// random lags of 1–10 s.
+const PREGOAL_RING: usize = 150;
+const PREGOAL_LAG_MIN: usize = 15;
+const PREGOAL_LAG_MAX: usize = 150;
+
+fn snapshots_pregoal_worker(
+    mix: &[WeightedSetter],
+    ckpt: &Path,
+    steps: usize,
+    seed: u64,
+    per_team: usize,
+) -> Vec<f32> {
+    const ENVS: usize = 8;
+    let n_cars = per_team * 2;
+    let dev = Device::flex();
+    let actor = load_actor(ckpt, &dev);
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut envs: Vec<_> = (0..ENVS)
+        .map(|_| {
+            let mut env = create_env_sized(&RewardConfig::default(), mix, per_team);
+            let (state, obs, _) = env.reset();
+            (
+                env,
+                state,
+                obs,
+                std::collections::VecDeque::<Vec<f32>>::new(),
+            )
+        })
+        .collect();
+    let mut out = Vec::new();
+    for _ in 0..steps.div_ceil(ENVS) {
+        let obs: Vec<&Vec<f32>> = envs.iter().flat_map(|e| e.2.iter()).collect();
+        let acts = argmax_actions(&actor, &obs, &dev);
+        for (k, (env, state, o, hist)) in envs.iter_mut().enumerate() {
+            let cars: Vec<(u8, &_)> = state
+                .cars
+                .iter()
+                .map(|(info, c)| (u8::from(!info.team.is_blue()), c))
+                .collect();
+            hist.push_back(indococo_bot::setters::encode_snapshot_with_teams(&state.ball, &cars));
+            if hist.len() > PREGOAL_RING {
+                hist.pop_front();
+            }
+            let a: Vec<usize> = (0..n_cars)
+                .map(|i| {
+                    if rng.random_bool(0.05) {
+                        rng.random_range(0..N_ACTIONS)
+                    } else {
+                        acts[k * n_cars + i]
+                    }
+                })
+                .collect();
+            let res = env.step(state, &a);
+            let view = StateView::from_game_state(&res.state);
+            if view.goal_scored() && hist.len() >= PREGOAL_LAG_MIN {
+                let lo = PREGOAL_LAG_MIN.min(hist.len());
+                let hi = PREGOAL_LAG_MAX.min(hist.len());
+                let available = hi - lo + 1;
+                let n_emit = if available >= 3 { rng.random_range(2..=3) } else { available.max(1) };
+                let mut used = std::collections::BTreeSet::new();
+                while used.len() < n_emit {
+                    used.insert(rng.random_range(lo..=hi));
+                }
+                for lag in used {
+                    let rec = &hist[hist.len() - lag];
+                    out.extend_from_slice(rec);
+                }
+            }
+            (*state, *o) = (res.state, res.obs);
+            if res.is_terminal || res.truncated {
+                let (s2, o2, _) = env.reset();
+                (*state, *o) = (s2, o2);
+                hist.clear();
+            }
+        }
+    }
+    out
+}
+
+/// Self-play `ckpt` and, on each goal (scored or conceded), write 2–3
+/// versioned N-car snapshots from 1–10 s earlier. Writes
+/// `<out_prefix>_2v2.f32` and `<out_prefix>_3v3.f32`.
+fn snapshots_pregoal(setters_toml: &Path, ckpt: &Path, steps: usize, threads: usize, out_prefix: &Path) {
+    #[derive(Deserialize)]
+    struct Mix {
+        state_setters: Vec<WeightedSetter>,
+    }
+    init_from_default(true).expect("load collision meshes");
+    let mix: Mix = toml::from_str(&std::fs::read_to_string(setters_toml).expect("read setters"))
+        .expect("parse setters");
+    let per = steps.div_ceil(threads);
+    for per_team in [2usize, 3] {
+        let all: Vec<f32> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..threads)
+                .map(|t| {
+                    let m = &mix.state_setters;
+                    s.spawn(move || snapshots_pregoal_worker(m, ckpt, per, 2000 + 100 * per_team as u64 + t as u64, per_team))
+                })
+                .collect();
+            hs.into_iter().flat_map(|h| h.join().expect("worker")).collect()
+        });
+        let rec = indococo_bot::setters::snapshot_record_len(per_team * 2, true);
+        let n = if rec == 0 { 0 } else { all.len() / rec };
+        let bytes = indococo_bot::setters::write_snapshot_bytes(per_team * 2, true, &all);
+        let out = PathBuf::from(format!("{}_{per_team}v{per_team}.f32", out_prefix.display()));
+        if let Some(dir) = out.parent() {
+            std::fs::create_dir_all(dir).expect("create snapshot dir");
+        }
+        std::fs::write(&out, bytes).expect("write pregoal snapshots");
+        println!(
+            "{{\"pregoal_snapshots\":{n},\"mode\":\"{per_team}v{per_team}\",\"steps\":{steps},\"out\":\"{}\"}}",
+            out.display()
+        );
+    }
+}
+
+
 /// Kickoff games of `a` against `b` in this process's team mode
 /// (`INDOCOCO_TEAM_SIZE`), greedy with 3% random actions; `a` plays blue in
 /// even envs and orange in odd ones. A game ends on a goal or after 300 s
@@ -3532,6 +3734,38 @@ mod role_metric_tests {
     fn n_h2h_in_sync() {
         assert_eq!(N_H2H, 59);
         assert_eq!(N_H2H, indococo_bot::h2h_counters::N_H2H);
+    }
+
+    /// TM13 train template: entropy 0.008, Galactus clamp [0.10, 0.18],
+    /// self_share 0.55, L1+L2 on, L3 off, critic extras empty, pre-goal
+    /// replay present at weight 0 with per-mode paths.
+    #[test]
+    fn tm13_train_template_parses() {
+        let text = fill_train_placeholders(include_str!("../../experiments/train_tm13.toml"));
+        assert!(!text.contains('@'), "unfilled placeholder");
+        let c: TrainConfig = toml::from_str(&text).expect("train_tm13.toml");
+        assert!((c.entropy - 0.008).abs() < 1e-9, "entropy {}", c.entropy);
+        assert_eq!(c.mask_upload, MaskUpload::Auto);
+        assert!(c.pinned_upload);
+        assert!(c.critic_layers.is_none(), "L3 small critic must stay off");
+        assert!(c.critic.extra_inputs.is_empty(), "{:?}", c.critic.extra_inputs);
+        let p = c.pfsp.as_ref().expect("[pfsp]");
+        assert!((p.self_share - 0.55).abs() < 1e-9, "self_share {}", p.self_share);
+        assert_eq!(p.clamp["galactus"], [0.10, 0.18]);
+        let mut found = 0;
+        for s in &c.state_setters {
+            if let indococo_bot::setters::SetterKind::Replay(r) = &s.kind {
+                if !r.paths.is_empty() {
+                    found += 1;
+                    assert!((s.weight - 0.0).abs() < 1e-9, "pregoal weight {}", s.weight);
+                    assert_eq!(r.paths.get("2").map(String::as_str), Some("/tmp/pregoal_2v2.f32"));
+                    assert_eq!(r.paths.get("3").map(String::as_str), Some("/tmp/pregoal_3v3.f32"));
+                }
+            }
+        }
+        assert_eq!(found, 1, "expected one pre-goal replay setter");
+        let total: f32 = c.state_setters.iter().map(|s| s.weight).sum();
+        assert!((total - 1.0).abs() < 1e-5, "setter weights sum to {total}");
     }
 }
 

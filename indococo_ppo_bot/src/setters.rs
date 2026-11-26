@@ -218,14 +218,15 @@ impl SetterKind {
     /// [`SetterMix`] moves cars 2.. to support spots afterwards.
     #[must_use]
     pub fn two_car_only(&self) -> bool {
-        matches!(
-            self,
-            Self::Replay(_)
-                | Self::ResetReplay(_)
-                | Self::AerialDefense(_)
-                | Self::DemoThreat(_)
-                | Self::AirDribbleWallChallenge(_)
-        )
+        match self {
+            // Versioned per-mode replay banks already place every car. Only
+            // the legacy 2-car `path` (empty `paths`) still needs support fill.
+            Self::Replay(r) | Self::ResetReplay(r) => r.paths.is_empty(),
+            Self::AerialDefense(_)
+            | Self::DemoThreat(_)
+            | Self::AirDribbleWallChallenge(_) => true,
+            _ => false,
+        }
     }
 }
 
@@ -2607,89 +2608,288 @@ mod tests {
             }
         }
         std::fs::write(&path, &bytes).unwrap();
+        // Legacy 2-car file still loads on a 1v1 arena.
         let replay = WeightedSetter {
             opp_weights: Default::default(),
             mode_weights: Default::default(),
             weight: 1.0,
             kind: SetterKind::Replay(Replay {
                 path: path.to_str().unwrap().to_string(),
-                pos_noise: 30.0,
-                vel_noise: 50.0,
+                paths: Default::default(),
+                pos_noise: 0.0,
+                vel_noise: 0.0,
             }),
         };
         let mut mix = build_mix::<SharedInfo>(&[replay]);
+        let mut a = tm_arena(1);
+        mix.apply(&mut a, &mut si);
+        assert!(parked_at_kickoff(&a, 5.0).is_none(), "parked after legacy replay: {:?}", parked_at_kickoff(&a, 5.0));
+        assert!(a.get_ball_state().phys.pos.y.abs() > 10.0, "legacy replay did not move the ball");
+
         for per_team in [2usize, 3] {
+            let n = per_team * 2;
+            let mut recs = Vec::new();
+            let cars: Vec<CarState> = (0..n).map(|i| {
+                let mut c = CarState::DEFAULT;
+                let team = i % 2;
+                let sign = if team == 0 { -1.0 } else { 1.0 };
+                c.phys.pos = Vec3A::new(200.0 * (i as f32), sign * (800.0 + 100.0 * (i as f32)), 17.0);
+                c.phys.vel = Vec3A::new(sign * 100.0, sign * 200.0, 0.0);
+                c
+            }).collect();
+            let pairs: Vec<(u8, &CarState)> = (0..n).map(|i| ((i % 2) as u8, &cars[i])).collect();
+            recs.extend(encode_snapshot_with_teams(&ball, &pairs));
+            let bytes = write_snapshot_bytes(n, true, &recs);
+            let p2 = dir.join(format!("snap_{n}.f32"));
+            std::fs::write(&p2, &bytes).unwrap();
+            let replay = WeightedSetter {
+                opp_weights: Default::default(),
+                mode_weights: Default::default(),
+                weight: 1.0,
+                kind: SetterKind::Replay(Replay {
+                    path: String::new(),
+                    paths: std::collections::BTreeMap::from([(per_team.to_string(), p2.to_str().unwrap().to_string())]),
+                    pos_noise: 0.0,
+                    vel_noise: 0.0,
+                }),
+            };
+            let mut mix = build_mix::<SharedInfo>(&[replay]);
             let mut a = tm_arena(per_team);
-            for _ in 0..200 {
-                mix.apply(&mut a, &mut si);
-                assert!(parked_at_kickoff(&a, 5.0).is_none(), "parked car after replay in {per_team}v{per_team}: {:?}", parked_at_kickoff(&a, 5.0));
-            }
+            mix.apply(&mut a, &mut si);
+            assert!(parked_at_kickoff(&a, 5.0).is_none(), "parked car after replay in {per_team}v{per_team}: {:?}", parked_at_kickoff(&a, 5.0));
+            assert!(a.get_ball_state().phys.pos.y.abs() > 10.0, "team replay did not move the ball in {per_team}v");
         }
     }
 }
 
-/// Floats per snapshot record: ball pos/vel/ang_vel (9), then per car
-/// pos, vel, ang_vel, rot_mat columns (18), boost, has_jumped,
-/// has_double_jumped, has_flipped, air_time_since_jump, flip_time (6).
+/// Floats per car in a snapshot: pos, vel, ang_vel, rot_mat columns (18),
+/// boost, has_jumped, has_double_jumped, has_flipped, air_time_since_jump,
+/// flip_time (6).
 pub const SNAPSHOT_CAR: usize = 24;
+/// Legacy 1v1 record: ball pos/vel/ang_vel (9) plus two cars, no team field.
 pub const SNAPSHOT_LEN: usize = 9 + 2 * SNAPSHOT_CAR;
+/// Versioned N-car file magic (`b"ICSN"`).
+pub const SNAPSHOT_MAGIC: [u8; 4] = *b"ICSN";
+pub const SNAPSHOT_VERSION: u16 = 1;
 
-/// Encodes a 1v1 game state as one snapshot record.
+/// Floats in one snapshot record.
+#[must_use]
+pub fn snapshot_record_len(cars: usize, with_team: bool) -> usize {
+    9 + cars * (SNAPSHOT_CAR + usize::from(with_team))
+}
+
+fn push_car(v: &mut Vec<f32>, c: &CarState, team: Option<u8>) {
+    let m = c.phys.rot_mat;
+    for x in [c.phys.pos, c.phys.vel, c.phys.ang_vel, m.x_axis, m.y_axis, m.z_axis] {
+        v.extend_from_slice(&x.to_array());
+    }
+    v.extend_from_slice(&[
+        c.boost,
+        f32::from(u8::from(c.has_jumped)),
+        f32::from(u8::from(c.has_double_jumped)),
+        f32::from(u8::from(c.has_flipped)),
+        c.air_time_since_jump,
+        c.flip_time,
+    ]);
+    if let Some(t) = team {
+        v.push(f32::from(t));
+    }
+}
+
+/// Encodes a 1v1 game state as one legacy snapshot record (no team field).
 #[must_use]
 pub fn encode_snapshot(ball: &BallState, cars: &[&CarState]) -> Vec<f32> {
-    let mut v = Vec::with_capacity(SNAPSHOT_LEN);
+    let mut v = Vec::with_capacity(snapshot_record_len(cars.len(), false));
     for x in [ball.phys.pos, ball.phys.vel, ball.phys.ang_vel] {
         v.extend_from_slice(&x.to_array());
     }
     for c in cars {
-        let m = c.phys.rot_mat;
-        for x in [c.phys.pos, c.phys.vel, c.phys.ang_vel, m.x_axis, m.y_axis, m.z_axis] {
-            v.extend_from_slice(&x.to_array());
-        }
-        v.extend_from_slice(&[
-            c.boost,
-            f32::from(u8::from(c.has_jumped)),
-            f32::from(u8::from(c.has_double_jumped)),
-            f32::from(u8::from(c.has_flipped)),
-            c.air_time_since_jump,
-            c.flip_time,
-        ]);
+        push_car(&mut v, c, None);
     }
     v
 }
 
-static SNAPSHOTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<f32>>>>> =
+/// Encodes an N-car state with a per-car team id (0 blue, 1 orange).
+#[must_use]
+pub fn encode_snapshot_with_teams(ball: &BallState, cars: &[(u8, &CarState)]) -> Vec<f32> {
+    let mut v = Vec::with_capacity(snapshot_record_len(cars.len(), true));
+    for x in [ball.phys.pos, ball.phys.vel, ball.phys.ang_vel] {
+        v.extend_from_slice(&x.to_array());
+    }
+    for (team, c) in cars {
+        push_car(&mut v, c, Some(*team));
+    }
+    v
+}
+
+/// A loaded snapshot bank: either a legacy 2-car file or a versioned N-car file.
+#[derive(Clone, Debug)]
+pub struct SnapshotBank {
+    pub cars: usize,
+    pub with_team: bool,
+    pub rec_len: usize,
+    pub data: std::sync::Arc<Vec<f32>>,
+}
+
+impl SnapshotBank {
+    #[must_use]
+    pub fn n_records(&self) -> usize {
+        if self.rec_len == 0 { 0 } else { self.data.len() / self.rec_len }
+    }
+}
+
+/// Serializes records to the legacy 2-car layout (no magic) or the versioned
+/// N-car layout (magic + header + per-car team).
+#[must_use]
+pub fn write_snapshot_bytes(cars: usize, with_team: bool, records: &[f32]) -> Vec<u8> {
+    let rec = snapshot_record_len(cars, with_team);
+    assert!(rec > 0 && records.len() % rec == 0, "snapshot records not a whole number of {rec}-float rows");
+    let mut out = Vec::new();
+    if with_team {
+        out.extend_from_slice(&SNAPSHOT_MAGIC);
+        out.extend_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
+        out.extend_from_slice(&(cars as u16).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+    }
+    for x in records {
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out
+}
+
+/// Parses a legacy 2-car file or a versioned N-car file.
+pub fn parse_snapshot_bytes(bytes: &[u8]) -> Result<SnapshotBank, String> {
+    if bytes.len() >= 12 && bytes[..4] == SNAPSHOT_MAGIC {
+        let version = u16::from_le_bytes(bytes[4..6].try_into().unwrap());
+        if version != SNAPSHOT_VERSION {
+            return Err(format!("snapshot version {version}, want {SNAPSHOT_VERSION}"));
+        }
+        let cars = u16::from_le_bytes(bytes[6..8].try_into().unwrap()) as usize;
+        if !(2..=6).contains(&cars) || cars % 2 != 0 {
+            return Err(format!("snapshot car count {cars} is not 2, 4 or 6"));
+        }
+        let rec = snapshot_record_len(cars, true);
+        let body = &bytes[12..];
+        if body.len() % 4 != 0 {
+            return Err("snapshot body is not a multiple of 4 bytes".into());
+        }
+        let data: Vec<f32> = body.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+        if data.is_empty() || data.len() % rec != 0 {
+            return Err(format!("snapshot body {} floats, not a multiple of record {rec}", data.len()));
+        }
+        return Ok(SnapshotBank { cars, with_team: true, rec_len: rec, data: std::sync::Arc::new(data) });
+    }
+    if bytes.len() % 4 != 0 {
+        return Err("legacy snapshot is not a multiple of 4 bytes".into());
+    }
+    let data: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+    if data.is_empty() || data.len() % SNAPSHOT_LEN != 0 {
+        return Err("not a snapshot file".into());
+    }
+    Ok(SnapshotBank { cars: 2, with_team: false, rec_len: SNAPSHOT_LEN, data: std::sync::Arc::new(data) })
+}
+
+static SNAPSHOTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<SnapshotBank>>>> =
     std::sync::OnceLock::new();
 
-/// Loads (once per process) a raw little-endian f32 snapshot file.
-///
-/// # Panics
-/// If the file is missing, empty or not a whole number of records.
-fn snapshots(path: &str) -> std::sync::Arc<Vec<f32>> {
+/// Loads (once per process) a snapshot file. Missing or empty `path` yields `None`
+/// so a staged setter with no bank yet leaves kickoff instead of panicking.
+fn load_bank(path: &str) -> Option<std::sync::Arc<SnapshotBank>> {
+    if path.is_empty() {
+        return None;
+    }
     let map = SNAPSHOTS.get_or_init(Default::default);
     let mut map = map.lock().expect("snapshots lock");
-    map.entry(path.to_string())
-        .or_insert_with(|| {
-            let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("replay {path}: {e}"));
-            let v: Vec<f32> = bytes
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                .collect();
-            assert!(
-                !v.is_empty() && v.len() % SNAPSHOT_LEN == 0 && bytes.len() % 4 == 0,
-                "replay {path}: not a snapshot file"
-            );
-            std::sync::Arc::new(v)
+    if let Some(b) = map.get(path) {
+        return Some(b.clone());
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("replay {path}: {e} (leaving kickoff)");
+            return None;
+        }
+    };
+    match parse_snapshot_bytes(&bytes) {
+        Ok(b) => {
+            let b = std::sync::Arc::new(b);
+            map.insert(path.to_string(), b.clone());
+            Some(b)
+        }
+        Err(e) => {
+            eprintln!("replay {path}: {e} (leaving kickoff)");
+            None
+        }
+    }
+}
+
+fn apply_record(arena: &mut Arena, r: &[f32], bank: &SnapshotBank, mirror: bool, pos_noise: f32, vel_noise: f32, rng: &mut impl rand::Rng) {
+    let n = arena.num_cars();
+    if n != bank.cars {
+        // shortcut: count mismatch keeps the kickoff, record per-mode banks before relying on this setter
+        return;
+    }
+    let f = if mirror { Vec3A::new(-1.0, -1.0, 1.0) } else { Vec3A::ONE };
+    let v3 = |i: usize| Vec3A::new(r[i], r[i + 1], r[i + 2]) * f;
+    let mut noise = |s: f32| {
+        Vec3A::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0)) * s
+    };
+    let mut ball = BallState::DEFAULT;
+    ball.phys.pos = v3(0) + noise(pos_noise);
+    ball.phys.pos.z = ball.phys.pos.z.max(100.0);
+    ball.phys.vel = v3(3) + noise(vel_noise);
+    ball.phys.ang_vel = v3(6);
+    arena.set_ball_state(ball);
+    let stride = SNAPSHOT_CAR + usize::from(bank.with_team);
+    let mut snap: Vec<(u8, usize)> = (0..bank.cars)
+        .map(|src| {
+            let o = 9 + src * stride;
+            let team = if bank.with_team {
+                if r[o + SNAPSHOT_CAR] > 0.5 { 1 } else { 0 }
+            } else {
+                // legacy 1v1: car 0 blue, car 1 orange
+                u8::from(src == 1)
+            };
+            let team = if mirror { 1 - team } else { team };
+            (team, src)
         })
-        .clone()
+        .collect();
+    for idx in 0..n {
+        let want = match arena.get_car_info(idx).team {
+            rlgymppo_utils::rlgym::rocketsim::Team::Blue => 0u8,
+            rlgymppo_utils::rlgym::rocketsim::Team::Orange => 1,
+        };
+        let pick = snap.iter().position(|(t, _)| *t == want);
+        let Some(si) = pick else { continue };
+        let src = snap.swap_remove(si).1;
+        let o = 9 + src * stride;
+        let mut car = CarState::DEFAULT;
+        car.phys.pos = v3(o);
+        car.phys.vel = v3(o + 3);
+        car.phys.ang_vel = v3(o + 6);
+        car.phys.rot_mat = Mat3A::from_cols(v3(o + 9), v3(o + 12), v3(o + 15));
+        car.boost = r[o + 18];
+        car.has_jumped = r[o + 19] > 0.5;
+        car.has_double_jumped = r[o + 20] > 0.5;
+        car.has_flipped = r[o + 21] > 0.5;
+        car.air_time_since_jump = r[o + 22];
+        car.flip_time = r[o + 23];
+        arena.set_car_state(idx, car.core());
+    }
 }
 
 /// Real-play replay setter: a random recorded snapshot, mirrored (180 deg
-/// about z, cars swapped) half the time, with small position/velocity noise.
+/// about z, blue/orange swapped) half the time, with small position/velocity
+/// noise. `path` is the legacy single-file bank (1v1). `paths` maps mode
+/// (`"2"`, `"3"`) to a per-mode bank; it wins when the arena's team size is
+/// listed. A missing or empty path leaves the kickoff in place.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Replay {
     pub path: String,
+    /// Per-mode banks, keys `"1"`, `"2"`, `"3"`.
+    #[serde(default)]
+    pub paths: BTreeMap<String, String>,
     pub pos_noise: f32,
     pub vel_noise: f32,
 }
@@ -2698,47 +2898,36 @@ impl Default for Replay {
     fn default() -> Self {
         Self {
             path: String::new(),
+            paths: BTreeMap::new(),
             pos_noise: 30.0,
             vel_noise: 50.0,
         }
     }
 }
 
+impl Replay {
+    fn path_for(&self, per_team: usize) -> &str {
+        self.paths
+            .get(&per_team.to_string())
+            .map(String::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(self.path.as_str())
+    }
+}
+
 impl<SI: SharedInfoRng> StateSetter<SI> for Replay {
     fn apply(&mut self, arena: &mut Arena, shared_info: &mut SI) {
         arena.reset_to_random_kickoff(None);
-        let data = snapshots(&self.path);
-        let rng = shared_info.rng();
-        let n = data.len() / SNAPSHOT_LEN;
-        let r = &data[rng.random_range(0..n) * SNAPSHOT_LEN..][..SNAPSHOT_LEN];
-        let mirror = rng.random_bool(0.5);
-        let f = if mirror { Vec3A::new(-1.0, -1.0, 1.0) } else { Vec3A::ONE };
-        let v3 = |i: usize| Vec3A::new(r[i], r[i + 1], r[i + 2]) * f;
-        let mut noise = |s: f32| {
-            Vec3A::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0)) * s
-        };
-        let mut ball = BallState::DEFAULT;
-        ball.phys.pos = v3(0) + noise(self.pos_noise);
-        ball.phys.pos.z = ball.phys.pos.z.max(100.0);
-        ball.phys.vel = v3(3) + noise(self.vel_noise);
-        ball.phys.ang_vel = v3(6);
-        arena.set_ball_state(ball);
-        for idx in 0..arena.num_cars().min(2) {
-            let src = if mirror { 1 - idx } else { idx };
-            let o = 9 + src * SNAPSHOT_CAR;
-            let mut car = CarState::DEFAULT;
-            car.phys.pos = v3(o);
-            car.phys.vel = v3(o + 3);
-            car.phys.ang_vel = v3(o + 6);
-            car.phys.rot_mat = Mat3A::from_cols(v3(o + 9), v3(o + 12), v3(o + 15));
-            car.boost = r[o + 18];
-            car.has_jumped = r[o + 19] > 0.5;
-            car.has_double_jumped = r[o + 20] > 0.5;
-            car.has_flipped = r[o + 21] > 0.5;
-            car.air_time_since_jump = r[o + 22];
-            car.flip_time = r[o + 23];
-            arena.set_car_state(idx, car.core());
+        let per_team = (arena.num_cars() / 2).max(1);
+        let Some(bank) = load_bank(self.path_for(per_team)) else { return };
+        if bank.n_records() == 0 {
+            return;
         }
+        let rng = shared_info.rng();
+        let i = rng.random_range(0..bank.n_records());
+        let r = &bank.data[i * bank.rec_len..(i + 1) * bank.rec_len];
+        let mirror = rng.random_bool(0.5);
+        apply_record(arena, r, &bank, mirror, self.pos_noise, self.vel_noise, rng);
     }
 }
 
@@ -2843,4 +3032,83 @@ fn air_dribble_wall_challenge_invariants() {
         (0.45..=0.55).contains(&frac),
         "dribbler selection not balanced: {frac:.3}"
     );
+}
+
+
+#[cfg(test)]
+mod snapshot_format_tests {
+    use super::*;
+
+    fn car_at(x: f32, y: f32) -> CarState {
+        let mut c = CarState::DEFAULT;
+        c.phys.pos = Vec3A::new(x, y, 17.0);
+        c.phys.vel = Vec3A::new(x / 10.0, y / 10.0, 0.0);
+        c.boost = 33.0;
+        c
+    }
+
+    fn ball_at(x: f32, y: f32) -> BallState {
+        let mut b = BallState::DEFAULT;
+        b.phys.pos = Vec3A::new(x, y, 150.0);
+        b.phys.vel = Vec3A::new(1.0, 2.0, 3.0);
+        b
+    }
+
+    #[test]
+    fn legacy_2car_file_still_loads() {
+        let b = ball_at(10.0, 20.0);
+        let c0 = car_at(-100.0, -200.0);
+        let c1 = car_at(100.0, 200.0);
+        let rec = encode_snapshot(&b, &[&c0, &c1]);
+        assert_eq!(rec.len(), SNAPSHOT_LEN);
+        let bytes = write_snapshot_bytes(2, false, &rec);
+        assert_ne!(&bytes[..4], &SNAPSHOT_MAGIC);
+        let bank = parse_snapshot_bytes(&bytes).expect("legacy");
+        assert_eq!((bank.cars, bank.with_team, bank.n_records(), bank.rec_len), (2, false, 1, SNAPSHOT_LEN));
+        assert_eq!(&bank.data[..], &rec[..]);
+    }
+
+    #[test]
+    fn versioned_4_and_6_car_round_trip() {
+        for n in [4usize, 6] {
+            let b = ball_at(5.0, -7.0);
+            let owned: Vec<CarState> = (0..n).map(|i| car_at(i as f32 * 100.0, if i % 2 == 0 { -300.0 } else { 300.0 })).collect();
+            let cars: Vec<(u8, &CarState)> = owned.iter().enumerate().map(|(i, c)| ((i % 2) as u8, c)).collect();
+            let rec = encode_snapshot_with_teams(&b, &cars);
+            assert_eq!(rec.len(), snapshot_record_len(n, true));
+            let bytes = write_snapshot_bytes(n, true, &rec);
+            assert_eq!(&bytes[..4], &SNAPSHOT_MAGIC);
+            let bank = parse_snapshot_bytes(&bytes).expect("versioned");
+            assert_eq!((bank.cars, bank.with_team, bank.n_records()), (n, true, 1));
+            assert_eq!(&bank.data[..], &rec[..]);
+            // team field is the last float of each car
+            let stride = SNAPSHOT_CAR + 1;
+            for i in 0..n {
+                let team = bank.data[9 + i * stride + SNAPSHOT_CAR];
+                assert_eq!(team, (i % 2) as f32, "car {i} team");
+            }
+        }
+    }
+
+    #[test]
+    fn bad_magic_version_is_err() {
+        let mut bytes = write_snapshot_bytes(4, true, &vec![0.0; snapshot_record_len(4, true)]);
+        bytes[4] = 99; // version
+        assert!(parse_snapshot_bytes(&bytes).is_err());
+        assert!(parse_snapshot_bytes(&[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn versioned_replay_is_not_two_car_only() {
+        let legacy = Replay { path: "/tmp/legacy.f32".into(), ..Replay::default() };
+        assert!(SetterKind::Replay(legacy).two_car_only());
+        let team = Replay {
+            paths: std::collections::BTreeMap::from([
+                ("2".into(), "/tmp/a.f32".into()),
+                ("3".into(), "/tmp/b.f32".into()),
+            ]),
+            ..Replay::default()
+        };
+        assert!(!SetterKind::Replay(team).two_car_only());
+    }
 }

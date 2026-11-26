@@ -687,12 +687,20 @@ impl StepReward for SupportRole {
 pub struct KickoffMask {
     inner: Box<dyn StepReward>,
     phase: KickoffPhase,
+    /// When the team size (cars/2) is at least this, do not mask.
+    charge_if_team_ge: Option<usize>,
 }
 
 impl KickoffMask {
     #[must_use]
     pub fn new(inner: Box<dyn StepReward>, grace_steps: u32) -> Self {
-        Self { inner, phase: KickoffPhase::new(grace_steps) }
+        Self { inner, phase: KickoffPhase::new(grace_steps), charge_if_team_ge: None }
+    }
+
+    #[must_use]
+    pub fn charge_if_team_ge(mut self, n: usize) -> Self {
+        self.charge_if_team_ge = Some(n);
+        self
     }
 }
 
@@ -704,7 +712,8 @@ impl StepReward for KickoffMask {
 
     fn get_rewards(&mut self, state: &StateView) -> Vec<f64> {
         let r = self.inner.get_rewards(state);
-        if self.phase.update(state) { vec![0.0; r.len()] } else { r }
+        let charge = self.charge_if_team_ge.is_some_and(|n| state.cars.len() / 2 >= n);
+        if self.phase.update(state) && !charge { vec![0.0; r.len()] } else { r }
     }
 }
 
@@ -1137,6 +1146,22 @@ mod tests {
         let mut m = KickoffMask::new(Box::new(Fixed(vec![-1.0; 4])), 15);
         m.reset(&live);
         assert_eq!(m.get_rewards(&live), vec![-1.0; 4]);
+    }
+
+    #[test]
+    fn kickoff_mask_charge_if_team_ge_pays_3v3_only() {
+        let cars4 = || vec![car(0, -2000.0), car(1, 2000.0), car(0, -2300.0), car(1, 2300.0)];
+        let cars6 = || vec![
+            car(0, -200.0), car(1, 200.0), car(0, -2000.0), car(1, 2000.0), car(0, -4000.0), car(1, 4000.0),
+        ];
+        let pending4 = st(0.0, cars4());
+        let pending6 = st(0.0, cars6());
+        let mut m2 = KickoffMask::new(Box::new(Fixed(vec![-1.0; 4])), 2).charge_if_team_ge(3);
+        m2.reset(&pending4);
+        assert_eq!(m2.get_rewards(&pending4), vec![0.0; 4], "2v2 still masked");
+        let mut m3 = KickoffMask::new(Box::new(Fixed(vec![-1.0; 6])), 2).charge_if_team_ge(3);
+        m3.reset(&pending6);
+        assert_eq!(m3.get_rewards(&pending6), vec![-1.0; 6], "3v3 charged during kickoff");
     }
 
     /// TM6 teammate_spacing exempts the first man by role (an overtaking

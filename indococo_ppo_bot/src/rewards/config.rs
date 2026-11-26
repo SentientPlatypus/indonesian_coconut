@@ -233,6 +233,9 @@ pub struct TeamRewardConfig {
     /// TM6: terms zeroed during the kickoff phase (pending kickoff plus
     /// `kickoff_grace_s` after the first touch).
     pub kickoff_exempt: Vec<String>,
+    /// TM13: terms in `kickoff_exempt` that are still paid in 3v3 (team size >= 3).
+    #[serde(default)]
+    pub kickoff_charge_3v3: Vec<String>,
     pub kickoff_grace_s: f64,
     /// TM6 diagnostics: terms reported split by role
     /// (`RewardFirst/<term>`, `RewardOther/<term>`; needs `[team.roles]`).
@@ -303,6 +306,7 @@ impl Default for TeamRewardConfig {
             role_not_first_gate: Vec::new(),
             role_scale: BTreeMap::new(),
             kickoff_exempt: Vec::new(),
+            kickoff_charge_3v3: Vec::new(),
             kickoff_grace_s: 1.0,
             role_metrics: Vec::new(),
             concede_role: ConcedeRoleParams::default(),
@@ -740,7 +744,7 @@ impl RewardConfig {
         let ramp_keys: Vec<String> = tm.term_ramp.keys().cloned().collect();
         for list in [
             &tm.individual, &tm.closest_gate, &tm.no_double_commit_gate, &tm.last_back_gate, &tm.no_second_commit_gate, &tm.spirit_full,
-            &tm.role_first_gate, &tm.role_not_first_gate, &role_scale_keys, &tm.kickoff_exempt, &tm.role_metrics,
+            &tm.role_first_gate, &tm.role_not_first_gate, &role_scale_keys, &tm.kickoff_exempt, &tm.kickoff_charge_3v3, &tm.role_metrics,
             &ko_scale_keys, &ramp_keys, &self.open_net.terms,
         ] {
             for key in list {
@@ -758,7 +762,13 @@ impl RewardConfig {
                 // Gate terms that have no zero-sum wrapper here (zs gated the others).
                 let mut reward = if wrapped.borrow().iter().any(|k| k == name) { reward } else { gate(name, reward) };
                 if tm.kickoff_exempt.iter().any(|k| k == name) {
-                    reward = Box::new(KickoffMask::new(reward, grace));
+                    let charge_3v3 = tm.kickoff_charge_3v3.iter().any(|k| k == name);
+                    let mask = if charge_3v3 {
+                        KickoffMask::new(reward, grace).charge_if_team_ge(3)
+                    } else {
+                        KickoffMask::new(reward, grace)
+                    };
+                    reward = Box::new(mask);
                 }
                 // TM8 wrappers (all off unless configured).
                 if self.open_net.terms.iter().any(|k| k == name) {
@@ -1396,5 +1406,50 @@ mod extends_tests {
         assert_eq!(c.team.kickoff_pad_grace_s, tm10.team.kickoff_pad_grace_s);
         assert_eq!(c.team.kickoff_scale, tm10.team.kickoff_scale);
         assert_eq!(c.team.kickoff_scale_grace_s, tm10.team.kickoff_scale_grace_s);
+    }
+
+    /// TM13: GCO-lite anneal of 27 non-goal terms 1.0 -> 0.3 over 1.5B steps,
+    /// keep-full list held, 3v3 kickoff hygiene (charge double_commit; outcome
+    /// pays only the taker).
+    #[test]
+    fn tm13_gco_lite_and_kickoff_hygiene() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("experiments");
+        let c = RewardConfig::from_file(&dir.join("tm13.toml")).unwrap();
+        let anneal = [
+            "face_ball", "speed_to_ball", "boost_keep", "boost_change", "airdribble",
+            "airdribble_seq", "aerial_distance", "range_carry", "high_ball", "aerial_boost",
+            "flick", "pressure_flick", "musty", "flip_reset", "flip_reset_use",
+            "air_double_touch", "wall_pop", "front_bump_setup", "shadow_cover", "shadow_box",
+            "support_role", "last_man_goalside", "teammate_spacing", "teammate_far",
+            "contact_quality", "safe_boost", "ang_vel",
+        ];
+        assert_eq!(anneal.len(), 27);
+        for k in anneal {
+            let pts = c.team.term_ramp.get(k).unwrap_or_else(|| panic!("missing ramp {k}"));
+            assert!((ramp_at(pts, 0.0) - 1.0).abs() < 1e-9, "{k} at 0: {}", ramp_at(pts, 0.0));
+            assert!((ramp_at(pts, 1_500_000_000.0) - 0.3).abs() < 1e-9, "{k} at 1.5e9: {}", ramp_at(pts, 1_500_000_000.0));
+        }
+        let keep = [
+            "goal", "goal_prob", "goal_dist", "vel_ball_to_goal", "energy", "touch",
+            "possession", "concede_role", "double_commit", "demo", "defend_carry",
+            "carry_break", "clear_path", "pass", "double_tap", "kickoff_outcome",
+            "kickoff_same_pad", "kickoff_taker",
+        ];
+        for k in keep {
+            if let Some(pts) = c.team.term_ramp.get(k) {
+                assert!(
+                    (ramp_at(pts, 1_500_000_000.0) - 0.3).abs() > 1e-6,
+                    "{k} should not follow the 0.3 GCO-lite anneal"
+                );
+            }
+        }
+        assert_eq!(c.team.kickoff_charge_3v3, ["double_commit".to_string()]);
+        assert!((c.kickoff_outcome.second_scale_3v3 - 0.0).abs() < 1e-12);
+        assert!((c.kickoff_outcome.last_scale_3v3 - 0.0).abs() < 1e-12);
+        // Unknown ramp keys panic here.
+        let names: Vec<_> = c.build().terms.iter().map(|t| t.name).collect();
+        for k in anneal {
+            assert!(names.contains(&k), "{k} missing from built terms");
+        }
     }
 }

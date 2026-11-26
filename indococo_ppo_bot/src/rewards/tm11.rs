@@ -201,9 +201,10 @@ pub struct KickoffOutcomeParams {
     pub min_team: usize,      // 2: 1v1 gets nothing
     pub last_scale_2v2: f64,  // 0.5: the 2v2 non-taker (Role::Last) gets half
     pub last_scale_3v3: f64,  // 0.0: the 3v3 last man is not paid (stays back)
+    pub second_scale_3v3: f64, // 1.0 default (TM11/12); 0.0 = taker only (TM13)
 }
 impl Default for KickoffOutcomeParams {
-    fn default() -> Self { Self { horizon_steps: 22, y_scale: 1500.0, min_team: 2, last_scale_2v2: 0.5, last_scale_3v3: 0.0 } }
+    fn default() -> Self { Self { horizon_steps: 22, y_scale: 1500.0, min_team: 2, last_scale_2v2: 0.5, last_scale_3v3: 0.0, second_scale_3v3: 1.0 } }
 }
 
 enum KoState { Off, Pending, Counting { left: u32, roles: Vec<Role> }, Done }
@@ -246,7 +247,7 @@ impl StepReward for KickoffOutcome {
                             let scale = match (ts, roles[i]) {
                                 (_, Role::First) => 1.0,
                                 (2, Role::Last) => self.p.last_scale_2v2,
-                                (t, Role::Second) if t >= 3 => 1.0,
+                                (t, Role::Second) if t >= 3 => self.p.second_scale_3v3,
                                 (t, Role::Last) if t >= 3 => self.p.last_scale_3v3,
                                 _ => 0.0, // Out (demoed) or anything else
                             };
@@ -635,5 +636,23 @@ mod tests {
         assert!((r[0] - 0.4).abs() < 1e-9, "{r:?}");
         assert!((r[2] - 0.4).abs() < 1e-9, "{r:?}");
         assert!((r[1] + 0.4).abs() < 1e-9, "{r:?}");
+
+        // (g) TM13: second_scale_3v3 = 0 pays only the taker
+        let mut p = KickoffOutcomeParams::default();
+        p.second_scale_3v3 = 0.0;
+        let mut t = kick(p);
+        t.reset(&pend);
+        t.get_rewards(&pend);
+        t.get_rewards(&pend);
+        let moving = ko_state_3v3(false, 1500.0);
+        t.get_rewards(&moving);
+        for _ in 0..21 { t.get_rewards(&moving); }
+        let r = t.get_rewards(&moving);
+        assert_eq!(r[0], 1.0, "blue first {r:?}");
+        assert_eq!(r[2], 0.0, "blue second gated {r:?}");
+        assert_eq!(r[4], 0.0, "blue last {r:?}");
+        assert_eq!(r[1], -1.0, "orange first {r:?}");
+        assert_eq!(r[3], 0.0, "orange second gated {r:?}");
+        assert_eq!(r[5], 0.0, "orange last {r:?}");
     }
 }
