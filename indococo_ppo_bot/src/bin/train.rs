@@ -2017,7 +2017,7 @@ fn widen_critic_extras(src: &Path, dst: &Path) {
     let mut st = SafetensorsStore::from_bytes(Some(wide));
     let mut dst_c = model_with_input(to, &dev).critic;
     dst_c.load_from(&mut st).expect("load widened critic");
-    dst_c.save_file(dst.join("critic.bpk")).expect("write critic");
+    dst_c.clone().save_file(dst.join("critic.bpk")).expect("write critic");
     // Step-0 identity: source critic on obs equals widened critic on obs||zeros.
     let n = 8;
     let mut rows = Vec::with_capacity(n * from);
@@ -3426,6 +3426,38 @@ mod tests {
         assert_eq!(c.opponents.fixed[0].checkpoint, Path::new("opponents/1v1"));
         assert_eq!(c.state_setters.len(), 2);
     }
+
+    /// TM13 train template: entropy 0.008, Galactus clamp [0.10, 0.18],
+    /// self_share 0.55, L1+L2 on, L3 off, critic extras empty, pre-goal
+    /// replay present at weight 0 with per-mode paths.
+    #[test]
+    fn tm13_train_template_parses() {
+        let text = fill_train_placeholders(include_str!("../../experiments/train_tm13.toml"));
+        assert!(!text.contains('@'), "unfilled placeholder");
+        let c: TrainConfig = toml::from_str(&text).expect("train_tm13.toml");
+        assert!((c.entropy - 0.008).abs() < 1e-9, "entropy {}", c.entropy);
+        assert_eq!(c.mask_upload, MaskUpload::Auto);
+        assert!(c.pinned_upload);
+        assert!(c.critic_layers.is_none(), "L3 small critic must stay off");
+        assert!(c.critic.extra_inputs.is_empty(), "{:?}", c.critic.extra_inputs);
+        let p = c.pfsp.as_ref().expect("[pfsp]");
+        assert!((p.self_share - 0.55).abs() < 1e-9, "self_share {}", p.self_share);
+        assert_eq!(p.clamp["galactus"], [0.10, 0.18]);
+        let mut found = 0;
+        for s in &c.state_setters {
+            if let indococo_bot::setters::SetterKind::Replay(r) = &s.kind {
+                if !r.paths.is_empty() {
+                    found += 1;
+                    assert!((s.weight - 0.0).abs() < 1e-9, "pregoal weight {}", s.weight);
+                    assert_eq!(r.paths.get("2").map(String::as_str), Some("/tmp/pregoal_2v2.f32"));
+                    assert_eq!(r.paths.get("3").map(String::as_str), Some("/tmp/pregoal_3v3.f32"));
+                }
+            }
+        }
+        assert_eq!(found, 1, "expected one pre-goal replay setter");
+        let total: f32 = c.state_setters.iter().map(|s| s.weight).sum();
+        assert!((total - 1.0).abs() < 1e-5, "setter weights sum to {total}");
+    }
 }
 
 /// Steps of history kept per env for `snapshots` (a recorded state is taken
@@ -3734,38 +3766,6 @@ mod role_metric_tests {
     fn n_h2h_in_sync() {
         assert_eq!(N_H2H, 59);
         assert_eq!(N_H2H, indococo_bot::h2h_counters::N_H2H);
-    }
-
-    /// TM13 train template: entropy 0.008, Galactus clamp [0.10, 0.18],
-    /// self_share 0.55, L1+L2 on, L3 off, critic extras empty, pre-goal
-    /// replay present at weight 0 with per-mode paths.
-    #[test]
-    fn tm13_train_template_parses() {
-        let text = fill_train_placeholders(include_str!("../../experiments/train_tm13.toml"));
-        assert!(!text.contains('@'), "unfilled placeholder");
-        let c: TrainConfig = toml::from_str(&text).expect("train_tm13.toml");
-        assert!((c.entropy - 0.008).abs() < 1e-9, "entropy {}", c.entropy);
-        assert_eq!(c.mask_upload, MaskUpload::Auto);
-        assert!(c.pinned_upload);
-        assert!(c.critic_layers.is_none(), "L3 small critic must stay off");
-        assert!(c.critic.extra_inputs.is_empty(), "{:?}", c.critic.extra_inputs);
-        let p = c.pfsp.as_ref().expect("[pfsp]");
-        assert!((p.self_share - 0.55).abs() < 1e-9, "self_share {}", p.self_share);
-        assert_eq!(p.clamp["galactus"], [0.10, 0.18]);
-        let mut found = 0;
-        for s in &c.state_setters {
-            if let indococo_bot::setters::SetterKind::Replay(r) = &s.kind {
-                if !r.paths.is_empty() {
-                    found += 1;
-                    assert!((s.weight - 0.0).abs() < 1e-9, "pregoal weight {}", s.weight);
-                    assert_eq!(r.paths.get("2").map(String::as_str), Some("/tmp/pregoal_2v2.f32"));
-                    assert_eq!(r.paths.get("3").map(String::as_str), Some("/tmp/pregoal_3v3.f32"));
-                }
-            }
-        }
-        assert_eq!(found, 1, "expected one pre-goal replay setter");
-        let total: f32 = c.state_setters.iter().map(|s| s.weight).sum();
-        assert!((total - 1.0).abs() < 1e-5, "setter weights sum to {total}");
     }
 }
 
