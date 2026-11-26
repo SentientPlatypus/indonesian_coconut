@@ -223,10 +223,17 @@ class TestTm11Eval(unittest.TestCase):
             }))
             r = E.start(str(cand), str(fb), report=str(report))
             self.assertEqual(r["start"], str(fb), r)
-            # nexto out of band fails
+            # nexto above the reference is allowed (one-sided gate)
             report.write_text(json.dumps({
                 "h2h_2v2": 0.52, "h2h_3v3": 0.50,
                 "nexto_2v2": 0.70, "nexto_3v3": 0.528,
+            }))
+            r = E.start(str(cand), str(fb), report=str(report))
+            self.assertEqual(r["start"], str(cand), r)
+            # nexto more than the band below the reference fails
+            report.write_text(json.dumps({
+                "h2h_2v2": 0.52, "h2h_3v3": 0.50,
+                "nexto_2v2": 0.60, "nexto_3v3": 0.528,
             }))
             r = E.start(str(cand), str(fb), report=str(report))
             self.assertEqual(r["start"], str(fb), r)
@@ -338,6 +345,43 @@ class TestTm11Eval(unittest.TestCase):
             self.assertTrue(m2["complete"], m2.get("missing"))
             self.assertIsNone(m2["nx_dc_2"])
 
+
+    def test_entropy_alarm_one_sided_floor(self):
+        with tempfile.TemporaryDirectory() as d:
+            mid = Path(d) / "mid.jsonl"
+            # two mids, entropy missing unless metrics provided
+            mid.write_text("\n".join([
+                json.dumps({"h2h_2v2": 0.55, "h2h_3v3": 0.55, "passes_min_2v2": 1.0, "passes_min_3v3": 1.5,
+                            "deep_2v2": 0.1, "deep_3v3": 0.1, "nexto_2v2": 0.6, "nexto_3v3": 0.5,
+                            "near2_2v2": 0.2, "near2_3v3": 0.2}),
+                json.dumps({"h2h_2v2": 0.55, "h2h_3v3": 0.55, "passes_min_2v2": 1.0, "passes_min_3v3": 1.5,
+                            "deep_2v2": 0.1, "deep_3v3": 0.1, "nexto_2v2": 0.6, "nexto_3v3": 0.5,
+                            "near2_2v2": 0.2, "near2_3v3": 0.2, "entropy": 3.0}),
+            ]) + "\n")
+            # without ENTROPY_ALARM, no entropy rule
+            self.assertNotIn("entropy", E.alarm(str(mid), {}))
+            # mid lines lack entropy on the first row -> intersection won't include entropy
+            # provide entropy on both rows
+            mid.write_text("\n".join([
+                json.dumps({"entropy": 3.0, "h2h_2v2": 0.55, "h2h_3v3": 0.55, "passes_min_2v2": 1.0,
+                            "passes_min_3v3": 1.5, "deep_2v2": 0.1, "deep_3v3": 0.1, "nexto_2v2": 0.6,
+                            "nexto_3v3": 0.5, "near2_2v2": 0.2, "near2_3v3": 0.2}),
+                json.dumps({"entropy": 3.1, "h2h_2v2": 0.55, "h2h_3v3": 0.55, "passes_min_2v2": 1.0,
+                            "passes_min_3v3": 1.5, "deep_2v2": 0.1, "deep_3v3": 0.1, "nexto_2v2": 0.6,
+                            "nexto_3v3": 0.5, "near2_2v2": 0.2, "near2_3v3": 0.2}),
+            ]) + "\n")
+            hits = E.alarm(str(mid), {"ENTROPY_ALARM": "3.2"})
+            self.assertIn("entropy", hits)
+            mid.write_text("\n".join([
+                json.dumps({"entropy": 3.5, "h2h_2v2": 0.55, "h2h_3v3": 0.55, "passes_min_2v2": 1.0,
+                            "passes_min_3v3": 1.5, "deep_2v2": 0.1, "deep_3v3": 0.1, "nexto_2v2": 0.6,
+                            "nexto_3v3": 0.5, "near2_2v2": 0.2, "near2_3v3": 0.2}),
+                json.dumps({"entropy": 3.6, "h2h_2v2": 0.55, "h2h_3v3": 0.55, "passes_min_2v2": 1.0,
+                            "passes_min_3v3": 1.5, "deep_2v2": 0.1, "deep_3v3": 0.1, "nexto_2v2": 0.6,
+                            "nexto_3v3": 0.5, "near2_2v2": 0.2, "near2_3v3": 0.2}),
+            ]) + "\n")
+            hits = E.alarm(str(mid), {"ENTROPY_ALARM": "3.2"})
+            self.assertNotIn("entropy", hits)
 
 if __name__ == "__main__":
     unittest.main()

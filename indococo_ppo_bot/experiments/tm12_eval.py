@@ -172,6 +172,16 @@ def best_h2h(path):
             best = (sum(h), d.get("ckpt", ""))
     return best[1] if best else ""
 
+
+def last_metric(path, key):
+    """Last finite value of `key` in a metrics.jsonl (one object per iter)."""
+    val = None
+    for d in lines(path):
+        v = d.get(key)
+        if isinstance(v, (int, float)):
+            val = float(v)
+    return val
+
 def alarm_rules(d, env):
     r = set()
     def lt(k, x):
@@ -198,6 +208,16 @@ def alarm_rules(d, env):
     pb = env.get("PASSIVE_BASE") or ""
     base = last_json(pb) if pb else {}
     if pb and not base: r.add("missing:passive_base")
+    ent_floor = env.get("ENTROPY_ALARM") or ""
+    if ent_floor:
+        v = d.get("entropy")
+        metrics = env.get("INDOCOCO_METRICS") or env.get("METRICS") or ""
+        if v is None and metrics:
+            v = last_metric(metrics, "Loss/entropy")
+        if v is None:
+            r.add("missing:entropy")
+        elif float(v) < float(ent_floor):
+            r.add("entropy")
     td = float(env.get("TOUCH_DROP") or 0.15); dd = float(env.get("DEPTH_DROP") or 0.20)
     for n in (2, 3):
         bt, bd = num(base.get(f"touch_{n}v{n}")), num(base.get(f"depth_{n}v{n}"))
@@ -239,8 +259,9 @@ H2H_MEAN_MIN = 0.50
 H2H_MODE_MIN = 0.48
 
 def start(cand, fallback, promote=None, mid_path=None, h2h=None, nexto=None, report=None):
-    """Start from cand (TM11 final) if mean h2h vs TM10 >= 0.50, each mode >= 0.48,
-    and Nexto 2v2/3v3 is within 0.03 of TM10's final (0.649 / 0.528). Else TM10."""
+    """Start from cand if mean h2h vs the fallback >= 0.50, each mode >= 0.48,
+    and Nexto 2v2/3v3 is not more than 0.03 below TM10's final (0.649 / 0.528).
+    A higher Nexto score than the reference is allowed. Else fallback."""
     if not has_ck(cand):
         return {"start": fallback, "reason": f"candidate {cand!r} incomplete"}
     src = None
@@ -276,7 +297,7 @@ def start(cand, fallback, promote=None, mid_path=None, h2h=None, nexto=None, rep
         nexto_ok = False
         reason_n = f"{src}: nexto missing"
     else:
-        nexto_ok = all(abs(n[i] - NEXTO_REF[i]) <= NEXTO_BAND for i in (0, 1))
+        nexto_ok = all(n[i] >= NEXTO_REF[i] - NEXTO_BAND for i in (0, 1))
         reason_n = f"{src}: nexto {n} vs {NEXTO_REF} band {NEXTO_BAND}"
     reason = f"{src}: h2h vs TM10 {h} mean {mean:.4f} min {mn:.4f}; {reason_n}"
     out = {"start": cand if (h2h_ok and nexto_ok) else fallback,

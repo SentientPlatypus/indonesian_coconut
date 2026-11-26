@@ -177,7 +177,7 @@ else
   cat "$R/tm12_work/START_DECISION.json" || true
 fi
 
-# 10) START_PANEL nexto out of band -> TM10
+# 10) START_PANEL nexto above the reference still starts from cand (one-sided gate)
 python3 - "$R/tm12_work/START_PANEL.json" "$R/exp_TM11/checkpoints/100" "$R/exp_TM10/checkpoints/1795503212" <<'PY'
 import json,sys
 open(sys.argv[1],"w").write(json.dumps({
@@ -188,10 +188,28 @@ open(sys.argv[1],"w").write(json.dumps({
 PY
 st=$(run_dry)
 got=$(python3 -c 'import json; print(json.load(open("'"$R"'/tm12_work/START_DECISION.json"))["start"])')
-if [[ $st == 0 && $got == "$R/exp_TM10/checkpoints/1795503212" ]]; then
-  pass "START_PANEL nexto out of band starts from TM10"
+if [[ $st == 0 && $got == "$R/exp_TM11/checkpoints/100" ]]; then
+  pass "START_PANEL nexto above reference starts from the TM11 final"
 else
-  bad "panel nexto-fail start=$got st=$st"
+  bad "panel nexto-above start=$got st=$st"
+  cat "$R/tm12_work/START_DECISION.json" || true
+fi
+
+# 11) START_PANEL nexto more than the band below the reference -> TM10
+python3 - "$R/tm12_work/START_PANEL.json" "$R/exp_TM11/checkpoints/100" "$R/exp_TM10/checkpoints/1795503212" <<'PY'
+import json,sys
+open(sys.argv[1],"w").write(json.dumps({
+  "cand":sys.argv[2],"fallback":sys.argv[3],
+  "h2h_2v2":0.52,"h2h_3v3":0.50,
+  "nexto_2v2":0.60,"nexto_3v3":0.528,
+})+"\n")
+PY
+st=$(run_dry)
+got=$(python3 -c 'import json; print(json.load(open("'"$R"'/tm12_work/START_DECISION.json"))["start"])')
+if [[ $st == 0 && $got == "$R/exp_TM10/checkpoints/1795503212" ]]; then
+  pass "START_PANEL nexto below band starts from TM10"
+else
+  bad "panel nexto-below start=$got st=$st"
 fi
 
 echo
