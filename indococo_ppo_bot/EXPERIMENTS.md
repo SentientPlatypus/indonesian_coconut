@@ -72,7 +72,7 @@ Body sections below are in chronological-note order, not run order. This table i
 | TM10 | done; **current team_best** | from TM9 → 57957.2M | yes (user-approved 2026-11-24 9:18 AM ET); `tm10_57957M.bpk` | [TM10 cross-exam](#tm10--cross-exam-note-support-car-playmaking-demo--bump-staged-2026-11-21-auto-starts-after-tm9) |
 | TM11 | done | from TM10, BT=TM9 → 62957.3M (mid export 62386.1M) | no; exported `tm11_62957M.bpk`, `tm11_62386M.bpk` | [TM11 cross-exam](#tm11--cross-exam-note-defending-grounded-carries--3v3-kickoff-outcome-staged-2026-11-23-auto-starts-after-tm10) |
 | TM12 | done | from TM10, BT=TM10 → 62957.3M | no (gate failed; team_best stays TM10); `tm12_62957M.bpk` | [TM12 results](#tm12-results-not-promoted-team_best-stays-tm10-2026-11-26) |
-| TM13 | launching / smoke (as of 2026-11-26 10:17 PM ET) | from TM10, BT=TM10 | n/a; team_best is not written | [TM13 cross-exam](#tm13--cross-exam-note-gco-lite-galactus-share-entropy-pre-goal-starts-staged-2026-11-26) |
+| TM13 | training; lever 4 on from 58,678.7M (as of 2026-11-27 5:15 AM ET) | from TM10, BT=TM10 | n/a; team_best is not written | [TM13 cross-exam](#tm13--cross-exam-note-gco-lite-galactus-share-entropy-pre-goal-starts-staged-2026-11-26) |
 | Eval fidelity (E1–E3) | report-only tooling + findings (2026-11-23) | — | n/a (no promotion rule changed) | [Eval fidelity](#eval-fidelity-galactus-headline-metric-diag-fix-rust-vs-c-engine-2026-11-23) |
 
 Three arms, all warm-started from the full 430.8M checkpoint (actor, critic
@@ -4652,6 +4652,30 @@ Smoke (production-like 24 threads / 2 pools / 384 games / 300k TPI, 2 iters), af
 Lever 4 stays off until pre-goal banks (~50k states/mode) are recorded. The launcher re-reads the `LEVER4=` line in `tm_TM13.env` at each chunk boundary, so flipping that line to `1` takes effect on the next chunk after the banks exist. Bank recording waits until the TM12 `gal_fidelity` finals job releases the second heavy-job slot (cap 2).
 
 Entropy coefficient 0.008, `ENTROPY_ALARM=3.2` (checked on mids via `tm12_eval.py`). P1 Nexto 8/64/2, L1 `mask_upload=auto`, L2 `pinned_upload=true`, L3 off.
+
+### Lever 4 on: pre-goal banks recorded and validated (2026-11-27)
+
+Banks were recorded with `snapshots-pregoal` from TM13 `1795752214` (nice 19, 4 threads, 16,453,382 steps/mode) from 11:27 PM to 3:41 AM ET. The recorder wrote both files. The wrapper then exited 42 on its own post-run disk-floor check (/ 12.02 GiB < 14.5 GiB floor), so the banks are complete but the wrapper never printed its DONE line.
+
+| Bank | Bytes | Records | Cars | Record (f32) |
+|---|---|---|---|---|
+| `pregoal_2v2.f32` | 36,008,816 | 82,589 | 4 | 109 = 9 + 4 x 25 |
+| `pregoal_3v3.f32` | 40,513,212 | 63,700 | 6 | 159 = 9 + 6 x 25 |
+
+**Why the files are larger than the 21.8 / 31.8 MB estimate.** That estimate assumed exactly 50k records. The plan sized the step count for the slower mode (3v3, probe rate 0.003647/step) with a 1.2x margin, then used that one count for both modes. That gives 3v3 about 60k records and 2v2 (probe rate 0.005267/step) about 87k. The format is as expected: 12-byte ICSN header (version 1, cars, reserved 0) + records x stride x 4 matches both file sizes exactly.
+
+Validation (numpy plus `validate_pregoal.py`, which mirrors `setters::parse_snapshot_bytes`):
+- 0 NaN/Inf.
+- Ball z is 78 to 1,967 uu (never at or below 0). Ball |x| is at most 4,020. Ball |y| is at most 5,204; 49 / 44 records sit just past the goal line but not scored.
+- Car |x| is at most 4,095, |y| at most 5,992 (inside the goal boxes), z is 3.5 to 2,037 uu.
+- Rotation matrices are orthonormal. Boost is 0 to 100. Flags are 0/1. Teams are 2 + 2 (2v2) and 3 + 3 (3v3) in every record.
+- Car angular speed exceeds 5.5 in about 15% of car slots (p99 7.6). The earlier 300k-step probe shows the same share, so this comes from the simulator and is not corruption. A few outliers exist: 18 / 24 car slots are above 2,400 uu/s. Duplicates: 118 / 14 (mostly static kickoff frames).
+- Dry-run load on CPU (`CUDA_VISIBLE_DEVICES=`, nice 19), using the TM13 binary's `snapshots-pregoal` with a replay-only mix that points at both banks, 40k steps/mode: rc 0, no panic, no `leaving kickoff`. The goal rate went up from 0.0053 to 0.0070/step in 2v2 and from 0.0036 to 0.0056/step in 3v3, which shows the pre-goal starts were applied.
+
+**Flip.** Symlinked `exp_TM13/pregoal_{2v2,3v3}.f32` to the NVMe banks, then set `LEVER4=1` in `tm_TM13.env` with a temp file + mv at 4:24 AM ET. The chunk that started at 58,678.7M (4:37 AM ET) rendered the pre-goal replay at weight 0.15, with aerial_pass 0.02, backboard_double_tap 0.025 and air_near_ball 0.005.
+- `Setters/replay share` went from 0.030 (previous chunk mean) to 0.166 (this chunk). That share includes the old 1v1 replay setter.
+- 0 panics, 0 `leaving kickoff`.
+- Throughput/overall mean was 65.5k sps over 329 iterations, against 72.2k for the previous chunk (about -9%). That is above the 55k floor, so lever 4 stays on.
 
 ## TM12 results: not promoted, team_best stays TM10 (2026-11-26)
 
