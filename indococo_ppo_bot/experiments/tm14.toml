@@ -1,0 +1,67 @@
+# TM14 reward = GCO (goal / concede only), EXPERIMENTS.md "TM14 — Cross-exam note".
+# tm13.toml plus a 500M linear anneal of every other weighted term from its
+# TM13 end scale (0.3 for the 27 GCO-lite terms, 1.0 for the rest) to 0.0,
+# steps relative to spirit_origin (= the TM14 start, set by the launcher).
+# After 500M the only non-zero term is `goal` (weight 1200: +1 to every car of
+# the scoring team, -1 to every car of the conceding team; symmetric, team-
+# shared; spirit_full keeps it at tau 1.0, which is a no-op for an equal
+# team value). No time penalty exists in this codebase. Terms stay built (at
+# scale 0) so the [team] gates / lists that name them still validate and the
+# Reward/* metrics keep reporting. Kickoff hygiene from tm13.toml is inert
+# once its terms reach 0. team_best is never written.
+# shortcut: zeroing via term_ramp still computes all 50 terms every step (no sps
+# win); a pure-GCO config that drops them needs every [team] list pruned too.
+extends = "tm13.toml"
+
+# Every key overrides the same key from tm12/tm13 (tables merge key by key).
+[team.term_ramp]
+goal_prob = [[0.0, 1.0], [500_000_000.0, 0.0]]
+ball_travel = [[0.0, 1.0], [500_000_000.0, 0.0]]
+vel_ball_to_goal = [[0.0, 1.0], [500_000_000.0, 0.0]]
+goal_dist = [[0.0, 1.0], [500_000_000.0, 0.0]]
+speed_to_ball = [[0.0, 0.3], [500_000_000.0, 0.0]]
+face_ball = [[0.0, 0.3], [500_000_000.0, 0.0]]
+touch = [[0.0, 1.0], [500_000_000.0, 0.0]]
+possession = [[0.0, 1.0], [500_000_000.0, 0.0]]
+energy = [[0.0, 1.0], [500_000_000.0, 0.0]]
+boost_keep = [[0.0, 0.3], [500_000_000.0, 0.0]]
+boost_change = [[0.0, 0.3], [500_000_000.0, 0.0]]
+aerial_boost = [[0.0, 0.3], [500_000_000.0, 0.0]]
+aerial_distance = [[0.0, 0.3], [500_000_000.0, 0.0]]
+airdribble = [[0.0, 0.3], [500_000_000.0, 0.0]]
+airdribble_seq = [[0.0, 0.3], [500_000_000.0, 0.0]]
+wall_pop = [[0.0, 0.3], [500_000_000.0, 0.0]]
+flick = [[0.0, 0.3], [500_000_000.0, 0.0]]
+flip_reset = [[0.0, 0.3], [500_000_000.0, 0.0]]
+recover = [[0.0, 1.0], [500_000_000.0, 0.0]]
+demo = [[0.0, 1.0], [500_000_000.0, 0.0]]
+contact_quality = [[0.0, 0.3], [500_000_000.0, 0.0]]
+front_bump_setup = [[0.0, 0.3], [500_000_000.0, 0.0]]
+safe_boost = [[0.0, 0.3], [500_000_000.0, 0.0]]
+shadow_space = [[0.0, 1.0], [500_000_000.0, 0.0]]
+pressure_flick = [[0.0, 0.3], [500_000_000.0, 0.0]]
+high_ball = [[0.0, 0.3], [500_000_000.0, 0.0]]
+range_carry = [[0.0, 0.3], [500_000_000.0, 0.0]]
+clear_path = [[0.0, 1.0], [500_000_000.0, 0.0]]
+ang_vel = [[0.0, 0.3], [500_000_000.0, 0.0]]
+air_dribble_bump = [[0.0, 1.0], [500_000_000.0, 0.0]]
+shadow_box = [[0.0, 0.3], [500_000_000.0, 0.0]]
+pass = [[0.0, 1.0], [500_000_000.0, 0.0]]
+double_tap = [[0.0, 1.0], [500_000_000.0, 0.0]]
+air_double_touch = [[0.0, 0.3], [500_000_000.0, 0.0]]
+double_commit = [[0.0, 1.0], [500_000_000.0, 0.0]]
+flip_reset_use = [[0.0, 0.3], [500_000_000.0, 0.0]]
+musty = [[0.0, 0.3], [500_000_000.0, 0.0]]
+teammate_spacing = [[0.0, 0.3], [500_000_000.0, 0.0]]
+last_man_goalside = [[0.0, 0.3], [500_000_000.0, 0.0]]
+support_role = [[0.0, 0.3], [500_000_000.0, 0.0]]
+teammate_far = [[0.0, 0.3], [500_000_000.0, 0.0]]
+concede_role = [[0.0, 1.0], [500_000_000.0, 0.0]]
+shadow_cover = [[0.0, 0.3], [500_000_000.0, 0.0]]
+kickoff_same_pad = [[0.0, 1.0], [500_000_000.0, 0.0]]
+kickoff_taker = [[0.0, 1.0], [500_000_000.0, 0.0]]
+playmaking_demo = [[0.0, 1.0], [500_000_000.0, 0.0]]
+playmaking_bump = [[0.0, 1.0], [500_000_000.0, 0.0]]
+defend_carry = [[0.0, 1.0], [500_000_000.0, 0.0]]
+carry_break = [[0.0, 1.0], [500_000_000.0, 0.0]]
+kickoff_outcome = [[0.0, 1.0], [500_000_000.0, 0.0]]

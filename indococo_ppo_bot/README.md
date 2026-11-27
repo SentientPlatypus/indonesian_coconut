@@ -358,6 +358,21 @@ commits and last man back. Chain: `experiments/team_launch.sh` (own
 `TEAM_QUEUE`, `team_best`, `TEAM_PROMOTE.json` recommendation only; see
 EXPERIMENTS.md "TM1"). RLBot: a 235-wide policy turns team obs on by itself.
 
+### TM14: goal / concede only (GCO)
+`experiments/tm14.toml` ramps every non-goal weighted term to 0 with
+`[team.term_ramp]` (TM13 end scale → 0 over the first 500M steps after
+`spirit_origin`), leaving `goal` (±1 to every car of the scoring / conceding
+team, weight 1200) as the only reward. Terms stay built at scale 0 so the
+`[team]` lists still validate. Data flow is unchanged: setters (kickoff,
+random, team_play, lever-4 pre-goal team replay banks, drills) → rollouts →
+`CombinedReward` → return standardization (cumulative Welford in
+`stats.toml`) → GAE → standardized advantages → PPO. `tm_TM14.env` runs
+through `team_launch_tm13.sh` (`RUN=TM14 VARIANT=TM14`), started by
+`wait_tm13_launch_tm14.sh` after TM13's launcher exits. `tm12_eval.py alarm`
+has env-gated TM14 rules (dc2, pair800_3, nexto3_min, and training-window
+means of `Throughput/overall`, `Loss/entropy` and `Events/Goals per min`
+between two mids). See EXPERIMENTS.md "TM14".
+
 ### FR7c pipeline (reset ramp, farming alarm, 48% guard)
 `experiments/fr7c_launch.sh` (started by the FR7b auto-chain: fr7_launch.sh
 hands any RUN=FR7c.. over to it) seeds from the best 1000-game h2h vs FR4

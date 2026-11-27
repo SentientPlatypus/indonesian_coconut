@@ -4677,6 +4677,109 @@ Validation (numpy plus `validate_pregoal.py`, which mirrors `setters::parse_snap
 - 0 panics, 0 `leaving kickoff`.
 - Throughput/overall mean was 65.5k sps over 329 iterations, against 72.2k for the previous chunk (about -9%). That is above the 55k floor, so lever 4 stays on.
 
+## TM14 — Cross-exam note: GCO (goal / concede only) after a 500M anneal (staged 2026-11-27)
+
+Goal (user, Nov 27 3:26 PM ET, America/New_York: "for TM14 Try a GCO reward"): train on goal and
+concede only, with Galactus 2v2/3v3 win rate as THE primary metric. TM14 starts from the TM13
+FINAL_CKPT when TM13's launcher (trainer + finals) exits, through `wait_tm13_launch_tm14.sh`.
+BT stays pinned to the TM10 final (`1795503212`). team_best is never written. Not added (not
+requested; follow-ups only): Titan/Pulsar-style aux long-horizon critic, ts4, lambda 0.8.
+
+### Cross-exam (three legs, per the Nov 12 rule)
+
+- **Discord (read-only; cached legs `/workspace/tm13_discord_leg1.md`, passes 1–2, 2026-11-26;
+  no fresh read):** Terminal (THEBIGTHREE, 11/22 thread `…/1562143933465890969/1574172010152591471`):
+  GCO works when ~90% of the no-signal match time is replaced by starts 1–10 s before goals (own-bot
+  replays are fine); "the last part is really the key". Jumper775: GCO "just works" with good
+  settings and a non-bugged learner; PFSP helps but is not enough; un-annealed shaping = perpetual
+  push. ClaudeBot (11/2) and Bello (10/13): anneal dense → goal-only. Animentors: shaping does not
+  raise the ceiling; anneal to zero. SubparNova: a GCO plateau means the limit is not the reward;
+  JPK314: restart rather than stepmaxx. Disco: GigaLearn PPO self-play, goal/concede only. Martico:
+  concede −1.2 vs goal +1 (asymmetric); PigMasta: no pass reward, teams learn passing from shared
+  goal reward; Azurus41 / whinerbox: team-wide rewards give passes without a pass reward.
+  Vibes (Nuclear): less passive/more possessive beat Galactus 1v2; passivity in 1vX hurt.
+  RLBC 2026 casts (`/workspace/titan_research/*.txt`): "Pulsar, Titan, Terminal … all using this
+  goal and concede only system or at least some variant of it" (jJTNN 00:02:55), then "Titan does
+  use normal rewards, according to chat" (00:03:32); Terminal and Pulsar GCO (02:01:09; QL0Y
+  02:41:16). **Gap:** nobody in the cached material describes switching an already-shaped policy to
+  GCO mid-run (instant vs anneal, critic reset, value scale, entropy). A fresh read should search
+  the RLGym server (read-only) for: `GCO anneal`, `goal only switch`, `switched to goal concede`,
+  `remove dense rewards`, `critic reset GCO`, `GCO entropy`, `GCO passive`, `GCO 2v2` / `GCO 3v3`,
+  `aggression bias concede`, and from:THEBIGTHREE / from:Jumper775 / from:SubparNova `GCO`.
+- **Web:** OpenAI Five (arXiv 1912.06680): win/loss-only trained "an order of magnitude slower";
+  environment changes were annealed 0→100% with revert-and-slower-anneal on TrueSkill loss; team
+  spirit 0.3→1.0. Ng, Harada & Russell 1999: only potential-based shaping is policy-invariant, so
+  our per-step terms move the optimum; GCO removes that bias. Zealan RLGym-PPO guide: massive goal
+  rewards early slow learning (not our stage); `aggression_bias` ≈ 0.2 (concede = −0.8 × goal) is
+  his fix for passivity. NitroLearn `gco_1v1_starter.toml` (design credited to Pulsar's authors):
+  goal +1 / concede −1 zero-sum, team spirit 1; kickoff + random + ball-touch setters; 20% past
+  versions; half-life 14.9 s; four value heads incl. a ~77 s "goal critic" at 25% of advantage
+  spread, twin optimistic critics, top-50% advantage filtering; "a goal-only reward is hardest with
+  teammates (whose goal was it?)" and Pulsar's warning that training every game size at once can
+  stall. QuestionMark (1.62T steps, 1v1/2v2/3v3 policies): league of past versions, rewarded only for
+  goals scored/conceded. PopArt (van Hasselt et al. 2016): normalize value targets adaptively and
+  preserve outputs when the scale changes — relevant if the return scale moves a lot. Random Reward
+  Perturbation (arXiv 2506.08737): sparse-reward PPO benefits from annealed reward noise for
+  exploration (follow-up only).
+- **Code + logs (EC2, TM13 code `code_tm13` = c167833; no Rust change since):**
+  - Shaping anneal = `[team.term_ramp]`: `TermRamp` multiplies a term's output by
+    `piecewise(points, global_step)` (`rewards/tm8.rs:385`), points relative to `spirit_origin`
+    (= run start, written by the launcher). A point at 0.0 zeroes the term exactly. Terms must stay
+    weighted: every `[team]` list (individual, gates, kickoff lists, ramps) asserts its names are
+    weighted terms (`config.rs:744`), and TOML tables merge key by key, so dropping weights would
+    need every list pruned. Zeroing via term_ramp keeps all lists valid.
+  - What remains at 0: `goal` (weight 1200; `Goal` = +1 every car of the scoring team, −1 every car
+    of the conceding team; symmetric, team-shared; in `spirit_full` so tau 1.0, a no-op for equal
+    team values). No time penalty anywhere (`rewards/`, `env.rs`). Goal ends the episode; 30 s
+    no-touch is a truncation (bootstrapped); 300 s game timeout.
+  - Normalization: `standardize_returns` uses a cumulative Welford stat saved in `stats.toml`
+    (TM13 latest: count 35.37M, std ≈ 1009.8). 150 samples/iter → TM14 adds ~1.5M (≈4%), so the
+    std barely moves. Rewards are scaled by 1/std before GAE (goal = ±1.19), reward clip 10 never
+    hits. `standardize_advantages` is on, so the policy-gradient scale does not depend on the return
+    scale. Critic warm-up = `critic_warmup_steps` (policy LR 0 until START+20M).
+  - TM13 now: goal is 29.6% of |r| (zero-sum core 46.7%); avg |return| 670, EV 0.85, entropy 3.64,
+    training goals/min 0.49 (last 500M), Throughput/overall 82k. Mids: Galactus 2v2 0.04–0.16,
+    3v3 0.065–0.13, flat; h2h vs TM10 0.47–0.60; Nexto 3v3 0.535–0.615; dc2 ≤ 0.014; pair800_3v3
+    0.17–0.20. TM13's passive alarm has only said `missing:passive_base` (file never written);
+    fixed for TM14 by the waiter.
+  - Setters kept (train_tm13.toml): kickoff 0.15 (3v3 0.20), random ×2 0.05, team_play 0.15, 1v1
+    replay 0.09, lever-4 pre-goal team replay 0.15 (82,589 2v2 / 63,700 3v3 states), drills, breakaway,
+    goalie_shot, defend_carry (Galactus-weighted).
+
+### Reconciliation (what TM14 does)
+
+- **Reward:** `tm14.toml` = tm13.toml + term_ramp on all 50 non-goal weighted terms from their TM13
+  end scale (0.3 for the 27 GCO-lite terms, 1.0 for the other 23) linearly to 0.0 at +500M, then
+  pure GCO for 2.5B. Symmetric ±1 (weight 1200), team-shared. **Anneal, not instant:** at TM13's
+  end the goal is only 30% of |r|, so an instant switch removes 70% of the signal in one step and
+  takes the shaping part out of the value target at once (avg |target| is 0.41 normalized today); Discord (ClaudeBot, Bello,
+  Animentors) and OpenAI Five anneal; 500M = 5 mids to catch a breakdown before pure GCO.
+- **Critic / scale:** no reset, no re-normalization (advantage standardization + Adam make the
+  policy step scale-free; resetting Welford would make early std estimates noisy). The usual 20M
+  critic-only warm-up stays.
+- **Unchanged from TM13:** Galactus PFSP [0.10, 0.18], self_share 0.55, entropy 0.008, gamma 0.995
+  (half-life 9.2 s at 15 Hz), lambda 0.95, 1 epoch, no bf16, CHUNK 100M, numpy 1.26.4, P1+L1+L2,
+  L3 off, critic extras off, LEVER4=1 (same NVMe banks, read-only), mode_mix 0.15/0.35/0.50.
+- **Steps:** 3B (LR hold 2B, cosine to 0.4× over the last 1B). JPK314 "restart rather than
+  stepmaxx"; TM13's 5B showed no Galactus trend after the first 1B.
+- **Binary:** `/opt/dlami/nvme/ippo_bins/indococo-train-tm14-c167833` = byte copy of the TM13 binary
+  (sha256 `796593e2…2b81a8`); no Rust change, so no rebuild.
+- **Abort set** (`tm12_eval.py alarm`, two mids in a row → `exp_TM14/PASSIVE_ALARM`; env-gated, off
+  for older runs): h2h vs TM10 < 0.45 (`h2h2/h2h3`), dc2 > 0.02 (`dc2`), pair800_3v3 > 0.22
+  (`pair800_3`), Nexto 3v3 < 0.45 (`nexto3_min`), entropy < 3.2 (`entropy`, now averaged over the
+  chunk's metrics rows), entropy > 3.95 (`entropy_high`), Throughput/overall < 55k (`sps`), and the
+  **GCO passivity guard**: training goals/min < 0.75 × TM13's last-500M mean (`goals`), plus the
+  existing touch −15% / depth −20% vs the start's mid (`touch2/3`, `depth2/3`). The existing guard
+  (min h2h < 0.40 twice) still rolls back to the best-h2h checkpoint. Alarms do not stop the run;
+  the monitor decides (revert to TM13-style shaping, or `aggression_bias` 0.2 if `goals` fires).
+
+### Success criteria (TM14 final vs TM10 final; Galactus first)
+
+- **Primary:** Galactus 2v2 / 3v3 (256-g finals) above TM13's finals by ≥ 0.03 in at least one mode
+  and not below in the other; `gal_fidelity` (C++ engine) agrees in direction.
+- Gate (unchanged): mean h2h ≥ 0.52, each mode ≥ 0.48; external mean not below TM10's by > 0.04.
+- Nexto 3v3 ≥ 0.45; no passivity alarm two mids in a row; entropy 3.2–3.95.
+
 ## TM12 results: not promoted, team_best stays TM10 (2026-11-26)
 
 Training ended 2026-11-26 at 9:25 PM ET (America/New_York) at 62,957.3M steps (`exp_TM12/checkpoints/1795745739`). The TM12 launcher started the official finals immediately and finished them at 9:57 PM ET (`tm12_final/DONE`, `TEAM_PROMOTE.json`). BT was pinned to the TM10 final (`exp_TM10/checkpoints/1795503212`) for the whole run. The last checkpoint is also `checkpoints_to_test/tm12_62957M.bpk` @ 4d2f98f (sha256 `b461ad9ee423a030fb64e623ae2f1586e1db9787dc11cea83dbcc93f8aa773a5`). **Not promoted.** The automatic team gate said `promote_team: false` (score 0.4449). `team_best/FINAL_CKPT` was not touched and stays the TM10 final (user-approved 2026-11-24 9:18 AM ET). All official h2h games are decisive except TM10's Nexto 3v3 reference panel (1 draw).

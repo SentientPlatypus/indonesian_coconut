@@ -182,7 +182,16 @@ def last_metric(path, key):
             val = float(v)
     return val
 
-def alarm_rules(d, env):
+def window_mean(path, key, lo, hi):
+    """Mean of `key` over metrics.jsonl rows with lo < Cumulative/steps <= hi (None if none)."""
+    v = [float(x[key]) for x in lines(path)
+         if isinstance(x.get(key), (int, float)) and isinstance(x.get("Cumulative/steps"), (int, float))
+         and lo < x["Cumulative/steps"] <= hi]
+    return sum(v) / len(v) if v else None
+
+def alarm_rules(d, env, lo=None):
+    """Rules hit by mid row d. lo = steps of the previous mid (training window
+    (lo, d.steps] for the TM14 metric rules; None = window rules skipped)."""
     r = set()
     def lt(k, x):
         v = d.get(k)
@@ -212,6 +221,8 @@ def alarm_rules(d, env):
     if ent_floor:
         v = d.get("entropy")
         metrics = env.get("INDOCOCO_METRICS") or env.get("METRICS") or ""
+        if v is None and metrics and lo is not None and num(d.get("steps")):
+            v = window_mean(metrics, "Loss/entropy", lo, d["steps"])
         if v is None and metrics:
             v = last_metric(metrics, "Loss/entropy")
         if v is None:
@@ -223,12 +234,37 @@ def alarm_rules(d, env):
         bt, bd = num(base.get(f"touch_{n}v{n}")), num(base.get(f"depth_{n}v{n}"))
         if bt and lt(f"touch_{n}v{n}", (1 - td) * bt): r.add(f"touch{n}")
         if bd and lt(f"depth_{n}v{n}", (1 - dd) * bd): r.add(f"depth{n}")
+    # TM14 abort set (each rule off unless its env key is set).
+    for key, col, name, rule in (("DC2_MAX", "double_commit_2v2", "dc2", gt), ("PAIR800_3_MAX", "pair800_3v3", "pair800_3", gt),
+                                 ("NEXTO3_MIN", "nexto_3v3", "nexto3_min", lt)):
+        x = env.get(key) or ""
+        if x and rule(col, float(x)): r.add(name)
+    metrics = env.get("INDOCOCO_METRICS") or env.get("METRICS") or ""
+    hi = num(d.get("steps"))
+    wins = (("SPS_MIN", "Throughput/overall", "sps", lambda v, x: v < x),
+            ("ENTROPY_HIGH", "Loss/entropy", "entropy_high", lambda v, x: v > x),
+            ("GOALS_DROP", "Events/Goals per min", "goals",
+             lambda v, x: num(base.get("train_goals_min")) is not None and v < (1 - x) * base["train_goals_min"]))
+    # shortcut: each window rule re-reads metrics.jsonl (~1 s per alarm at 10k rows); cache if it grows past ~100k rows.
+    for key, col, name, bad in wins:
+        x = env.get(key) or ""
+        if not x or lo is None:
+            continue
+        v = window_mean(metrics, col, lo, hi) if metrics and hi is not None else None
+        if v is None: r.add("missing:" + col)
+        elif bad(v, float(x)): r.add(name)
+    if (env.get("GOALS_DROP") or "") and lo is not None and num(base.get("train_goals_min")) is None:
+        r.add("missing:train_goals_min")
     return r
 
 def alarm(path, env):
-    L = lines(path)[-2:]
+    L = lines(path)[-3:]
     if len(L) < 2: return ""
-    return ",".join(sorted(alarm_rules(L[0], env) & alarm_rules(L[1], env)))
+    a, b = L[-2], L[-1]
+    # Each row's training window starts at the previous mid (100M back for a first row).
+    sa = num(a.get("steps"))
+    lo_a = num(L[0].get("steps")) if len(L) == 3 else (sa - 1e8 if sa is not None else None)
+    return ",".join(sorted(alarm_rules(a, env, lo_a) & alarm_rules(b, env, sa)))
 
 def gate(F):
     w = lambda n, e=0: wr(last_json(os.path.join(F, n + ".json")), e)

@@ -383,5 +383,34 @@ class TestTm11Eval(unittest.TestCase):
             hits = E.alarm(str(mid), {"ENTROPY_ALARM": "3.2"})
             self.assertNotIn("entropy", hits)
 
+    def test_tm14_abort_set_windows(self):
+        """TM14: env-gated rules; window metrics come from the rows between mids."""
+        with tempfile.TemporaryDirectory() as d:
+            base = {"h2h_2v2": 0.55, "h2h_3v3": 0.55, "passes_min_2v2": 1.0, "passes_min_3v3": 1.5,
+                    "deep_2v2": 0.1, "deep_3v3": 0.1, "nexto_2v2": 0.6, "nexto_3v3": 0.40,
+                    "near2_2v2": 0.2, "near2_3v3": 0.2, "double_commit_2v2": 0.03, "pair800_3v3": 0.10}
+            mid = Path(d) / "mid.jsonl"
+            mid.write_text("\n".join(json.dumps({**base, "steps": s}) for s in (100, 200, 300)) + "\n")
+            met = Path(d) / "metrics.jsonl"
+            # window (100, 200]: fine; (200, 300]: slow, passive. Row at 100 is outside both.
+            rows = [(100, 10, 0.1), (150, 80000, 0.45), (200, 80000, 0.45), (250, 40000, 0.20), (300, 40000, 0.20)]
+            met.write_text("\n".join(json.dumps({"Cumulative/steps": s, "Throughput/overall": v,
+                                                  "Events/Goals per min": g, "Loss/entropy": 3.6}) for s, v, g in rows) + "\n")
+            pb = Path(d) / "pb.json"; pb.write_text(json.dumps({"train_goals_min": 0.44}) + "\n")
+            env = {"DC2_MAX": "0.02", "PAIR800_3_MAX": "0.22", "NEXTO3_MIN": "0.45", "SPS_MIN": "55000",
+                   "GOALS_DROP": "0.25", "ENTROPY_HIGH": "3.95", "INDOCOCO_METRICS": str(met), "PASSIVE_BASE": str(pb)}
+            hits = set(E.alarm(str(mid), env).split(","))
+            self.assertEqual(hits & {"dc2", "pair800_3", "nexto3_min"}, {"dc2", "nexto3_min"})
+            self.assertNotIn("sps", hits)            # only the last window is slow
+            self.assertNotIn("goals", hits)
+            self.assertNotIn("entropy_high", hits)
+            self.assertEqual(E.alarm(str(mid), {}), "")  # all TM14 rules off without env
+            rows[1:3] = [(150, 40000, 0.20), (200, 40000, 0.20)]
+            met.write_text("\n".join(json.dumps({"Cumulative/steps": s, "Throughput/overall": v,
+                                                  "Events/Goals per min": g, "Loss/entropy": 3.6}) for s, v, g in rows) + "\n")
+            hits = set(E.alarm(str(mid), env).split(","))
+            self.assertTrue({"sps", "goals"} <= hits, hits)
+
+
 if __name__ == "__main__":
     unittest.main()
