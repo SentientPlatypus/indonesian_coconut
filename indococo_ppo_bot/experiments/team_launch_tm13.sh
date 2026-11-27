@@ -163,11 +163,18 @@ PY
 
 source $X/guard.env
 while :; do
+  # Re-read the one-line LEVER4= knob from the env file at each chunk.
+  if [[ -f $C/experiments/tm_$VARIANT.env ]]; then
+    line=$(grep -E '^LEVER4=' "$C/experiments/tm_$VARIANT.env" | tail -1 || true)
+    case $line in
+      LEVER4=0|LEVER4=1) eval "$line" ;;
+    esac
+  fi
   now=$(steps_in $X/checkpoints/$(latest)); (( now >= END )) && break
   stop=$(( now + CHUNK )); (( stop > END )) && stop=$END
   left=$(( (stop - now + ${TPI//_/} - 1) / ${TPI//_/} ))
   sed -e "s|@RUN@|$X|g" -e "s|@ITERATIONS@|$left|" -e "s|@WARM@|$((START0 + ${WARM_REL:-20000000}))|" -e "s|@HOLD@|$((START0 + HOLDREL))|" \
-      -e "s|@SNAP@|$SNAP/train.f32|" -e "s|@PREGOAL@|${PREGOAL:-$X/pregoal}|" -e "s|@TPI@|$TPI|" -e "s|@MB@|$MB|" -e "s|@LR@|$LR|g" -e "s|@ENT@|$ENT|" -e "s|@GAMMA@|$GAMMA|" \
+      -e "s|@SNAP@|$SNAP/train.f32|" -e "s|@PREGOAL@|${PREGOAL:-$X/pregoal}|g" -e "s|@TPI@|$TPI|" -e "s|@MB@|$MB|" -e "s|@LR@|$LR|g" -e "s|@ENT@|$ENT|" -e "s|@GAMMA@|$GAMMA|" \
       -e "s|@OPPCH@|$OPPCH|" -e "s|@PASTW@|${PASTW:-1.0}|" -e "s|@DECAY@|$DECAY|" -e "s|@MINLR@|$MINLR|" -e "s|^threads = .*|threads = $THREADS|" -e "s|^games = .*|games = ${GAMES:-384}|" \
       $X/cfg/experiments/${TRAIN_TMPL:-train_tm1.toml} > $X/train_tm.toml
   [[ -n "${GAL_WEIGHT:-}" ]] && printf '\n[[opponents.external]]\nname = "galactus"\nkind = "galactus"\npath = "%s"\nweight = %s\n' "$GAL_DIR" "$GAL_WEIGHT" >> $X/train_tm.toml

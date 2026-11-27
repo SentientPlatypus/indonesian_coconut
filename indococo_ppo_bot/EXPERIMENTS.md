@@ -4641,6 +4641,18 @@ until TM12 ends; the parent starts the run.
 - No passive alarm two mids in a row; entropy stays ≥ 3.2; demos/min not above 0.16.
 - Throughput of the staged smoke ≥ 55k sps, no panics.
 
+### Launch (2026-11-26 10:28 PM ET, America/New_York)
+
+Started from the TM10 final (`1795503212`, 57,957.2M steps, already 270-wide). BT is that same TM10 checkpoint. team_best was not written. Binary `/opt/dlami/nvme/ippo_bins/indococo-train-tm13-c167833` (sha256 `796593e2278b233f2aa0d4abcccc87ed910b88bbd593e6a3cd46855d3a2b81a8`). Session `tmux tm13` (new; `indococo` / `ippo_1v1` / `ippo_team` were not touched). `LEVER4=0` at launch.
+
+Smoke (production-like 24 threads / 2 pools / 384 games / 300k TPI, 2 iters), after a 16-game toy batch was too small to clear 55k even on a healthy box:
+- LEVER4=0: no panic, last iter 58,429 sps (warmup 37,124). The first wrapper exit was a false fail from a 4 GiB GPU watchdog written for the toy batch; the train itself finished clean. Watchdog cap is now 20 GiB.
+- LEVER4=1 with empty pre-goal banks: pass, no panic (missing banks stay at kickoff), last iter 57,597 sps (warmup 36,316).
+
+Lever 4 stays off until pre-goal banks (~50k states/mode) are recorded. The launcher re-reads the `LEVER4=` line in `tm_TM13.env` at each chunk boundary, so flipping that line to `1` takes effect on the next chunk after the banks exist. Bank recording waits until the TM12 `gal_fidelity` finals job releases the second heavy-job slot (cap 2).
+
+Entropy coefficient 0.008, `ENTROPY_ALARM=3.2` (checked on mids via `tm12_eval.py`). P1 Nexto 8/64/2, L1 `mask_upload=auto`, L2 `pinned_upload=true`, L3 off.
+
 ## TM12 results: not promoted, team_best stays TM10 (2026-11-26)
 
 Training ended 2026-11-26 at 9:25 PM ET (America/New_York) at 62,957.3M steps (`exp_TM12/checkpoints/1795745739`). The TM12 launcher started the official finals immediately and finished them at 9:57 PM ET (`tm12_final/DONE`, `TEAM_PROMOTE.json`). BT was pinned to the TM10 final (`exp_TM10/checkpoints/1795503212`) for the whole run. The last checkpoint is also `checkpoints_to_test/tm12_62957M.bpk` @ 4d2f98f (sha256 `b461ad9ee423a030fb64e623ae2f1586e1db9787dc11cea83dbcc93f8aa773a5`). **Not promoted.** The automatic team gate said `promote_team: false` (score 0.4449). `team_best/FINAL_CKPT` was not touched and stays the TM10 final (user-approved 2026-11-24 9:18 AM ET). All official h2h games are decisive except TM10's Nexto 3v3 reference panel (1 draw).

@@ -40,9 +40,15 @@ cp "$START_CK/actor.bpk" "$START_CK/critic.bpk" "$SMOKE/checkpoints/1/"
 if [[ -s $START_CK/stats.toml ]]; then cp "$START_CK/stats.toml" "$SMOKE/checkpoints/1/"; fi
 
 # Render a tiny train toml from the TM13 template (placeholders + speed keys).
-TPI=${SMOKE_TPI:-8192}
-MB=${SMOKE_MB:-2048}
-ITERS=${SMOKE_ITERS:-3}
+# Defaults match a short production-like step (24 threads / 2 pools / 384
+# games, 300k TPI). The 16-game / 4-thread toy batch only collects ~16k sps
+# and cannot clear the 55k bar even when the full run is ~80k.
+TPI=${SMOKE_TPI:-300000}
+MB=${SMOKE_MB:-100000}
+ITERS=${SMOKE_ITERS:-2}
+THREADS=${SMOKE_THREADS:-24}
+POOLS=${SMOKE_POOLS:-2}
+GAMES=${SMOKE_GAMES:-384}
 REWARD=${REWARD:-$C/experiments/tm13.toml}
 [[ -s $REWARD ]] || die "tm13.toml missing at $REWARD"
 PREGOAL=$SMOKE/pregoal
@@ -52,9 +58,9 @@ cat > "$SMOKE/train.toml" <<TOML
 reward_config = "$REWARD"
 checkpoints = "$SMOKE/checkpoints"
 backend = "torch"
-threads = 4
-pools = 1
-games = 16
+threads = $THREADS
+pools = $POOLS
+games = $GAMES
 timesteps_per_iteration = $TPI
 mini_batch_size = $MB
 epochs = 1
@@ -95,8 +101,10 @@ if command -v nvidia-smi >/dev/null; then
       used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
       echo "$(date '+%T') $used" >> "$MEM_LOG"
       if [[ -n $used && -n $base ]]; then
-        if (( used > base + 4096 )); then
-          echo "WATCHDOG oom-risk used=${used}MiB base=${base}MiB" >> "$MEM_LOG"
+        # Production-like 384-game smoke sits around 10-16 GiB on the L4.
+        # 20 GiB leaves headroom under the 23 GiB card; 4 GiB was for the toy batch.
+        if (( used > 20480 )); then
+          echo "WATCHDOG oom-risk used=${used}MiB cap=20480MiB" >> "$MEM_LOG"
           exit 42
         fi
       fi

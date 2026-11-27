@@ -669,7 +669,8 @@ keeps a 150-step ring per arena and, on every scored or conceded goal, writes
 It writes `<out-prefix>_2v2.f32` and `<out-prefix>_3v3.f32`. The training
 setter is present in `train_tm13.toml` at weight 0; flip `LEVER4=1` in
 `tm_TM13.env` (one line) to give it weight 0.15, taken from aerial_pass /
-backboard_double_tap / air_near_ball.
+backboard_double_tap / air_near_ball. The launcher re-reads that line at
+each chunk boundary.
 
 The `replay` setter samples either bank (label `replay` in metrics, rates and
 `setter_scale`). Data flow: FR6-final self-play -> `fr7_snap/train.f32`
