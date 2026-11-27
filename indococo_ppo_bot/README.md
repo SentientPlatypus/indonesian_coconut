@@ -553,8 +553,8 @@ ST20r did not do its job.
 | | checkpoint | steps | notes |
 |---|---|---|---|
 | **1v1 BEST** | `exp_ST25/checkpoints/1794413355` | 20727.5M | manual promote, user-approved 2026-11-11 12:16 PM ET (America/New_York). `checkpoints_to_test/st25_20728M.bpk`. |
-| **team_best** | `exp_TM9/checkpoints/1795388102` | 52957.1M | user-approved 2026-11-22 7:45 PM ET (America/New_York). `checkpoints_to_test/tm9_52957M.bpk`. |
-| **TM10 BT pin** | `exp_TM7/checkpoints/1795170349` | TM7 final | TM10 finals compare against this pin, not team_best. |
+| **team_best** | `exp_TM10/checkpoints/1795503212` | 57957.2M | user-approved 2026-11-24 9:18 AM ET (America/New_York). `checkpoints_to_test/tm10_57957M.bpk`. |
+| **TM12 final (not promoted)** | `exp_TM12/checkpoints/1795745739` | 62957.3M | official finals 2026-11-26 9:57 PM ET; gate failed (h2h mean 0.5159 < 0.52). `checkpoints_to_test/tm12_62957M.bpk`. team_best stays TM10. |
 
 The RLBot pack still ships TM2 as the default 2v2/3v3 model (`weights/tm2`); changing that is a pack decision, not done here.
 

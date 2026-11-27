@@ -14,9 +14,39 @@ Policy weights worth testing, one `<name>.bpk` per checkpoint. New candidates ge
 
 Headless evals use seed 424242, the air-time clamp on (as deployed), a fresh engine per game and mirrored seeds. Pool = 400 games per opponent, win %.
 
-**Current references:** 1v1 BEST is ST25 (`st25_20728M.bpk` below). **team_best** is the TM9 final (`tm9_52957M.bpk`, user-approved 2026-11-22 7:45 PM ET, America/New_York). The RLBot pack still ships the TM2 final (27275M) as the default 2v2/3v3 model (`weights/tm2`); changing that is a separate pack decision. Every `*.bpk` in this folder should have a heading in this file.
+**Current references:** 1v1 BEST is ST25 (`st25_20728M.bpk` below). **team_best** is the TM10 final (`tm10_57957M.bpk`, user-approved 2026-11-24 9:18 AM ET, America/New_York). TM11 and TM12 finals were exported and not promoted. The RLBot pack still ships the TM2 final (27275M) as the default 2v2/3v3 model (`weights/tm2`); changing that is a separate pack decision. Every `*.bpk` in this folder should have a heading in this file.
 
-### tm9_52957M.bpk (current team_best)
+### tm12_62957M.bpk
+
+| | |
+|---|---|
+| Lineage | TM12 final (Nexto training kickoff_script + kickoff setter; 270-wide pred obs), last checkpoint at END, `exp_TM12/checkpoints/1795745739` (62957.3M steps). Warm start was the TM10 final; BT pinned to TM10 all run. **Not promoted** (official gate failed: mean h2h 0.5159 < 0.52). team_best stays TM10. |
+| H2H | vs TM10 (504 g): 2v2 **50.0%** (252-252), 3v3 **53.2%** (268-236). vs TM9 (400 g): 2v2 **57.5%** (230-170), 3v3 **54.8%** (219-181). 1v1 vs ST25 **53.8%** (271-233 of 504). |
+| Nexto / Necto / Galactus | Nexto 2v2 **67.9%** (342-162), 3v3 **56.7%** (286-218); Necto 2v2 **96.2%**, 3v3 **95.6%** (504 g). Galactus 2v2 **16.0%** (41-215 of 256), 3v3 **8.98%** (23-233 of 256), 1v1 **47.8%** (241-263 of 504). Megabyte 2v2 **14.5%** (37-219 of 256). 3v3 kickoff vs Nexto at 1.5 s: win 0.147 / loss 0.385 (criterion failed). |
+| sha256 | `b461ad9ee423a030fb64e623ae2f1586e1db9787dc11cea83dbcc93f8aa773a5` |
+
+### tm11_62386M.bpk
+
+| | |
+|---|---|
+| Lineage | TM11 mid checkpoint at 62,386.1M, `exp_TM11/checkpoints/1795610268` (270-wide pred obs). **Not** the TM11 final (`tm11_62957M.bpk`) and **not promoted**. Overdue export of that mid. |
+| sha256 | `e3c9d1e3bf158a58ce0f8e8a9cb7e5fb3d73b4ebda0ffebb504b0521f0b99fc0` |
+
+### tm11_62957M.bpk
+
+| | |
+|---|---|
+| Lineage | TM11 last checkpoint at END, 62957.3M, `exp_TM11/checkpoints` final. Defend-carry / kickoff-outcome run from the TM10 final, BT pinned to TM9. **Not promoted.** |
+| sha256 | `9ddc8db1683702001588ec9bb024ca293838321914d10b2af93c8cc06bd418d6` |
+
+### tm10_57957M.bpk (current team_best)
+
+| | |
+|---|---|
+| Lineage | TM10 final (support-car playmaking demo / bump; 270-wide pred obs), `exp_TM10/checkpoints/1795503212` (57957.2M steps). **Promoted** to team_best, user-approved 2026-11-24 9:18 AM ET (America/New_York). BT pin for TM12 and TM13. |
+| sha256 | `d1d69999c9a1bdfbbb5bc84aa6fae7ede0da5ce18eb7e41337a563d33ee73135` |
+
+### tm9_52957M.bpk
 
 | | |
 |---|---|

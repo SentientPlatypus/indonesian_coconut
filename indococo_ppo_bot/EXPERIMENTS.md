@@ -7,8 +7,8 @@ Full research write-up with figures and data: [docs/experiments/REPORT.md](../do
 Current references (do not change BEST or team_best without asking):
 
 - **1v1 BEST:** ST25 final, `exp_ST25/checkpoints/1794413355`, 20727.5M, user-approved 2026-11-11 12:16 PM ET (America/New_York). `checkpoints_to_test/st25_20728M.bpk`.
-- **team_best:** TM9 final, `exp_TM9/checkpoints/1795388102`, 52957.1M, user-approved 2026-11-22 7:45 PM ET (America/New_York). `checkpoints_to_test/tm9_52957M.bpk`.
-- **TM10 BT pin:** TM7 final, `exp_TM7/checkpoints/1795170349` (not the current team_best). TM10 finals therefore do not measure TM10 vs TM9; use `experiments/tm10_vs_tm9_report.sh` after `tm10_final/DONE`.
+- **team_best:** TM10 final, `exp_TM10/checkpoints/1795503212`, 57957.2M, user-approved 2026-11-24 9:18 AM ET (America/New_York). `checkpoints_to_test/tm10_57957M.bpk`. (Docs correction of the already-approved Nov 24 pointer; the on-disk `team_best/FINAL_CKPT` was not changed in the TM12 write-up.)
+- **TM12 / TM13 BT pin:** TM10 final, `exp_TM10/checkpoints/1795503212`. TM11 was pinned to TM9.
 
 Body sections below are in chronological-note order, not run order. This table is the "current" index. Steps are trainer cumulative timesteps.
 
@@ -68,8 +68,11 @@ Body sections below are in chronological-note order, not run order. This table i
 | TM6 | done | → 37957M | yes (then team_best) | [TM6 results](#tm6-results-team-best--tm6-final-2026-11-18) |
 | TM7 | done | → 42957M | yes (then team_best); still TM10's BT pin | [TM7 results](#tm7-results-team-best--tm7-final-2026-11-20) |
 | TM8 | done | → 47957.0M final (`tm8_47957M.bpk`); mid export 45582M | yes (then team_best; user-approved 2026-11-21 2:22 PM ET) | [TM8 results](#tm8-results-team-best--tm8-final-2026-11-21) |
-| TM9 | done; **current team_best** | → 52957.1M | yes (user-approved 2026-11-22 7:45 PM ET) | [TM9 results](#tm9-results-team-best--tm9-final-2026-11-22) |
-| TM10 | **training** (as of 2026-11-23) | from TM9, +5B planned | not yet; BT pin is TM7, not TM9 | [TM10 cross-exam](#tm10--cross-exam-note-support-car-playmaking-demo--bump-staged-2026-11-21-auto-starts-after-tm9) |
+| TM9 | done | → 52957.1M | yes (then team_best; user-approved 2026-11-22 7:45 PM ET); superseded by TM10 | [TM9 results](#tm9-results-team-best--tm9-final-2026-11-22) |
+| TM10 | done; **current team_best** | from TM9 → 57957.2M | yes (user-approved 2026-11-24 9:18 AM ET); `tm10_57957M.bpk` | [TM10 cross-exam](#tm10--cross-exam-note-support-car-playmaking-demo--bump-staged-2026-11-21-auto-starts-after-tm9) |
+| TM11 | done | from TM10, BT=TM9 → 62957.3M (mid export 62386.1M) | no; exported `tm11_62957M.bpk`, `tm11_62386M.bpk` | [TM11 cross-exam](#tm11--cross-exam-note-defending-grounded-carries--3v3-kickoff-outcome-staged-2026-11-23-auto-starts-after-tm10) |
+| TM12 | done | from TM10, BT=TM10 → 62957.3M | no (gate failed; team_best stays TM10); `tm12_62957M.bpk` | [TM12 results](#tm12-results-not-promoted-team_best-stays-tm10-2026-11-26) |
+| TM13 | launching / smoke (as of 2026-11-26 10:17 PM ET) | from TM10, BT=TM10 | n/a; team_best is not written | [TM13 cross-exam](#tm13--cross-exam-note-gco-lite-galactus-share-entropy-pre-goal-starts-staged-2026-11-26) |
 | Eval fidelity (E1–E3) | report-only tooling + findings (2026-11-23) | — | n/a (no promotion rule changed) | [Eval fidelity](#eval-fidelity-galactus-headline-metric-diag-fix-rust-vs-c-engine-2026-11-23) |
 
 Three arms, all warm-started from the full 430.8M checkpoint (actor, critic
@@ -4637,3 +4640,40 @@ until TM12 ends; the parent starts the run.
   not worse than TM10.
 - No passive alarm two mids in a row; entropy stays ≥ 3.2; demos/min not above 0.16.
 - Throughput of the staged smoke ≥ 55k sps, no panics.
+
+## TM12 results: not promoted, team_best stays TM10 (2026-11-26)
+
+Training ended 2026-11-26 at 9:25 PM ET (America/New_York) at 62,957.3M steps (`exp_TM12/checkpoints/1795745739`). The TM12 launcher started the official finals immediately and finished them at 9:57 PM ET (`tm12_final/DONE`, `TEAM_PROMOTE.json`). BT was pinned to the TM10 final (`exp_TM10/checkpoints/1795503212`) for the whole run. The last checkpoint is also `checkpoints_to_test/tm12_62957M.bpk` @ 4d2f98f (sha256 `b461ad9ee423a030fb64e623ae2f1586e1db9787dc11cea83dbcc93f8aa773a5`). **Not promoted.** The automatic team gate said `promote_team: false` (score 0.4449). `team_best/FINAL_CKPT` was not touched and stays the TM10 final (user-approved 2026-11-24 9:18 AM ET). All official h2h games are decisive except TM10's Nexto 3v3 reference panel (1 draw).
+
+| Eval | TM12 final (62957.3M) | TM10 final (same panel) | Notes |
+|---|---|---|---|
+| h2h 2v2 vs TM10 (504) | **50.0%** (252-252) | — | gate: each mode ≥ 0.48 (pass), mean ≥ 0.52 (fail; mean 0.5159) |
+| h2h 3v3 vs TM10 (504) | **53.2%** (268-236) | — | |
+| h2h 2v2 vs TM9 (400) | **57.5%** (230-170) | — | extra panel, not in the gate |
+| h2h 3v3 vs TM9 (400) | **54.8%** (219-181) | — | |
+| Nexto 2v2 (504) | **67.9%** (342-162) | **66.3%** (334-170) | |
+| Nexto 3v3 (504) | **56.7%** (286-218) | **58.4%** (294-209, 1 draw) | |
+| Necto 2v2 (504) | **96.2%** (485-19) | **95.0%** (479-25) | |
+| Necto 3v3 (504) | **95.6%** (482-22) | **96.4%** (486-18) | |
+| Galactus 2v2 (256) | **16.0%** (41-215) | **10.9%** (28-228) | Rust-Galactus; see fidelity caveat |
+| Galactus 3v3 (256) | **8.98%** (23-233) | **9.38%** (24-232) | |
+| Galactus 1v1 (504) | **47.8%** (241-263) | — | |
+| Megabyte 2v2 (256) | **14.5%** (37-219) | — | |
+| 1v1 vs ST25 (504) | **53.8%** (271-233) | — | |
+
+External mean in `TEAM_PROMOTE.json` was 0.3740 vs TM10's 0.3626, so the "not below TM10 by more than 0.04" part passed. The mean-h2h gate failed, so the recommendation is not to promote.
+
+Team stats from the official h2h finals (TM12 vs TM10, 504 games; TM12's own rates, TM10 in parentheses):
+
+- 2v2: pair800 0.092 (0.102), near2 0.138 (0.153), no-challenger 0.049 (0.049), passes/min 0.94 (1.05), double commit 1.09% (1.49%), deep last man **0.590** (0.568), last man back 0.929 (0.929), kickoff duplicate 0, flip resets/game 0.0079 (0), double taps 14 (11), touches/car-min 16.10 (16.58), deepest-car depth 2947 (2918).
+- 3v3: pair800 0.184, near2 0.209, passes/min 1.42, double commit 1.59%, deep last man 0.738, last man back 0.968, kickoff duplicate **0.046**, flip resets/game 0.016, double taps 23, air double-touches/min 0.627.
+
+**Deep last-man (deep2) alarm:** a new 2v2 streak started at 62,185.7M (`deep_2v2` 0.5895). At 62,285.9M it was **0.5996 vs the 0.56 threshold**. It stayed high through the end (last mid at 62,957.3M: 0.5914; official h2h 2v2 finals: 0.590). TM10 in that same finals panel was 0.568, also just over the mid-eval threshold. This is a style/positioning flag, not a promotion change.
+
+**Kickoff 3v3 vs Nexto** (official audit, 504 games, `tm12_final/kickoff_audit.jsonl`): first-touch 1.986 s; taker is the expected closest car (left on tie) on 0.990 of kickoffs (0.973 given a spawn tie). Same-pad any two cars 0.089, same-big 0.071. At **1.5 s**: win **0.147**, loss **0.385**, neutral 0.468 — the TM12 criterion (win ≥ 0.20, loss ≤ 0.33) **failed**, in the same range as the TM11 mids (0.150 / 0.414). At 3 s: win 0.175, loss 0.230, neutral 0.595. Goals by 15 s: for 0.119, against 0.048. Nontakers mostly took the big corner boost (0.841). Necto 3v3 held-out audit (504): 1.5 s win 0.192 / loss 0.252; 3 s win 0.224 / loss 0.185.
+
+**Other success-criteria notes.** All 50 mid-evals met Nexto 2v2 ≥ 0.55 and 3v3 ≥ 0.45 (finals 0.679 / 0.567). Nexto-game spacing on the last mid (`nx_dc` / `nx_pair800`) was 2v2 0.0249 / 0.0770 vs TM10's 0.0251 / 0.0904, and 3v3 0.0417 / 0.1814 vs 0.0400 / 0.1869 — pair800 is slightly better in both modes; 3v3 double-commit is slightly worse. There was no two-mid passive (h2h < 0.50) streak at the end; 62,185.7M had one 2v2 dip to 0.455, then 0.565 the next mid.
+
+A post-finals Galactus fidelity sidecar (`gal_fidelity.sh`, parent PID 1012798, python PID 1012818, nice 19, timeout 3h) was still running after the official panel. After 1v1 and 2v2 (400 games each): 1v1 `py_exact` 0.400 vs rust 0.5225 (gap +0.1775, **alarm**); 2v2 `py_exact` 0.135 vs rust 0.1175 (gap −0.0125, no alarm). 3v3 had not landed yet. Results go to `tm12_final/gal_fidelity.jsonl`. Official Galactus finals numbers above are the Rust-port eval, same as prior TM panels; quote `py_exact` if comparing to the Python/C++ harness.
+
+TM13 was being smoke-tested / launched on the same box after TM12 training ended. This write-up does not touch TM13, `code_tm13`, or `team_best`.
