@@ -4780,6 +4780,20 @@ requested; follow-ups only): Titan/Pulsar-style aux long-horizon critic, ts4, la
 - Gate (unchanged): mean h2h ≥ 0.52, each mode ≥ 0.48; external mean not below TM10's by > 0.04.
 - Nexto 3v3 ≥ 0.45; no passivity alarm two mids in a row; entropy 3.2–3.95.
 
+### Staged (2026-11-27 3:39 PM ET, America/New_York)
+
+- Code copy `~/ippo_runs/code_tm14` (SHA d5e5ef4; TM13's `code_tm13` untouched). Binary
+  `/opt/dlami/nvme/ippo_bins/indococo-train-tm14-c167833`, sha256 equal to TM13's.
+- Reward smoke on the real binary (`reward-audit`, TM13 latest `1795810368`, 2v2, 24k steps,
+  nice 19, 4 threads) with `spirit_origin` = S: at S non-goal |r| 598k, goal share 0.32 (training
+  TM13: 0.30); at S+250M non-goal |r| 303k (median per-term ratio 0.499); at S+600M only `goal`
+  is non-zero. No panics.
+- `DRY_RUN=1` waiter: saw TM13 running, resolved a start, wrote `tm14_work/passive_base.json`
+  (touch 15.46 / 8.25, depth 2943 / 1977, train_goals_min 0.489), heavy jobs 1.
+- Armed: `tmux tm14` runs `wait_tm13_launch_tm14.sh` (polls every 5 min by exact cmdline; then
+  START_CK = `tm13_final/FINAL_CKPT`, waits for < 2 heavy jobs, execs `team_launch_tm13.sh` with
+  `RUN=TM14 VARIANT=TM14`). TM14 END = start + 3B.
+
 ## TM12 results: not promoted, team_best stays TM10 (2026-11-26)
 
 Training ended 2026-11-26 at 9:25 PM ET (America/New_York) at 62,957.3M steps (`exp_TM12/checkpoints/1795745739`). The TM12 launcher started the official finals immediately and finished them at 9:57 PM ET (`tm12_final/DONE`, `TEAM_PROMOTE.json`). BT was pinned to the TM10 final (`exp_TM10/checkpoints/1795503212`) for the whole run. The last checkpoint is also `checkpoints_to_test/tm12_62957M.bpk` @ 4d2f98f (sha256 `b461ad9ee423a030fb64e623ae2f1586e1db9787dc11cea83dbcc93f8aa773a5`). **Not promoted.** The automatic team gate said `promote_team: false` (score 0.4449). `team_best/FINAL_CKPT` was not touched and stays the TM10 final (user-approved 2026-11-24 9:18 AM ET). All official h2h games are decisive except TM10's Nexto 3v3 reference panel (1 draw).
